@@ -1082,11 +1082,60 @@ npm run test --workspace @ronmacrae/web
 cd e2e && npx playwright test --workers=1
 ```
 
-## Next: Stage 11
+---
 
-Remove extra test riders safely: timestamped `dev.db` backup first, then
-delete every rider except Kei Bearer (+8765550001), safely cleaning up that
-rider's disposable offers/assignments/locations/push subscriptions first;
-preserve all non-rider accounts, settings, zones, fees; confirm e2e test
-isolation still holds (it should — e2e already runs against its own
-`e2e-test.db`, never `dev.db`).
+# Stage 11 — Remove extra test riders (pre-production hardening, 2026-09-10)
+
+Full detail in `WORK_IN_PROGRESS.md` under "Stage 11 — Remove extra test
+riders safely (DONE)". Summary for resuming agents:
+
+**Found**: 115 riders in `dev.db`, 114 disposable test riders + 1 real one
+(Kei Bearer, `+8765550001`), from earlier ad-hoc testing against `dev.db`
+directly (not from `seed.ts`, confirmed safe/idempotent).
+
+**Backup**: `apps/api/data/dev.db.bak-riders-20260910-173947` (gitignored),
+taken before any deletion.
+
+**New script**: `apps/api/scripts/remove-test-riders.mjs` (dry-run by
+default, `--yes` to execute, transactional, refuses to run unless exactly one
+rider matches the keep-phone). Relies entirely on the schema's own
+`onDelete` behavior (checked first, not assumed): `Job.rider` is `SetNull`
+(jobs survive, just lose `riderId`); every other rider-owned table
+(`JobOffer`/`RiderAssignment`/`RiderLocation`/`Route`/`ReconDaily`/`Payout`/
+`SosAlert`) is `Cascade`. A removed rider's login (`User` row) is deleted
+explicitly right after (that relation points the other way), which cascades
+its `Session`/`PushSubscription` rows too.
+
+**Result**: Rider 115→1, User 119→5 (4 staff unchanged + Kei Bearer),
+Customer/Zone/Setting/Job counts all unchanged (17 jobs lost `riderId`, zero
+jobs deleted). Zero orphaned rows confirmed via raw SQL after. Live-booted
+the API against the cleaned db and confirmed both Kei Bearer's and the
+dispatcher's logins still work, and `GET /api/riders` returns exactly one row.
+
+## Commands run and results (Stage 11)
+
+| # | Command | Result |
+| --- | --- | --- |
+| 1 | `cp data/dev.db data/dev.db.bak-riders-20260910-173947` | Backup created, gitignored |
+| 2 | `node scripts/remove-test-riders.mjs` (dry run) | Printed exact planned changes, no writes |
+| 3 | `node scripts/remove-test-riders.mjs --yes` | Executed; post-check passed (riders=1, customers/zones/settings/staff-users/jobs unchanged) |
+| 4 | Raw SQL orphan check (5 queries) | **0 orphans** in every case |
+| 5 | Live API boot against cleaned `dev.db` + login as Kei Bearer + dispatcher + `GET /api/riders` | **PASS** — both logins work, exactly 1 rider returned |
+| 6 | `npx vitest run` (apps/api, isolated test db, unaffected by design) | **PASS** — 62/62 |
+| 7 | 2 e2e specs (isolated `e2e-test.db`, unaffected by design) | **PASS** — 2/2 |
+
+## Re-verify (Stage 11)
+
+```bash
+sqlite3 apps/api/data/dev.db "SELECT COUNT(*) FROM Rider;"   # expect 1
+sqlite3 apps/api/data/dev.db "SELECT name, phone FROM Rider;" # expect Kei Bearer, +8765550001
+```
+
+## Next: Stage 12 (5A)
+
+COD reconciliation ledger — new data model (expected/collected amounts,
+collection/handover timestamps, shortage/overage, status enum, approver +
+timestamp), role-gated mutation endpoints (rider records, dispatcher/owner
+monitor, accountant/owner approve/dispute), audit history, UI surfaces per
+role. See `WORK_IN_PROGRESS.md`'s Stage plan table for the full remaining
+Stage 12–18 sequence.

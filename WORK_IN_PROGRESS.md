@@ -548,7 +548,7 @@ tracked here as Stages 8+ (Stages 1-7 above are the prior work, already shipped)
 | 8 | Fix address entry (manual text is authoritative, never silently overwritten) | DONE |
 | 9 | Rider availability toggle + configurable multi-job capacity | DONE |
 | 10 | Diagnose and repair rider notifications (offer/assign alerts, connection state) | DONE |
-| 11 | Remove extra test riders safely (backup first; keep Kei Bearer only) | NOT STARTED |
+| 11 | Remove extra test riders safely (backup first; keep Kei Bearer only) | DONE |
 | 12 | 5A — COD reconciliation ledger | NOT STARTED |
 | 13 | 5B — Rider route queue | NOT STARTED |
 | 14 | 5C — Dispatcher operations board | NOT STARTED |
@@ -833,3 +833,79 @@ underlying DB row itself flipped proactively rather than lazily, that's a
 small addition (a periodic sweep + broadcast, same shape as
 `LocationSimulator`'s existing interval pattern) but wasn't needed to satisfy
 the actual requirement. WhatsApp/SMS delivery of these alerts is Stage 15 (5D).
+
+## Stage 11 — Remove extra test riders safely (DONE)
+
+**Inspected `dev.db` first** (never assumed): 115 `Rider` rows, of which
+exactly one was real — Kei Bearer (`+8765550001`) — and the other 114 were
+disposable e2e/manual-test riders (named things like "Assigned Rider", "GPS
+Test Rider", "Map Test Rider", "Offer Test Rider", accumulated from earlier in
+this session before/around when the API preview server was pointed directly
+at `dev.db` for manual testing, rather than the isolated `e2e-test.db`
+Playwright always uses). Confirmed `apps/api/src/seed.ts`'s `seedRider()` is
+an `upsert` keyed on Kei Bearer's own phone — it was never the source of the
+duplicates and is safe to re-run.
+
+**Backup**: `apps/api/data/dev.db.bak-riders-20260910-173947` (timestamped,
+gitignored, taken before any deletion).
+
+**Schema-driven safety, not custom logic**: checked every `Rider`-owning
+relation's `onDelete` behavior in `schema.prisma` before writing anything.
+`Job.rider` is `onDelete: SetNull` — deleting a rider never deletes a job, it
+only clears that job's `riderId` (order/job history survives even for a
+long-gone test rider). Every other rider-owned table —
+`JobOffer`/`RiderAssignment`/`RiderLocation`/`Route`/`ReconDaily`/`Payout`/
+`SosAlert` — is `onDelete: Cascade`, so deleting the `Rider` row cleans those
+up automatically, enforced by SQLite's own foreign keys (Prisma's SQLite
+connector always runs with `PRAGMA foreign_keys = ON`). The one thing NOT
+cascaded automatically: a rider's login (`User` row with `role: "rider"`,
+linked via `Rider.userId`) — that relation points the other way, so it had to
+be deleted explicitly per removed rider, which in turn cascades that user's
+`Session` and `PushSubscription` rows.
+
+**New script**: `apps/api/scripts/remove-test-riders.mjs` — dry-run by default
+(prints exactly what would change, does nothing); `--yes` to actually execute;
+refuses to run at all unless exactly one rider matches the kept phone number
+(`--keep-phone`, default `+8765550001`); the whole deletion runs inside one
+Prisma transaction; prints full before/after row counts and a post-check that
+fails loudly if anything outside the expected scope changed.
+
+**Result** (dry-run matched the real run exactly):
+
+| Table | Before | After |
+| --- | --- | --- |
+| Rider | 115 | **1** (Kei Bearer only) |
+| User | 119 | 5 (4 staff + Kei Bearer) |
+| User (non-rider) | 4 | 4 — unchanged |
+| Customer | 74 | 74 — unchanged |
+| Zone | 3 | 3 — unchanged |
+| Setting | 1 | 1 — unchanged |
+| Job | 63 | 63 — unchanged (17 of them lost `riderId`, none deleted) |
+| JobOffer | 625 | 3 (Kei Bearer's own) |
+| RiderAssignment | 30 | 13 (Kei Bearer's own) |
+| RiderLocation | 28 | 2 (Kei Bearer's own) |
+| Session | 239 | 136 (removed riders' own sessions) |
+| PushSubscription | 3 | 3 — unchanged (all 3 already belonged to Kei Bearer) |
+
+Post-cleanup raw-SQL check confirmed **zero** orphaned rows anywhere (no
+`JobOffer`/`RiderAssignment`/`RiderLocation` pointing at a deleted rider id, no
+leftover `role: "rider"` `User` rows without a `Rider`, no `Job.riderId`
+pointing at a rider that no longer exists).
+
+**Live verification**: booted the API against the cleaned `dev.db`
+(`DEV_DB=1`) and confirmed both Kei Bearer's rider login and the
+dispatcher's staff login still work, `GET /api/riders` returns exactly
+`["Kei Bearer"]`, and customers/zones are still fully intact and reachable.
+
+**Test isolation reconfirmed** (already true from earlier stages, verified
+again here rather than assumed): `e2e/playwright.config.ts` points
+`DATABASE_URL` at its own `data/e2e-test.db`, entirely separate from
+`dev.db` — this cleanup has zero effect on it, and e2e's own seed step only
+ever creates/upserts riders in that isolated file, never `dev.db`. Full
+`apps/api` vitest suite (62/62, uses its own per-file isolated sqlite dbs) and
+two e2e specs re-run clean after the cleanup.
+
+**Not done / explicitly out of scope**: did not delete any of the several
+older `dev.db.bak-*` files already sitting in `apps/api/data/` from earlier
+stages — they're harmless (gitignored, disk space only) and might still be
+wanted as rollback points; only added this stage's own backup alongside them.
