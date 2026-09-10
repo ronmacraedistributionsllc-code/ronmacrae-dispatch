@@ -1,7 +1,7 @@
 import React, { useEffect } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 import { useAuth } from "../lib/auth.js";
-import { useRealtime } from "../lib/realtime.js";
+import { useRealtime, type ConnectionStatus } from "../lib/realtime.js";
 import { AlertsToaster } from "./alerts-toaster.js";
 
 const TABS = [
@@ -14,9 +14,20 @@ const TABS = [
 ];
 const STAFF_ONLY_TABS = new Set(["/jobs", "/jobs/new", "/map"]);
 
+const CONNECTION_LABEL: Record<ConnectionStatus, string> = {
+  live: "Live",
+  reconnecting: "Reconnecting…",
+  offline: "Offline",
+};
+const CONNECTION_DOT: Record<ConnectionStatus, string> = {
+  live: "bg-emerald-500",
+  reconnecting: "bg-amber-500 animate-pulse",
+  offline: "bg-red-600",
+};
+
 export function Layout({ children }: { children: React.ReactNode }): React.JSX.Element {
   const { user, logout } = useAuth();
-  const { unreadCount, markRead } = useRealtime();
+  const { unreadCount, markRead, status } = useRealtime();
   const { pathname } = useLocation();
   // Visiting any screen acknowledges pending alerts — coarse, but simple and honest
   // (no per-item read-tracking to get subtly wrong).
@@ -30,9 +41,19 @@ export function Layout({ children }: { children: React.ReactNode }): React.JSX.E
     <div className="flex h-full min-h-dvh flex-col md:flex-row">
       <AlertsToaster />
       <aside className="flex shrink-0 flex-col gap-1 border-b border-zinc-800 bg-zinc-900/60 p-4 md:w-56 md:border-b-0 md:border-r">
-        <div className="mb-4">
-          <div className="text-base font-bold text-brand-accent">Ronmacrae</div>
-          <div className="text-xs uppercase tracking-widest text-zinc-400">Dispatch</div>
+        <div className="mb-4 flex items-center justify-between gap-2">
+          <div>
+            <div className="text-base font-bold text-brand-accent">Ronmacrae</div>
+            <div className="text-xs uppercase tracking-widest text-zinc-400">Dispatch</div>
+          </div>
+          <div
+            className="flex items-center gap-1.5 whitespace-nowrap text-xs text-zinc-400"
+            title="Realtime connection status"
+            data-testid="connection-status"
+          >
+            <span className={`h-2 w-2 rounded-full ${CONNECTION_DOT[status]}`} />
+            {CONNECTION_LABEL[status]}
+          </div>
         </div>
         <nav className="flex gap-1 overflow-x-auto md:flex-col">
           {tabs.map((t) => (

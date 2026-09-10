@@ -1030,13 +1030,63 @@ npm run test --workspace @ronmacrae/web
 cd e2e && npx playwright test --workers=1   # serial, to avoid the known cross-spec flakiness above
 ```
 
-## Next: Stage 10
+---
 
-Diagnose and repair rider notifications (offer/assign alerts, unread badge,
-sound, connection state Live/Reconnecting/Offline, missed-offer retrieval on
-reconnect) — per `WORK_IN_PROGRESS.md`'s Stage plan table. Note that Stage 9
-already fixed the specific "rider stops receiving offers after accepting one
-job" bug that Stage 10's brief also calls out — Stage 10 should focus on the
-remaining diagnosis (toast/sound/badge on the *receiving* side, reconnect
-behavior, two-browser-session verification) rather than re-solving the
-capacity-eligibility part.
+# Stage 10 — Rider notification repair (pre-production hardening, 2026-09-10)
+
+Full detail in `WORK_IN_PROGRESS.md` under "Stage 10 — Diagnose and repair
+rider notifications (DONE)". Summary for resuming agents:
+
+**Diagnosis**: broadcast → toast → unread badge already worked; Stage 9 fixed
+the eligibility bug. Four real gaps found by reading the code: (1) no alert
+sound anywhere in the app, (2) no connection-state indicator (only an unused
+internal boolean), (3) reconnecting a dropped socket never re-fetched
+anything, (4) offer expiry only updated on the next poll/read, not
+immediately. All four fixed; unavailable-rider exclusion, assignment scoping,
+and push-independence were verified already correct, not touched.
+
+**Files changed this stage**:
+- `apps/web/src/lib/alert-sound.ts` (new — synthesized tone, no asset)
+- `apps/web/src/lib/realtime.tsx` (`status: live|reconnecting|offline`, `onReconnect()`)
+- `apps/web/src/components/layout.tsx` (visible connection-status indicator)
+- `apps/web/src/components/alerts-toaster.tsx` (plays the alert sound)
+- `apps/web/src/components/job-offers-panel.tsx` (reconnect refetch + client-side expiry)
+- `apps/web/src/pages/rider-dashboard.tsx` (reconnect refetch + client-side expiry on OfferCard)
+- `apps/web/src/pages/map.tsx` (reconnect refetch of rider locations)
+- `apps/api/test/offers.test.ts` (fixed a too-narrow cast — a real `tsc` error Stage 9's vitest-only check had missed)
+- New: `e2e/specs/multi-job-notifications.spec.ts` (two-real-browser-session verification)
+
+## Commands run and results (Stage 10)
+
+| # | Command | Result |
+| --- | --- | --- |
+| 1 | `npm run typecheck --workspaces` (root) | **PASS** — 0 errors (also caught + fixed a Stage 9 test-file type error missed by vitest's esbuild transform) |
+| 2 | `npx vitest run` (apps/api) | **PASS** — 62/62 |
+| 3 | `npx vitest run` / `npm run build` (apps/web) | **PASS** — 8/8, clean build |
+| 4 | Full e2e suite (18 tests, incl. new spec), serial | **PASS** — 18/18 |
+| 5 | Same suite at 3x parallelism | **PASS** — 18/18 (no flakiness reproduced this run) |
+
+**Push credentials**: present in this dev/preview environment (config.ts's
+existing dev-mode VAPID fallback) — not missing, so nothing to report as a new
+blocker. Production must still set its own `VAPID_PUBLIC_KEY`/
+`VAPID_PRIVATE_KEY` (already documented, unchanged standing item). In-app
+realtime alerts do not depend on push either way (confirmed by reading the
+code — toast/badge/sound are driven purely by the websocket).
+
+## Re-verify (Stage 10)
+
+```bash
+npm run typecheck --workspaces
+npm run test --workspace @ronmacrae/api
+npm run test --workspace @ronmacrae/web
+cd e2e && npx playwright test --workers=1
+```
+
+## Next: Stage 11
+
+Remove extra test riders safely: timestamped `dev.db` backup first, then
+delete every rider except Kei Bearer (+8765550001), safely cleaning up that
+rider's disposable offers/assignments/locations/push subscriptions first;
+preserve all non-rider accounts, settings, zones, fees; confirm e2e test
+isolation still holds (it should — e2e already runs against its own
+`e2e-test.db`, never `dev.db`).

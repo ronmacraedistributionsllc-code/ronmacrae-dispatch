@@ -7,11 +7,22 @@ import { useAuth } from "./auth.js";
 type Handler = (msg: RealtimeMessage) => void;
 type Subscription = { types: RealtimeMessage["type"][] | "*"; handler: Handler };
 
+/** "live" once the current socket completes the server's `hello` handshake;
+ *  "offline" when the browser itself reports no network (so retrying would be
+ *  pointless to promise); "reconnecting" the rest of the time — an attempt is
+ *  in flight or scheduled and will keep happening indefinitely. */
+export type ConnectionStatus = "live" | "reconnecting" | "offline";
+
 interface RealtimeState {
-  /** True once the current socket has completed the server's `hello` handshake. */
+  /** @deprecated use `status` — kept as `status === "live"` for any caller that only needs a boolean. */
   connected: boolean;
+  status: ConnectionStatus;
   /** Subscribe to one or more message types (or "*" for all). Returns an unsubscribe function. */
   subscribe: (types: RealtimeMessage["type"][] | "*", handler: Handler) => () => void;
+  /** Fires every time the socket (re)establishes a live connection, including the
+   *  first one — the moment to refetch anything that might have been missed while
+   *  disconnected, rather than waiting on a page's own poll interval. */
+  onReconnect: (handler: () => void) => () => void;
   /** Count of alert-worthy realtime messages received since the last markRead(). */
   unreadCount: number;
   /** Acknowledge — call when the user has visited a screen that shows what came in. */
@@ -48,15 +59,16 @@ const MAX_BACKOFF_MS = 30_000;
  */
 export function RealtimeProvider({ children }: { children: ReactNode }): ReactNode {
   const { user } = useAuth();
-  const [connected, setConnected] = useState(false);
+  const [status, setStatus] = useState<ConnectionStatus>("reconnecting");
   const [unreadCount, setUnreadCount] = useState(0);
   const subscriptionsRef = useRef(new Set<Subscription>());
+  const reconnectHandlersRef = useRef(new Set<() => void>());
   const roleRef = useRef(user?.role);
   roleRef.current = user?.role;
 
   useEffect(() => {
     if (!user) {
-      setConnected(false);
+      setStatus("reconnecting");
       return;
     }
     let cancelled = false;
@@ -64,8 +76,20 @@ export function RealtimeProvider({ children }: { children: ReactNode }): ReactNo
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
     let attempt = 0;
 
+    // The browser's own online/offline signal distinguishes "actively retrying"
+    // from "there is no point retrying yet" — both keep trying regardless (the
+    // network can come back at any moment), but the label shown to the user
+    // should be honest about which is going on.
+    const applyOfflineAwareStatus = () => {
+      if (cancelled) return;
+      setStatus(navigator.onLine === false ? "offline" : "reconnecting");
+    };
+    window.addEventListener("online", applyOfflineAwareStatus);
+    window.addEventListener("offline", applyOfflineAwareStatus);
+
     function scheduleReconnect(): void {
       if (cancelled) return;
+      applyOfflineAwareStatus();
       const delay = Math.min(MAX_BACKOFF_MS, 1000 * 2 ** attempt);
       attempt += 1;
       reconnectTimer = setTimeout(() => void connect(), delay);
@@ -95,7 +119,8 @@ export function RealtimeProvider({ children }: { children: ReactNode }): ReactNo
         }
         if (msg.type === "hello") {
           attempt = 0;
-          setConnected(true);
+          setStatus("live");
+          for (const handler of reconnectHandlersRef.current) handler();
           return;
         }
         if (msg.type === "joined") return;
@@ -105,10 +130,10 @@ export function RealtimeProvider({ children }: { children: ReactNode }): ReactNo
         }
       };
       ws.onclose = (event) => {
-        setConnected(false);
         if (cancelled) return;
         if (event.code === 4401) {
           // stale/invalid token — refresh before the next connect attempt
+          applyOfflineAwareStatus();
           void refreshAccessToken().finally(scheduleReconnect);
         } else {
           scheduleReconnect();
@@ -120,6 +145,8 @@ export function RealtimeProvider({ children }: { children: ReactNode }): ReactNo
     void connect();
     return () => {
       cancelled = true;
+      window.removeEventListener("online", applyOfflineAwareStatus);
+      window.removeEventListener("offline", applyOfflineAwareStatus);
       if (reconnectTimer) clearTimeout(reconnectTimer);
       socket?.close();
     };
@@ -134,9 +161,20 @@ export function RealtimeProvider({ children }: { children: ReactNode }): ReactNo
     [],
   );
 
+  const onReconnect = useMemo(
+    () => (handler: () => void) => {
+      reconnectHandlersRef.current.add(handler);
+      return () => reconnectHandlersRef.current.delete(handler);
+    },
+    [],
+  );
+
   const markRead = useMemo(() => () => setUnreadCount(0), []);
 
-  const value = useMemo(() => ({ connected, subscribe, unreadCount, markRead }), [connected, subscribe, unreadCount, markRead]);
+  const value = useMemo(
+    () => ({ connected: status === "live", status, subscribe, onReconnect, unreadCount, markRead }),
+    [status, subscribe, onReconnect, unreadCount, markRead],
+  );
   return <RealtimeContext.Provider value={value}>{children}</RealtimeContext.Provider>;
 }
 

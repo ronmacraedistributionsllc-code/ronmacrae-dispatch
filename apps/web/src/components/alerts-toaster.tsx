@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import type { RealtimeMessage } from "@ronmacrae/contracts";
 import { useRealtime } from "../lib/realtime.js";
 import { useAuth } from "../lib/auth.js";
+import { playAlertSound } from "../lib/alert-sound.js";
 
 interface ToastItem {
   id: string;
@@ -49,6 +50,7 @@ export function AlertsToaster(): React.JSX.Element | null {
       if (!toast) return;
       const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
       setToasts((cur) => [...cur, { id, ...toast }]);
+      playAlertSound(toast.tone === "danger");
       setTimeout(() => setToasts((cur) => cur.filter((t) => t.id !== id)), TOAST_TTL_MS);
     });
   }, [subscribe, user?.role]);

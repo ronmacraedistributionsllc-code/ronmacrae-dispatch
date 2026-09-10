@@ -326,7 +326,7 @@ describe("a rider stays eligible for more offers after accepting one (multi-job 
       headers: { authorization: `Bearer ${dispatcher}` },
       payload: { riderIds: [rider.id] },
     });
-    const { offers: offersB } = broadcastB.json() as { offers: { id: string }[] };
+    const { offers: offersB } = broadcastB.json() as { offers: { id: string; riderId: string }[] };
     expect(offersB).toHaveLength(1);
     expect(offersB[0]!.riderId).toBe(rider.id);
 

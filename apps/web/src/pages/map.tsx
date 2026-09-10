@@ -56,7 +56,7 @@ export function DispatchMap(): React.JSX.Element {
     });
   }, [initial.data]);
 
-  const { subscribe } = useRealtime();
+  const { subscribe, onReconnect } = useRealtime();
   useEffect(
     () =>
       subscribe(["rider.location"], (msg) => {
@@ -65,6 +65,9 @@ export function DispatchMap(): React.JSX.Element {
       }),
     [subscribe],
   );
+  // A dropped socket can silently miss position updates — pull the latest
+  // snapshot immediately on reconnect rather than waiting out the 30s poll.
+  useEffect(() => onReconnect(() => void initial.refetch()), [onReconnect]);
 
   useEffect(() => {
     if (!mapContainer.current || mapRef.current) return;

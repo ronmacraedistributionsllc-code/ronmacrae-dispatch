@@ -547,7 +547,7 @@ tracked here as Stages 8+ (Stages 1-7 above are the prior work, already shipped)
 | - | ----- | ------ |
 | 8 | Fix address entry (manual text is authoritative, never silently overwritten) | DONE |
 | 9 | Rider availability toggle + configurable multi-job capacity | DONE |
-| 10 | Diagnose and repair rider notifications (offer/assign alerts, connection state) | NOT STARTED |
+| 10 | Diagnose and repair rider notifications (offer/assign alerts, connection state) | DONE |
 | 11 | Remove extra test riders safely (backup first; keep Kei Bearer only) | NOT STARTED |
 | 12 | 5A — COD reconciliation ledger | NOT STARTED |
 | 13 | 5B — Rider route queue | NOT STARTED |
@@ -749,3 +749,87 @@ is still no admin/dispatcher UI page for creating or listing riders — capacity
 but has no settings-page form yet. Dispatcher-facing visibility of rider
 availability/active-count/capacity (beyond the existing live map) is Stage 14
 (5C — dispatcher operations board)'s job, not this one.
+
+## Stage 10 — Diagnose and repair rider notifications (DONE)
+
+**Diagnosis first** (actually traced the path, per the instruction, rather than
+assuming it worked): read `apps/web/src/lib/realtime.tsx` (websocket client),
+`apps/api/src/rt/hub.ts` (server hub), `alerts-toaster.tsx`, `layout.tsx`,
+`job-offers-panel.tsx`, and `rider-dashboard.tsx`. Broadcast → toast → unread
+badge already worked (confirmed by the pre-existing, still-passing
+`alerts.spec.ts`/`realtime.spec.ts`/`offers.spec.ts`), and Stage 9 already fixed
+the specific "rider stops receiving offers after accepting one job" defect. Four
+real gaps remained, found by reading the code rather than assumed:
+
+1. **No alert sound at all** — grepped the whole web app; zero audio code
+   existed anywhere. Added `apps/web/src/lib/alert-sound.ts`: a short
+   synthesized tone (Web Audio oscillator, no asset to ship, works offline),
+   played from `alerts-toaster.tsx` alongside each toast. Wrapped in try/catch
+   and an autoplay-blocked promise is silently swallowed — "where the browser
+   permits" is handled by attempting and not erroring when blocked, not by
+   trying to detect permission in advance.
+2. **No connection-state indicator anywhere** — `realtime.tsx` tracked only a
+   binary `connected` boolean, and nothing in the UI even read it. Replaced
+   with a 3-state `status: "live" | "reconnecting" | "offline"` (offline
+   specifically reflects the browser's own `navigator.onLine`/`online`/`offline`
+   events — reconnect attempts never stop, but the label is honest about
+   whether there's a network to reconnect over) and added a visible indicator
+   (dot + label) in `layout.tsx`'s sidebar header, shown on every screen for
+   every role (`data-testid="connection-status"`).
+3. **Reconnects didn't re-fetch anything** — the socket reconnected fine, but
+   nothing told any page to catch up afterward; a rider/dispatcher stayed
+   showing stale data until their own poll interval (15-30s) happened to fire.
+   Added `onReconnect(handler)` to the realtime context (fires on every `hello`,
+   including the first), wired into `rider-dashboard.tsx` (offers + jobs),
+   `job-offers-panel.tsx` (this job's offers), and `map.tsx` (rider locations).
+4. **Offer expiry never updated a screen "immediately"** — expiry is lazily
+   swept server-side only on the next offer-related read, so a screen sitting
+   open past `expiresAt` kept showing "open" until its next poll. Since expiry
+   is a pure function of `expiresAt` vs. the clock (no server round-trip
+   needed to know it happened), added a 1-second client-side tick in both
+   `OfferCard` (rider) and `JobOffersPanel` (dispatcher) that flips the
+   displayed status to "expired" and disables Accept/Decline/Withdraw the
+   instant the deadline passes, independent of any poll or push.
+
+**Verified already-correct (no change needed, confirmed by reading + testing)**:
+unavailable riders are excluded from broadcasts (`eligibleRiders()`'s
+`status: "available"` filter, unchanged from Stage 9); direct assignment only
+alerts the target rider (`assign.ts` sends only to `roomForRider`); accept/
+decline/withdraw already push `job.state`/`job.assigned`/`offer` messages that
+update all connected screens; the in-app alert path (websocket) is fully
+independent of browser push (confirmed by reading — toasts/badge/sound all key
+off `ws.onmessage`, never `Notification`/service-worker push events).
+
+**Push credentials**: not missing in this dev/preview environment —
+`apps/api/src/config.ts` already falls back to a well-known dev VAPID key pair
+when `DEV_DB=1` and none are set, so opt-in browser push works today (confirmed
+via the still-passing `push.test.ts` and `push-optin.spec.ts`). This is
+unchanged from before this stage. Production still needs its own
+`VAPID_PUBLIC_KEY`/`VAPID_PRIVATE_KEY` set (already documented in that file) —
+a standing production-readiness item, not a new gap found here. In-app realtime
+(toast/badge/sound/card) does not depend on push either way.
+
+**Tests (new)**: `e2e/specs/multi-job-notifications.spec.ts` — two real,
+separately-logged-in rider browser sessions verifying, in one flow: a rider
+already carrying one active job (dailyCapacity 2) receives a second,
+unrelated broadcast live (card + "Job offers" heading + unread badge, no
+reload) and can accept it up to exactly capacity, showing the "At capacity"
+warning; a second rider who explicitly set themselves "unavailable" receives
+nothing from the same broadcast; the connection-status indicator reads "Live".
+Also fixed a pre-existing type error in `apps/api/test/offers.test.ts` (a
+too-narrow response-shape cast from Stage 9 that vitest's esbuild transform
+didn't catch but `tsc` did — `npm run typecheck --workspaces` is now run again
+after every test-file edit, not just after source edits).
+
+**Verification run**: `npm run typecheck --workspaces` clean; `apps/api`
+vitest 62/62; `apps/web` vitest 8/8; clean web build; full e2e suite (18 tests,
+including the new spec) 18/18 both serially and at 3x parallelism (no
+flakiness reproduced this round).
+
+**Not done in this stage** (out of scope, tracked for later): no server-side
+broadcast when an offer naturally expires (client-side clock-based detection
+covers "immediate" without one, per above) — if a future stage wants the
+underlying DB row itself flipped proactively rather than lazily, that's a
+small addition (a periodic sweep + broadcast, same shape as
+`LocationSimulator`'s existing interval pattern) but wasn't needed to satisfy
+the actual requirement. WhatsApp/SMS delivery of these alerts is Stage 15 (5D).

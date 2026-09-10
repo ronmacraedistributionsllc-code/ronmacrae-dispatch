@@ -61,8 +61,14 @@ export function RiderDashboard(): React.JSX.Element {
     void qc.invalidateQueries({ queryKey: ["bearer-jobs"] });
   };
 
-  const { subscribe } = useRealtime();
-  useEffect(() => subscribe(["offer"], () => refreshOffersAndJobs()), [subscribe]);
+  const { subscribe, onReconnect } = useRealtime();
+  // A direct assignment (job.assigned, source "assign") changes this rider's job
+  // list just as much as a new offer does — both should update the screen without
+  // waiting for the next poll.
+  useEffect(() => subscribe(["offer", "job.assigned"], () => refreshOffersAndJobs()), [subscribe]);
+  // Catch up immediately on (re)connect — a dropped socket shouldn't leave a
+  // missed offer or a withdrawn/expired one sitting stale until the next poll.
+  useEffect(() => onReconnect(() => refreshOffersAndJobs()), [onReconnect]);
 
   if (!rider) return <p className="text-sm text-zinc-400">Loading rider profile…</p>;
 
@@ -114,6 +120,19 @@ export function RiderDashboard(): React.JSX.Element {
   </div>;
 }
 
+/** Re-renders its caller roughly every `intervalMs` — used to keep an offer's
+ *  expiry countdown honest without a server round-trip: expiry is a pure
+ *  function of `expiresAt` vs. the clock, so the client can reflect it the
+ *  instant it happens rather than waiting for the next poll or realtime push. */
+function useClockTick(intervalMs: number): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), intervalMs);
+    return () => clearInterval(id);
+  }, [intervalMs]);
+  return now;
+}
+
 function OfferCard({ offer, onChanged }: { offer: JobOfferDto; onChanged: () => void }): React.JSX.Element {
   const accept = useMutation({
     mutationFn: () => apiFetch(API.bearer.acceptOffer(offer.id), { method: "POST", body: JSON.stringify({}) }),
@@ -125,7 +144,10 @@ function OfferCard({ offer, onChanged }: { offer: JobOfferDto; onChanged: () => 
   });
   const busy = accept.isPending || decline.isPending;
   const error = accept.error ?? decline.error;
-  const expiresIn = Math.max(0, Math.round((new Date(offer.expiresAt).getTime() - Date.now()) / 60_000));
+  const now = useClockTick(1_000);
+  const msLeft = new Date(offer.expiresAt).getTime() - now;
+  const expired = msLeft <= 0;
+  const expiresIn = Math.max(0, Math.round(msLeft / 60_000));
 
   return <section className={`card space-y-2 border ${offer.urgent ? "border-red-800/60" : "border-sky-800/50"}`}>
     <div className="flex items-start justify-between gap-3">
@@ -136,8 +158,8 @@ function OfferCard({ offer, onChanged }: { offer: JobOfferDto; onChanged: () => 
         </h2>
         <p className="text-xs text-zinc-400">{offer.itemSummary ?? "No item details"}</p>
       </div>
-      <span className="whitespace-nowrap rounded bg-sky-900/50 px-2 py-1 text-xs font-medium text-sky-300">
-        expires in {expiresIn}m
+      <span className={`whitespace-nowrap rounded px-2 py-1 text-xs font-medium ${expired ? "bg-zinc-800 text-zinc-500" : "bg-sky-900/50 text-sky-300"}`}>
+        {expired ? "expired" : `expires in ${expiresIn}m`}
       </span>
     </div>
     <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm sm:grid-cols-3">
@@ -146,10 +168,14 @@ function OfferCard({ offer, onChanged }: { offer: JobOfferDto; onChanged: () => 
       <div><dt className="label !mb-0">COD amount</dt><dd className="text-zinc-200">{formatMoney(offer.codAmount)}</dd></div>
     </dl>
     {error ? <p className="text-sm text-red-400">{error instanceof ApiError ? error.message : "Could not respond to offer"}</p> : null}
-    <div className="flex gap-2">
-      <button className="btn-accent" disabled={busy} onClick={() => void accept.mutate()}>{accept.isPending ? "Accepting…" : "Accept"}</button>
-      <button className="btn" disabled={busy} onClick={() => void decline.mutate()}>{decline.isPending ? "Declining…" : "Decline"}</button>
-    </div>
+    {expired ? (
+      <p className="text-sm text-zinc-500">This offer has expired.</p>
+    ) : (
+      <div className="flex gap-2">
+        <button className="btn-accent" disabled={busy} onClick={() => void accept.mutate()}>{accept.isPending ? "Accepting…" : "Accept"}</button>
+        <button className="btn" disabled={busy} onClick={() => void decline.mutate()}>{decline.isPending ? "Declining…" : "Decline"}</button>
+      </div>
+    )}
   </section>;
 }
 
