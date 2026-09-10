@@ -245,10 +245,16 @@ model Job {
   status           JobStatus     @default(new)
   priority         Priority      @default(normal)
   addressText        String?
+  /** Geocoder's formatted match for addressText, if one was found — informational
+   *  only; addressText (what staff/customer actually typed) is always the
+   *  authoritative delivery address and is never overwritten by this. */
+  addressProviderText String?
   landmark           String?
   point              Json?
   pickupPoint        Json?
   pickupAddressText  String?
+  /** Same relationship to pickupAddressText as addressProviderText has to addressText. */
+  pickupAddressProviderText String?
   pickupContact      String?
   itemSummary        String?
   quantity           Int?

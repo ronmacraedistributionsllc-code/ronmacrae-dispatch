@@ -177,12 +177,15 @@ export interface JobDto {
   customerName: string;
   customerPhone: string;
   addressText: string | null;
+  /** Geocoder's formatted match, if any — informational; addressText is authoritative. */
+  addressProviderText: string | null;
   landmark: string | null;
   point: GeoPoint | null;
   zoneId: string | null;
   zoneName: string | null;
     pickupPoint: GeoPoint | null;
     pickupAddressText: string | null;
+    pickupAddressProviderText: string | null;
     pickupContact: string | null;
     itemSummary: string | null;
     /** units of the product in this order (1 when not stated) */

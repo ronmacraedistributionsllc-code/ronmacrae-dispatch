@@ -529,3 +529,115 @@ the dangling `locationsFor` contract route, the 8 lint errors, the
    "I'm online" action, or is immediate availability the intended UX for onboarding
    a rider who's standing in the store ready to start?). Worth asking about
    before the next round of work.
+
+---
+
+# Pre-production hardening (Claude Code, 2026-09-10 — continuing)
+
+Requested before production prep: fix address entry, rider multi-job capacity,
+notification repair, safe test-rider cleanup, and 7 major operational features
+(COD ledger, rider route queue, dispatcher ops board, customer notifications,
+reports, emergency contact, delivery messaging). This is large enough that it's
+being worked as its own sequence of bounded, individually-committed stages —
+tracked here as Stages 8+ (Stages 1-7 above are the prior work, already shipped).
+
+## Stage plan
+
+| # | Stage | Status |
+| - | ----- | ------ |
+| 8 | Fix address entry (manual text is authoritative, never silently overwritten) | DONE |
+| 9 | Rider availability toggle + configurable multi-job capacity | NOT STARTED |
+| 10 | Diagnose and repair rider notifications (offer/assign alerts, connection state) | NOT STARTED |
+| 11 | Remove extra test riders safely (backup first; keep Kei Bearer only) | NOT STARTED |
+| 12 | 5A — COD reconciliation ledger | NOT STARTED |
+| 13 | 5B — Rider route queue | NOT STARTED |
+| 14 | 5C — Dispatcher operations board | NOT STARTED |
+| 15 | 5D — Customer status message templates + notification log | NOT STARTED |
+| 16 | 5E — Operating reports + CSV export | NOT STARTED |
+| 17 | 5F — Emergency/contact-dispatch button | NOT STARTED |
+| 18 | 5G — Delivery messaging (customer/rider/dispatcher) | NOT STARTED |
+
+Each stage: implement, typecheck, run meaningful tests (new + full existing suite),
+update this file with what was actually found/built/tested, update
+`PHASE1_JOBS_CHECKPOINT.md`, then one commit. Continuing automatically between
+stages per the user's instruction, unless a genuine blocker comes up (credentials,
+an ambiguous product decision that can't be inferred safely, etc.) — those get
+flagged here and in the checkpoint, not silently worked around.
+
+## Stage 8 — Fix address entry (DONE)
+
+**The bug** (in the pre-existing `apps/web/src/components/address-picker.tsx`,
+found by reading it, not assumed): two call sites unconditionally overwrote the
+typed input with provider text —
+- `pickSuggestion(s)` set `query` to the picked suggestion's label, always.
+- `movePin(point)`'s reverse-geocode callback set `query` to the reverse-geocoded
+  label, always, every time the pin was dragged.
+
+So typing "15-17 Half Way Tree Road..." and then picking a suggestion, or
+nudging the pin afterwards, could silently replace "15-17" with whatever the
+provider/reverse-geocode returned — exactly the failure mode described.
+
+**The fix:**
+- **Schema**: `apps/api/prisma/schema.prisma` — added nullable `addressProviderText`
+  and `pickupAddressProviderText` columns to `Job` (the provider's formatted
+  match, kept only for transparency — never authoritative). Backed up `dev.db`
+  first (`data/dev.db.bak-preprod-20260910-165227`), pushed with
+  `DEV_DB=1 npm run db:prepare` — clean, additive, no data loss.
+- **Backend plumbing**: threaded the two new fields through `JobDto`
+  (`packages/contracts/src/types.ts`), `jobToDto()`
+  (`apps/api/src/modules/jobs/dto.ts`), and both `CreateJobBody`/`UpdateJobBody`
+  zod schemas + their data-mapping in `apps/api/src/modules/jobs/create.ts`.
+- **`AddressPicker` rewrite** (`apps/web/src/components/address-picker.tsx`):
+  - `ConfirmedLocation` now separates `address` (what was typed — always
+    authoritative) from `providerAddress` (informational only) and `point`.
+  - Typed text (`query`/the input) is changed **only** by direct user typing.
+    Nothing else — not `pickSuggestion`, not `movePin`'s reverse-geocode, not
+    `useThisAddress` — ever calls `setQuery` except the one convenience case of
+    filling an *empty* field from a picked suggestion.
+  - Added an explicit "Use this address" action that geocodes the typed text
+    for a point but leaves the text untouched; if the geocoder finds nothing
+    (or errors), it falls back to a bias point / island-center point and shows
+    a "could not verify automatically, position the pin manually" banner —
+    the flow still completes, typed text intact either way.
+  - The confirmation view shows the typed address as primary and the provider
+    match (if present and different) as a secondary "Provider match:" line,
+    alongside the pin's coordinates — both are visible together as required.
+  - Wrapped the map in a small error boundary so a map/tiles failure degrades
+    to a coordinates-only confirmation instead of blocking the flow.
+- **`apps/web/src/pages/new-job.tsx`**: updated for the new `ConfirmedLocation`
+  shape; the default pickup ("15-17 Half Way Tree Road, Kingston, Jamaica")
+  keeps that exact text as `address` (not replaced by whatever the geocoder
+  reformats it to) with the provider's match stored separately, and stays
+  fully editable like any other address field. `addressProviderText` /
+  `pickupAddressProviderText` are now sent through to `POST /jobs`.
+  `zone-manager.tsx` needed no changes — it only threads `ConfirmedLocation`
+  through, it doesn't construct one.
+
+**Tests (new):**
+- `apps/web/src/components/address-picker.test.tsx` (5 tests, jsdom + RTL,
+  `PinMap`/`apiFetch` mocked) — covers: a "15-17 Half Way Tree Road" address is
+  unchanged after picking a differently-formatted suggestion; unchanged after
+  dragging the pin (reverse-geocode returns a different street, ignored); "Use
+  this address" completes the flow with typed text intact when the provider
+  finds no match at all; a suggestion never overwrites text once the user has
+  typed something themselves; the confirmed view shows both the typed address
+  and the pin coordinates together.
+- `apps/api/test/jobs-address.test.ts` (3 tests, real Fastify app + isolated
+  sqlite db) — covers: `POST /api/jobs` stores a "15-17 ..." address and a
+  differently-formatted provider match as two separate fields, both exact; an
+  apartment/unit + landmark-only address with no provider match is stored
+  exactly with `addressProviderText: null` (not fabricated, not coerced to the
+  typed text); a `PATCH` that changes only the point (simulating a pin drag)
+  never touches the previously-stored `addressText`.
+
+**Verification run:** `npm run typecheck --workspaces` clean (all real
+workspaces — `e2e` has no typecheck script, pre-existing); `apps/web` vitest
+8/8 passed; `apps/api` vitest 58/58 passed (55 pre-existing + 3 new); `npm run
+build --workspace @ronmacrae/web` clean production build.
+
+**Not done in this stage** (explicitly out of scope, tracked for later): the
+public customer-facing `book.tsx` delivery-request form still uses a plain
+text field for the destination with no map/geocoding at all — it has no
+overwrite bug (nothing auto-fills it), so it wasn't touched, but it also has
+no pin-confirmation step; if that's wanted, it's a separate feature request,
+not a bug fix.

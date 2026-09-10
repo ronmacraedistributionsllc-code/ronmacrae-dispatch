@@ -910,3 +910,65 @@ Everything from Stage 6's list still applies, plus:
 npm run typecheck && npm run test:unit && npm run build   # root — expect 0 errors, api 55/55, e2e 18/18, clean build
 npm run lint && npm audit --omit=dev                       # expect 8 pre-existing lint errors, 5 vulns / 0 critical
 ```
+
+---
+
+# Stage 8 — Fix address entry (pre-production hardening, 2026-09-10)
+
+Full detail in `WORK_IN_PROGRESS.md` under "Stage 8 — Fix address entry (DONE)".
+Summary for resuming agents:
+
+**Bug fixed**: `apps/web/src/components/address-picker.tsx` silently overwrote
+the user's typed address text in two places — picking a search suggestion, and
+dragging the map pin (reverse-geocode). Both are now informational-only;
+typed text changes **only** from direct typing.
+
+**Schema change**: `Job.addressProviderText` / `Job.pickupAddressProviderText`
+(nullable strings) added, additive-only, `dev.db` backed up first as
+`data/dev.db.bak-preprod-20260910-165227` before the push. Row counts
+unaffected (only new nullable columns, no data touched).
+
+**Files changed this stage**:
+- `apps/api/prisma/schema.prisma` (+2 columns on `Job`)
+- `packages/contracts/src/types.ts` (`JobDto` +2 fields)
+- `apps/api/src/modules/jobs/dto.ts` (`jobToDto()` mapping)
+- `apps/api/src/modules/jobs/create.ts` (`CreateJobBody`/`UpdateJobBody` + both data-mapping objects)
+- `apps/web/src/components/address-picker.tsx` (rewritten — typed-text-authoritative)
+- `apps/web/src/pages/new-job.tsx` (new `ConfirmedLocation` shape; default pickup keeps exact text; new fields sent to `POST /jobs`)
+- New tests: `apps/web/src/components/address-picker.test.tsx` (5), `apps/api/test/jobs-address.test.ts` (3)
+
+## Commands run and results (Stage 8)
+
+| # | Command | Result |
+| --- | --- | --- |
+| 1 | `npm run typecheck --workspaces` (root) | **PASS** — 0 errors, all real workspaces (`e2e` has no typecheck script, pre-existing) |
+| 2 | `npx vitest run` (apps/web) | **PASS** — 8/8 (3 pre-existing + 5 new) |
+| 3 | `npx vitest run` (apps/api) | **PASS** — 58/58 (55 pre-existing + 3 new) |
+| 4 | `npm run build --workspace @ronmacrae/web` | **PASS** — clean production build |
+| 5 | `DEV_DB=1 npm run db:prepare` (after backing up `dev.db`) | **PASS** — clean push, additive only, no data-loss warning |
+
+## Known issues (unchanged from Stage 7 + this stage's own note)
+
+Everything from Stage 6/7's lists still applies. Nothing new introduced by
+Stage 8. One thing explicitly *not* done, by design: the public customer-facing
+delivery-request form (`apps/web/src/pages/book.tsx`) still takes the
+destination as a plain text field with no geocoding/pin step at all — it has no
+overwrite bug (nothing auto-fills it), so out of scope for this bug-fix stage;
+adding a pin-confirmation step there would be a feature request, not part of
+"fix address entry".
+
+## Re-verify (Stage 8)
+
+```bash
+npm run typecheck --workspaces
+npm run test --workspace @ronmacrae/web
+npm run test --workspace @ronmacrae/api
+npm run build --workspace @ronmacrae/web
+```
+
+## Next: Stage 9
+
+Rider "Available for jobs" / "Unavailable" toggle (rider-controlled, must not
+auto-toggle off on accept) + owner/admin-configurable per-rider max active jobs
+(default 5, not a 1-job cap). See `WORK_IN_PROGRESS.md` Stage plan table for
+the full remaining Stage 9–18 sequence.

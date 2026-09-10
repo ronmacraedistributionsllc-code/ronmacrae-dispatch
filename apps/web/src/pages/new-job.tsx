@@ -100,7 +100,11 @@ export function NewJob(): React.JSX.Element {
       .then((r) => {
         if (cancelled) return;
         const first = r.results[0];
-        if (first) setPickup({ address: first.label, point: first.point });
+        // The default pickup starts out as the provider's own match for our
+        // standard address — but it's still just a starting point: the field is
+        // editable like any other, and if staff type over it their text becomes
+        // authoritative just like everywhere else.
+        if (first) setPickup({ address: DEFAULT_PICKUP_ADDRESS, providerAddress: first.label, point: first.point });
         else setPickupLoadError(true);
       })
       .catch(() => {
@@ -196,9 +200,11 @@ export function NewJob(): React.JSX.Element {
           priority: form.urgent ? "urgent" : "normal",
           source: form.channel,
           addressText: destination.address,
+          addressProviderText: destination.providerAddress ?? undefined,
           point: destination.point,
           landmark: form.landmark.trim() || undefined,
           pickupAddressText: pickup.address,
+          pickupAddressProviderText: pickup.providerAddress ?? undefined,
           pickupPoint: pickup.point,
           itemSummary: form.product.trim(),
           quantity: Math.min(999, Math.max(1, Number(form.quantity) || 1)),
