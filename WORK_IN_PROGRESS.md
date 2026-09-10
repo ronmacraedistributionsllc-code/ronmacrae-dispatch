@@ -13,10 +13,15 @@ status plus the concrete next action.
   interrupted OpenCode session`. `.env` and all `*.db`/`*.db.bak*` files are
   gitignored and were never staged.
 - `apps/api/data/dev.db.bak-offers` (434,176 bytes, made 2026-09-10 08:50, before the
-  `JobOffer` table push) is still present and untouched — that's the pre-existing DB
-  backup from the OpenCode session, kept as a rollback point for the schema change.
-  `apps/api/data/dev.db` itself is also untouched by this session's work (integration
-  tests run against a disposable `apps/api/data/test-*.db`, deleted after each run).
+  `JobOffer` table push) is still present and byte-identical — that's the pre-existing
+  DB backup from the OpenCode session, kept as a rollback point for the schema change.
+  `apps/api/data/dev.db` was untouched through Stage 1/2 (those tests run against an
+  isolated, disposable `apps/api/data/test-*.db`), but Stage 3's e2e run did grow it
+  with new seeded/test jobs and riders (`CI=1 npx playwright test` reseeds via `npm
+  run seed`, then accumulates jobs as specs run) — same disposable-accumulation
+  pattern every prior checkpoint in this file already documents, not new behavior.
+  No backup was taken before Stage 3 because no schema change happened; `dev.db` is
+  disposable data, not a migration point, per the existing project convention.
 - The OpenCode handoff summary claimed `assign.ts` "reportedly" had a race-safe
   change and `offers.ts` "still needs acceptance/rebroadcast changes" — **verified
   against actual code, not assumed**: `assign.ts` already withdrew open offers
@@ -30,10 +35,10 @@ status plus the concrete next action.
 | - | ----- | ------ |
 | 1 | Atomic offer acceptance/assignment, eligibility, expiration, withdrawal, closing competing offers | **DONE** — see below |
 | 2 | Concurrency + authorization tests | **DONE** — `apps/api/test/offers.test.ts`, 8/8 passing |
-| 3 | Dispatcher broadcast/assign UI + rider Accept/Decline cards | **NOT STARTED** |
+| 3 | Dispatcher broadcast/assign UI + rider Accept/Decline cards | **DONE** — see below |
 | 4 | Live in-app alerts + opt-in browser push | **NOT STARTED** |
 | 5 | Foreground GPS, dispatcher maps, secure customer tracking | **NOT STARTED** |
-| 6 | Full workflow tests, typecheck, build, preview instructions | **PARTIAL** — backend gates green (see below); full workflow (stages 3-5) untested because unbuilt |
+| 6 | Full workflow tests, typecheck, build, preview instructions | **PARTIAL** — backend + Stage 3 UI gates green (see below); Stage 6 still needs Stages 4-5 done first |
 
 ## Stage 1 — done (this session)
 
@@ -75,19 +80,65 @@ Run: `cd apps/api && npx vitest run test/offers.test.ts` (or `npm run test:unit`
 the full suite). Uses `apps/api/data/test-offers.db`, created and deleted by the test
 itself — safe to re-run any time, never touches `dev.db`.
 
+## Stage 3 — done (this session)
+
+**Contracts change**: `JobOfferDto` (`packages/contracts/src/types.ts`) gained optional
+`riderId?`/`riderName?`, populated only on staff-facing routes (broadcast, rebroadcast,
+`GET /api/jobs/:id/offers`) via a `dto(row, { includeRider: true })` flag in
+`apps/api/src/modules/offers.ts` — the rider-facing routes (`GET /api/bearer/offers`,
+accept, decline) omit them, unchanged. This was the gap flagged at the end of Stage 2.
+Remember to rebuild contracts (`npm run build --workspace @ronmacrae/contracts`) after
+editing `packages/contracts/src` — apps import the built `dist`, not `src`, and a stale
+dist has bitten this project before (see the Phase 2 checkpoint's "stale dist" note).
+
+**Dispatcher UI** (`apps/web/src/pages/jobs.tsx` + new
+`apps/web/src/components/job-offers-panel.tsx`): an "Offers" toggle button on each
+unassigned (`new`) job row expands a panel with Broadcast / Broadcast-again /
+Rebroadcast controls (expiry-minutes input) and a live (10s-polled) list of offers per
+rider with status badges and a Withdraw button on open ones. No manual rider-picking
+UI in the broadcast form — it always broadcasts to every eligible (active, available,
+under daily capacity) rider, matching the API's existing `eligibleRiders()` behavior;
+manual single-rider assignment (the pre-existing Assign/Reassign control) is unchanged
+and still the way to hand a job to one specific rider directly.
+
+**Rider UI** (`apps/web/src/pages/rider-dashboard.tsx`): a "Job offers" section above
+"My deliveries", polling `GET /api/bearer/offers` every 8s, rendering pickup →
+destination, item summary, rider earnings/delivery fee/COD amount, and a countdown to
+expiry, with Accept/Decline buttons. Accept surfaces the server's 409 ("Another rider
+has already claimed this job") as an inline error if lost to a race, and refetches
+both the offers and assigned-jobs lists either way.
+
+**New e2e spec** `e2e/specs/offers.spec.ts` (2 tests, real browser, two separate
+browser contexts for the dispatcher and rider sides):
+1. Dispatcher broadcasts via the Jobs screen UI → a dedicated fresh test rider (not
+   the shared seeded "Kei Bearer", to stay immune to other specs' parallel-worker
+   state) sees and accepts the offer from their dashboard UI → the dispatcher's Jobs
+   screen shows the job assigned to that rider on reload.
+2. A dispatcher-withdrawn offer never appears on the rider's dashboard.
+
+Two real bugs were caught and fixed while getting this spec green (both test-only,
+no production code changes were needed for them):
+- A login-then-navigate race (`page.goto("/jobs")` fired before the login redirect
+  had actually completed) — fixed by waiting for the post-login heading first.
+- The accumulated `dev.db` has many `new` jobs and several stale same-named
+  "Offer Test Rider" rows left over from earlier failed attempts at this exact spec
+  (each retry creates a fresh rider via the API and never cleans it up) — an unscoped
+  text locator was ambiguous. Fixed by adding `data-testid`s
+  (`offers-panel-<jobId>`, `offer-rider-<riderId>`) and scoping locators by id instead
+  of display text.
+
 ## Verified gates (this session, actual output, not assumed)
 
 | Command (working dir) | Result |
 | --- | --- |
 | `npm run typecheck --workspace @ronmacrae/api` | PASS — 0 errors |
-| `npm run test:unit --workspace @ronmacrae/api` | PASS — 6 files, **35/35** (27 pre-existing + 8 new offers tests) |
+| `npm run test:unit --workspace @ronmacrae/api` | PASS — 6 files, **35/35** (27 pre-existing + 8 offers tests) |
 | `npm run typecheck --workspace @ronmacrae/web` | PASS — 0 errors |
 | `npm run test:unit --workspace @ronmacrae/web` | PASS — 1 file, 3/3 |
-| `npm run build --workspace @ronmacrae/web` | PASS — 265.16 kB JS (gzip 79.20 kB), PWA generated |
-
-E2e (`e2e/`) was **not** re-run this session — no web/UI changes were made, so the
-existing Playwright specs are unaffected, but they haven't been re-verified against
-this exact commit. Re-run before trusting them: `cd e2e && CI=1 npx playwright test`.
+| `npm run build --workspace @ronmacrae/web` | PASS — 271.28 kB JS (gzip 80.84 kB), PWA generated |
+| `npm run build --workspace @ronmacrae/contracts` | PASS |
+| `cd e2e && CI=1 npx playwright test` | PASS — **12/12** (10 pre-existing + 2 new offers specs) |
+| `npm run lint` (repo root) | **8 pre-existing errors**, all in files this session never touched (`apps/api/src/modules/jobs/proofs.ts`, `repository.ts`, `transition.ts`, `settings.ts`, `tracking.ts` — unused imports). Not a regression; lint was not part of any previously-passing checkpoint gate. Worth cleaning up separately. |
 
 ## A latent bug found (documented, deliberately NOT fixed — out of scope)
 
@@ -105,30 +156,29 @@ patching unrelated config code mid-task. Worth a 2-line fix later:
 in both places — the `if (rel.startsWith("/")) return cfg.DATABASE_URL` line then
 works correctly for absolute paths.
 
-## A DTO gap worth knowing about before Stage 3 (UI)
+## Exact next steps (Stage 4 next)
 
-`JobOfferDto` (`packages/contracts/src/types.ts`) does not include `riderId` or a
-rider name/label. That's fine for the rider-facing routes (a rider only ever sees
-their own offers). But the **dispatcher-facing** `GET /api/jobs/:id/offers` needs to
-show which rider each offer went to, and the current DTO can't express that. Stage 3
-will need to either add a rider-identifying field to `JobOfferDto` (contracts change)
-or have the dispatcher offers list use a separate, staff-only DTO shape. Decide this
-before starting the offers UI.
-
-## Exact next steps (Stage 3 first)
-
-1. **Dispatcher UI**: on the existing Jobs screen (`apps/web/src/pages/jobs.tsx`),
-   add a broadcast/rebroadcast/withdraw action per unassigned `new` job (calls the
-   existing `/api/jobs/:id/offers/*` routes) and an offers panel showing status per
-   rider — needs the DTO decision above first.
-2. **Rider UI**: on `apps/web/src/pages/rider-dashboard.tsx`, add an offers section
-   (poll or hub-push `type: "offer"` messages already broadcast by `offers.ts`) with
-   Accept/Decline buttons hitting `/api/bearer/offers/:id/accept|decline`.
-3. Typecheck + build + a focused e2e spec for the offer flow before calling Stage 3
-   done — do not mark it complete without running those gates and recording actual
-   output here, the way Stage 1/2 did above.
-4. Then Stage 4 (alerts/push), Stage 5 (GPS/maps/tracking), Stage 6 (final full-suite
-   gates + preview instructions).
+1. **Realtime client**: the web app has zero websocket client today — `ctx.hub`
+   (`apps/api/src/rt/hub.ts`) already broadcasts `type: "offer"`, `"job.assigned"`,
+   and `"job.state"` messages over `WS_PATH` (`/ws`, token as a query param — see
+   `packages/contracts/src/routes.ts`), but nothing on the frontend connects to it.
+   Stage 3's offer UI works today via polling (8-10s intervals) as an interim, so
+   Stage 4's real job is building a `useRealtimeHub`-style hook (connect, auth,
+   reconnect/backoff, dispatch typed messages to subscribers) and wiring the offers
+   panel/cards to it instead of polling — plus a toast/badge for new offers and other
+   dispatcher-relevant events.
+2. **Opt-in browser push**: needs a service worker push handler (the PWA already has
+   `vite-plugin-pwa` generating `sw.js` — check whether its `generateSW` mode allows
+   a custom push listener or whether this needs `injectManifest` mode instead), a
+   subscription-storage table (new Prisma model), a `web-push`-style VAPID key pair
+   (self-generated, no paid service — do **not** set up Firebase/OneSignal/etc.
+   without asking first, per the no-new-billing constraint), and an explicit
+   opt-in control in the UI (never auto-subscribe).
+3. Typecheck + build + an e2e spec proving the realtime path (e.g. two browser
+   contexts, one broadcasts, the other sees the offer appear without a manual
+   reload/refetch) before calling Stage 4 done.
+4. Then Stage 5 (GPS/maps/tracking), Stage 6 (final full-suite gates + preview
+   instructions).
 
 No map provider, credentials, billing action, deploy, or notification/location
 behavior was added or claimed as delivered in this session.

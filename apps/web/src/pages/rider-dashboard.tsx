@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import type { JobDto, JobStatus, RiderStatus } from "@ronmacrae/contracts";
+import type { JobDto, JobOfferDto, JobStatus, RiderStatus } from "@ronmacrae/contracts";
 import { API } from "@ronmacrae/contracts";
 import { ApiError, apiFetch, formatMoney } from "../lib/api.js";
 import { useAuth } from "../lib/auth.js";
@@ -31,10 +31,15 @@ export function RiderDashboard(): React.JSX.Element {
   const [availability, setAvailability] = useState<RiderStatus | null>(rider?.status ?? null);
   useEffect(() => setAvailability(rider?.status ?? null), [rider?.status]);
   const jobs = useQuery({ queryKey: ["bearer-jobs"], queryFn: () => apiFetch<{ jobs: JobDto[] }>(API.bearer.jobs), refetchInterval: 15_000 });
+  const offers = useQuery({ queryKey: ["bearer-offers"], queryFn: () => apiFetch<{ offers: JobOfferDto[] }>(API.bearer.offers), refetchInterval: 8_000 });
   const availabilityChange = useMutation({
     mutationFn: (status: "available" | "offline") => apiFetch<{ rider: { status: RiderStatus } }>(API.riders.status(rider!.id), { method: "PATCH", body: JSON.stringify({ status }) }),
     onSuccess: ({ rider: updated }) => setAvailability(updated.status),
   });
+  const refreshOffersAndJobs = () => {
+    void qc.invalidateQueries({ queryKey: ["bearer-offers"] });
+    void qc.invalidateQueries({ queryKey: ["bearer-jobs"] });
+  };
 
   if (!rider) return <p className="text-sm text-zinc-400">Loading rider profile…</p>;
   return <div className="space-y-4">
@@ -45,10 +50,52 @@ export function RiderDashboard(): React.JSX.Element {
       </button>
     </header>
     {availabilityChange.error ? <p className="text-sm text-red-400">{availabilityChange.error instanceof ApiError ? availabilityChange.error.message : "Could not update availability"}</p> : null}
+    {offers.data && offers.data.offers.length > 0 ? (
+      <section className="space-y-2">
+        <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-400">Job offers</h2>
+        {offers.data.offers.map((offer) => <OfferCard key={offer.id} offer={offer} onChanged={refreshOffersAndJobs} />)}
+      </section>
+    ) : null}
     {jobs.isLoading ? <p className="text-sm text-zinc-400">Loading assigned jobs…</p> : null}
     {jobs.data?.jobs.map((job) => <RiderJobCard key={job.id} job={job} onChanged={() => void qc.invalidateQueries({ queryKey: ["bearer-jobs"] })} />)}
     {jobs.data && jobs.data.jobs.length === 0 ? <section className="card text-sm text-zinc-400">No deliveries are assigned to you.</section> : null}
   </div>;
+}
+
+function OfferCard({ offer, onChanged }: { offer: JobOfferDto; onChanged: () => void }): React.JSX.Element {
+  const accept = useMutation({
+    mutationFn: () => apiFetch(API.bearer.acceptOffer(offer.id), { method: "POST", body: JSON.stringify({}) }),
+    onSuccess: onChanged,
+  });
+  const decline = useMutation({
+    mutationFn: () => apiFetch(API.bearer.declineOffer(offer.id), { method: "POST", body: JSON.stringify({}) }),
+    onSuccess: onChanged,
+  });
+  const busy = accept.isPending || decline.isPending;
+  const error = accept.error ?? decline.error;
+  const expiresIn = Math.max(0, Math.round((new Date(offer.expiresAt).getTime() - Date.now()) / 60_000));
+
+  return <section className="card space-y-2 border border-sky-800/50">
+    <div className="flex items-start justify-between gap-3">
+      <div>
+        <h2 className="font-semibold">{offer.pickupArea ?? "Pickup TBC"} → {offer.destinationArea ?? "Destination TBC"}</h2>
+        <p className="text-xs text-zinc-400">{offer.itemSummary ?? "No item details"}</p>
+      </div>
+      <span className="whitespace-nowrap rounded bg-sky-900/50 px-2 py-1 text-xs font-medium text-sky-300">
+        expires in {expiresIn}m
+      </span>
+    </div>
+    <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm sm:grid-cols-3">
+      <div><dt className="label !mb-0">Your earnings</dt><dd className="text-zinc-200">{formatMoney(offer.riderEarnings)}</dd></div>
+      <div><dt className="label !mb-0">Delivery fee</dt><dd className="text-zinc-200">{formatMoney(offer.deliveryFee)}</dd></div>
+      <div><dt className="label !mb-0">COD amount</dt><dd className="text-zinc-200">{formatMoney(offer.codAmount)}</dd></div>
+    </dl>
+    {error ? <p className="text-sm text-red-400">{error instanceof ApiError ? error.message : "Could not respond to offer"}</p> : null}
+    <div className="flex gap-2">
+      <button className="btn-accent" disabled={busy} onClick={() => void accept.mutate()}>{accept.isPending ? "Accepting…" : "Accept"}</button>
+      <button className="btn" disabled={busy} onClick={() => void decline.mutate()}>{decline.isPending ? "Declining…" : "Decline"}</button>
+    </div>
+  </section>;
 }
 
 function RiderJobCard({ job, onChanged }: { job: JobDto; onChanged: () => void }): React.JSX.Element {

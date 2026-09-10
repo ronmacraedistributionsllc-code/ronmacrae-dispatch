@@ -31,10 +31,11 @@ type OfferRow = {
     amountExpected: number | null;
     currency: string;
   };
-  rider: { payRate: number | null; payCurrency: string };
+  rider: { id: string; name: string; payRate: number | null; payCurrency: string };
 };
 
-function dto(row: OfferRow): JobOfferDto {
+/** `includeRider` is staff-only (dispatcher offers list) — a rider's own offers already imply their identity. */
+function dto(row: OfferRow, opts: { includeRider?: boolean } = {}): JobOfferDto {
   return {
     id: row.id,
     jobId: row.jobId,
@@ -48,6 +49,7 @@ function dto(row: OfferRow): JobOfferDto {
     codAmount: moneyField(row.job.amountExpected, row.job.currency),
     requestedAt: null,
     createdAt: row.createdAt.toISOString(),
+    ...(opts.includeRider ? { riderId: row.rider.id, riderName: row.rider.name } : {}),
   };
 }
 
@@ -101,7 +103,7 @@ export async function offerRoutes(app: FastifyInstance, ctx: AppCtx): Promise<vo
     const expiresAt = new Date(Date.now() + body.expiresInMinutes * 60_000);
     const offers = await createOffers(ctx, job.id, eligible, expiresAt);
     await ctx.audit.record(actorFor(req), "offer.broadcast", "job", job.id, { eligibleRiders: eligible.length, expiresAt });
-    return { offers: offers.map(dto) };
+    return { offers: offers.map((o) => dto(o, { includeRider: true })) };
   });
 
   app.get<{ Params: { id: string } }>("/api/jobs/:id/offers", { preHandler: writer }, async (req) => {
@@ -111,7 +113,7 @@ export async function offerRoutes(app: FastifyInstance, ctx: AppCtx): Promise<vo
       orderBy: { createdAt: "desc" },
       include: { job: { include: { zone: true } }, rider: true },
     });
-    return { offers: offers.map(dto) };
+    return { offers: offers.map((o) => dto(o, { includeRider: true })) };
   });
 
   app.post<{ Params: { id: string } }>("/api/offers/:id/withdraw", { preHandler: writer }, async (req) => {
@@ -131,7 +133,7 @@ export async function offerRoutes(app: FastifyInstance, ctx: AppCtx): Promise<vo
     const expiresAt = new Date(Date.now() + body.expiresInMinutes * 60_000);
     const offers = await createOffers(ctx, job.id, eligible, expiresAt);
     await ctx.audit.record(actorFor(req), "offer.rebroadcast", "job", job.id, { withdrawn: old.count, offered: offers.length });
-    return { offers: offers.map(dto) };
+    return { offers: offers.map((o) => dto(o, { includeRider: true })) };
   });
 
   app.get("/api/bearer/offers", { preHandler: ctx.requireRider }, async (req) => {
@@ -141,7 +143,7 @@ export async function offerRoutes(app: FastifyInstance, ctx: AppCtx): Promise<vo
       orderBy: { expiresAt: "asc" },
       include: { job: { include: { zone: true } }, rider: true },
     });
-    return { offers: offers.map(dto) };
+    return { offers: offers.map((o) => dto(o)) };
   });
 
   app.post<{ Params: { id: string } }>("/api/bearer/offers/:id/decline", { preHandler: ctx.requireRider }, async (req) => {

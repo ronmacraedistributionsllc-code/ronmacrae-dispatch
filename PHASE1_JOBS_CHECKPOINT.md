@@ -471,3 +471,61 @@ cd apps/api && npx vitest run test/offers.test.ts   # expect 8/8
 npm run typecheck --workspace @ronmacrae/api        # expect 0 errors
 npm run test:unit --workspace @ronmacrae/api        # expect 35/35
 ```
+
+---
+
+# Delivery-offers Stage 3 — dispatcher/rider offers UI + e2e (Claude Code, 2026-09-10)
+
+**Status: PASS.** See `WORK_IN_PROGRESS.md` for full detail. Short version here.
+
+## What was built
+
+- Closed the `JobOfferDto` gap noted at the end of Stage 2: added optional
+  `riderId`/`riderName`, populated only on staff-facing offer routes
+  (`apps/api/src/modules/offers.ts`, a `{ includeRider: true }` flag on the existing
+  `dto()` helper). Contracts package rebuilt.
+- Dispatcher UI: an "Offers" toggle per unassigned job row on
+  `apps/web/src/pages/jobs.tsx` opens `apps/web/src/components/job-offers-panel.tsx`
+  (new) — broadcast/rebroadcast (with an expiry-minutes input) and a live per-rider
+  offer list with a Withdraw button on open offers.
+- Rider UI: a polled "Job offers" section on `apps/web/src/pages/rider-dashboard.tsx`
+  with Accept/Decline cards (pickup/destination, item, earnings/fee/COD, expiry
+  countdown).
+- New e2e spec `e2e/specs/offers.spec.ts` (2 tests): full broadcast → accept flow
+  across two real browser contexts (dispatcher + a dedicated fresh rider, not the
+  shared seeded one, to stay immune to other specs' parallel state), and a
+  withdraw-hides-the-offer check. Two real bugs were found and fixed getting it
+  green — a login/navigate race and an ambiguous-locator issue from accumulated
+  same-named test riders in the disposable dev db (fixed with `data-testid`s scoped
+  by row/rider id, not display text — both are test-file changes, not app code bugs).
+
+Realtime push was deliberately **not** used here — the web app has no websocket
+client yet (Stage 4's job). The offers UI polls (8-10s) as an interim.
+
+## Commands run and results (2026-09-10)
+
+| # | Command | Result |
+| --- | --- | --- |
+| 1 | `npm run build --workspace @ronmacrae/contracts` | **PASS** |
+| 2 | `npm run typecheck --workspace @ronmacrae/api` | **PASS** — 0 errors |
+| 3 | `npm run test:unit --workspace @ronmacrae/api` | **PASS** — 35/35 |
+| 4 | `npm run typecheck --workspace @ronmacrae/web` | **PASS** — 0 errors |
+| 5 | `npm run test:unit --workspace @ronmacrae/web` | **PASS** — 3/3 |
+| 6 | `npm run build --workspace @ronmacrae/web` | **PASS** — 271.28 kB JS (gzip 80.84 kB) |
+| 7 | `cd e2e && CI=1 npx playwright test` | **PASS** — **12/12** (10 pre-existing + 2 new) |
+| 8 | `npm run lint` (repo root) | 8 pre-existing errors, all in files untouched this session (unused imports in `jobs/proofs.ts`, `jobs/repository.ts`, `jobs/transition.ts`, `settings.ts`, `tracking.ts`) — not a regression, not previously a green gate |
+
+## Still open (Stages 4-6)
+
+In-app live alerts (needs a frontend websocket client — none exists yet) + opt-in
+browser push, foreground GPS + dispatcher maps + secure customer tracking, and the
+final full-workflow gate pass. See `WORK_IN_PROGRESS.md` for the concrete next steps.
+
+## Re-verify
+
+```bash
+npm run build --workspace @ronmacrae/contracts
+npm run typecheck --workspace @ronmacrae/api && npm run test:unit --workspace @ronmacrae/api
+npm run typecheck --workspace @ronmacrae/web && npm run test:unit --workspace @ronmacrae/web && npm run build --workspace @ronmacrae/web
+cd e2e && CI=1 npx playwright test   # expect 12/12
+```

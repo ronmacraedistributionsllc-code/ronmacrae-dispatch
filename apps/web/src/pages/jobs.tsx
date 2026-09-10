@@ -4,6 +4,7 @@ import { JOB_SOURCES, JOB_STATUSES, RIDER_STAGE_LABELS, allowedTransitions } fro
 import type { JobSource, JobStatus, JobSummaryDto, RiderDto } from "@ronmacrae/contracts";
 import { ApiError, apiFetch, formatMoney } from "../lib/api.js";
 import { useAuth } from "../lib/auth.js";
+import { JobOffersPanel } from "../components/job-offers-panel.js";
 
 const STATUS_BADGE: Record<JobStatus, string> = {
   new: "bg-zinc-800 text-zinc-300",
@@ -30,12 +31,14 @@ interface RowProps {
   riders: RiderDto[];
   canWrite: boolean;
   busy: boolean;
+  offersOpen: boolean;
   onAssign: (jobId: string, riderId: string) => void;
   onUnassign: (jobId: string) => void;
   onMove: (jobId: string, to: JobStatus) => void;
+  onToggleOffers: (jobId: string) => void;
 }
 
-function JobRow({ job, riders, canWrite, busy, onAssign, onUnassign, onMove }: RowProps): React.JSX.Element {
+function JobRow({ job, riders, canWrite, busy, offersOpen, onAssign, onUnassign, onMove, onToggleOffers }: RowProps): React.JSX.Element {
   const [riderId, setRiderId] = useState(job.riderId ?? "");
   const [moveTo, setMoveTo] = useState<JobStatus | "">("");
   const assignable = job.status === "new" || job.status === "assigned";
@@ -138,6 +141,11 @@ function JobRow({ job, riders, canWrite, busy, onAssign, onUnassign, onMove }: R
             {!assignable && !unassignable && moves.length === 0 ? (
               <span className="text-xs text-zinc-600">closed</span>
             ) : null}
+            {job.status === "new" ? (
+              <button className="btn !px-3 !py-1 text-xs" disabled={busy} onClick={() => onToggleOffers(job.id)}>
+                {offersOpen ? "Hide offers" : "Offers"}
+              </button>
+            ) : null}
           </div>
         </td>
       ) : null}
@@ -149,6 +157,7 @@ export function Jobs(): React.JSX.Element {
   const { user } = useAuth();
   const qc = useQueryClient();
   const canWrite = user?.role === "admin" || user?.role === "dispatcher";
+  const [offersJobId, setOffersJobId] = useState<string | null>(null);
 
   const [status, setStatus] = useState<JobStatus | "">("");
   const [source, setSource] = useState<JobSource | "">("");
@@ -289,16 +298,26 @@ export function Jobs(): React.JSX.Element {
             </thead>
             <tbody>
               {jobs.data?.jobs.map((job) => (
-                <JobRow
-                  key={job.id}
-                  job={job}
-                  riders={riders.data?.riders ?? []}
-                  canWrite={canWrite}
-                  busy={busy}
-                  onAssign={(id, rid) => void assign.mutate({ jobId: id, riderId: rid })}
-                  onUnassign={(id) => void unassign.mutate(id)}
-                  onMove={(id, to) => void move.mutate({ jobId: id, to })}
-                />
+                <React.Fragment key={job.id}>
+                  <JobRow
+                    job={job}
+                    riders={riders.data?.riders ?? []}
+                    canWrite={canWrite}
+                    busy={busy}
+                    offersOpen={offersJobId === job.id}
+                    onAssign={(id, rid) => void assign.mutate({ jobId: id, riderId: rid })}
+                    onUnassign={(id) => void unassign.mutate(id)}
+                    onMove={(id, to) => void move.mutate({ jobId: id, to })}
+                    onToggleOffers={(id) => setOffersJobId((cur) => (cur === id ? null : id))}
+                  />
+                  {offersJobId === job.id ? (
+                    <tr className="border-t border-zinc-800" data-testid={`offers-panel-${job.id}`}>
+                      <td colSpan={canWrite ? 8 : 7} className="py-2">
+                        <JobOffersPanel jobId={job.id} jobStatus={job.status} canWrite={canWrite} />
+                      </td>
+                    </tr>
+                  ) : null}
+                </React.Fragment>
               ))}
             </tbody>
           </table>

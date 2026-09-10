@@ -249,6 +249,9 @@ export interface JobOfferDto {
   codAmount: Money | null;
   requestedAt: string | null;
   createdAt: string;
+  /** Staff-facing only (dispatcher offers list) — omitted on rider-facing routes. */
+  riderId?: string;
+  riderName?: string;
 }
 
 export interface AssignmentDto {
