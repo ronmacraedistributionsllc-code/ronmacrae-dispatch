@@ -10,9 +10,10 @@ const TABS = [
   { to: "/jobs/new", label: "New Order" },
   { to: "/map", label: "Map" },
   { to: "/zones", label: "Zones & Fares" },
+  { to: "/cod", label: "COD" },
   { to: "/notifications", label: "Notifications" },
 ];
-const STAFF_ONLY_TABS = new Set(["/jobs", "/jobs/new", "/map"]);
+const STAFF_ONLY_TABS = new Set(["/jobs", "/jobs/new", "/map", "/cod"]);
 
 const CONNECTION_LABEL: Record<ConnectionStatus, string> = {
   live: "Live",

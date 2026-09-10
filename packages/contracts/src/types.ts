@@ -1,4 +1,5 @@
 import type {
+  CodStatus,
   FailureReason,
   JobSource,
   JobStatus,
@@ -161,6 +162,20 @@ export interface JobEventDto {
   at: string;
 }
 
+/** One append-only entry in a job's COD reconciliation audit trail. */
+export interface CodEventDto {
+  id: string;
+  jobId: string;
+  from: CodStatus | null;
+  to: CodStatus;
+  actorType: "rider" | "dispatcher" | "system" | "customer" | "webhook";
+  actorId: string | null;
+  actorName: string | null;
+  note: string | null;
+  meta: Record<string, unknown> | null;
+  at: string;
+}
+
 export interface JobDto {
   id: string;
   /** human-unique job number (e.g. RM-000123) shown to staff and customers */
@@ -210,6 +225,21 @@ export interface JobDto {
     pin: string | null;
     amountExpected: Money | null;
     amountCollected: Money | null;
+    /** Full COD reconciliation ledger — internal only (never sent on the public
+     *  tracking DTO). See CodEventDto for the append-only audit trail. */
+    codStatus: CodStatus;
+    codCollectedAt: string | null;
+    codHandedInAmount: Money | null;
+    codHandoverAt: string | null;
+    /** handedIn - collected, in minor units of the job's currency; positive =
+     *  overage (handed in more than collected), negative = shortage. Null until
+     *  a handover has been recorded (nothing to compare yet). */
+    codVarianceMinor: number | null;
+    codRiderNote: string | null;
+    codAccountantNote: string | null;
+    codApprovedById: string | null;
+    codApprovedByName: string | null;
+    codApprovedAt: string | null;
     failureReason: FailureReason | null;
     failureNote: string | null;
   scheduledAt: string | null;
@@ -246,6 +276,9 @@ export interface JobSummaryDto {
   paymentMethod: string;
   paymentStatus: PaymentStatus;
   amountExpected: Money | null;
+  amountCollected: Money | null;
+  codStatus: CodStatus;
+  codHandedInAmount: Money | null;
   riderId: string | null;
   riderName: string | null;
   stage: RiderStage;

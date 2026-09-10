@@ -42,6 +42,7 @@ model User {
   payouts   Payout[]           @relation("payoutApprover")
   recon     ReconDaily[]       @relation("reconResolver")
   pushSubscriptions PushSubscription[]
+  codApprovals Job[]           @relation("codApprover")
 }
 
 /** One browser/device's opt-in Web Push subscription. A user may have several (multiple devices/browsers). */
@@ -275,6 +276,25 @@ model Job {
   pin              String?
   amountExpected   Int?
   amountCollected  Int?
+  /** When `amountCollected` was last recorded — the ledger's "collection timestamp". */
+  codCollectedAt     DateTime?
+  /** Full COD reconciliation status — independent of `paymentStatus` (which only
+   *  tracks whether enough was collected). Only meaningful for `paymentMethod: cod`
+   *  jobs; stays at its default for everything else. */
+  codStatus          CodStatus @default(pending_collection)
+  /** Cash the rider has handed in to the office for this job — separate from
+   *  `amountCollected` (what they took from the customer) so a shortage/overage
+   *  between the two can be shown, not silently assumed equal. */
+  codHandedInAmount  Int?
+  codHandoverAt      DateTime?
+  /** Rider's own note on the collection/handover (e.g. "customer paid exact,
+   *  no change needed"). Accountant's note is separate — neither overwrites
+   *  the other, and both are preserved even after approval. */
+  codRiderNote       String?
+  codAccountantNote  String?
+  codApprovedById    String?
+  codApprover        User?     @relation("codApprover", fields: [codApprovedById], references: [id], onDelete: SetNull)
+  codApprovedAt      DateTime?
   failureReason    FailureReason?
   failureNote      String?
   riderId          String?
@@ -295,6 +315,39 @@ model Job {
   offers    JobOffer[]
   stops     RouteStop[]
   payoutLines PayoutLine[]
+  codEvents CodEvent[]
+}
+
+enum CodStatus {
+  pending_collection
+  collected
+  handed_in
+  disputed
+  approved
+}
+
+/**
+ * Append-only audit trail for a job's COD reconciliation — every rider
+ * collection/handover and every accountant approve/dispute becomes one row
+ * here, in addition to updating the current state on Job itself. Rows are
+ * never edited or deleted, so "approved entries can't be silently
+ * overwritten" always has a paper trail even if the current fields on Job
+ * are later changed by a legitimate re-open (e.g. approved -> disputed).
+ */
+model CodEvent {
+  id        String     @id @default(cuid())
+  jobId     String
+  job       Job        @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  from      CodStatus?
+  to        CodStatus
+  actorType String
+  actorId   String?
+  actorName String?
+  note      String?
+  meta      Json?
+  at        DateTime   @default(now())
+
+  @@index([jobId, at])
 }
 
 enum OfferStatus {

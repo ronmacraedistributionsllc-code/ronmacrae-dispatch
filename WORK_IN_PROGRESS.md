@@ -549,7 +549,7 @@ tracked here as Stages 8+ (Stages 1-7 above are the prior work, already shipped)
 | 9 | Rider availability toggle + configurable multi-job capacity | DONE |
 | 10 | Diagnose and repair rider notifications (offer/assign alerts, connection state) | DONE |
 | 11 | Remove extra test riders safely (backup first; keep Kei Bearer only) | DONE |
-| 12 | 5A — COD reconciliation ledger | NOT STARTED |
+| 12 | 5A — COD reconciliation ledger | DONE |
 | 13 | 5B — Rider route queue | NOT STARTED |
 | 14 | 5C — Dispatcher operations board | NOT STARTED |
 | 15 | 5D — Customer status message templates + notification log | NOT STARTED |
@@ -909,3 +909,97 @@ two e2e specs re-run clean after the cleanup.
 older `dev.db.bak-*` files already sitting in `apps/api/data/` from earlier
 stages — they're harmless (gitignored, disk space only) and might still be
 wanted as rollback points; only added this stage's own backup alongside them.
+
+## Stage 12 — 5A: COD reconciliation ledger (DONE)
+
+**What existed already**: `Job.amountExpected`/`amountCollected` and a
+`POST /api/jobs/:id/collect` endpoint (`recordCollection()`, `payment.ts`) —
+but that endpoint was never actually called from the frontend (grepped the
+whole web app — zero references), so in practice there was no way to record a
+COD collection at all before this stage, staff or rider. There's also an
+existing `ReconDaily` model (per-rider, per-day aggregate with a `ReconStatus`
+enum) — inspected it, decided it does not fit: this stage's spec wants a
+per-job ledger with per-job fields (handover timestamp, rider notes) and the
+exact status enum "Pending collection/Collected/Handed in/Disputed/Approved",
+which doesn't map onto that daily aggregate. `ReconDaily` was left untouched.
+
+**Schema** (backed up `dev.db` first as `dev.db.bak-cod-20260910-174615`,
+clean additive push): added `codStatus`, `codCollectedAt`,
+`codHandedInAmount`, `codHandoverAt`, `codRiderNote`, `codAccountantNote`,
+`codApprovedById`/`codApprovedAt` directly on `Job` (reusing the existing
+`amountExpected`/`amountCollected` rather than duplicating them), plus a new
+append-only `CodEvent` model (jobId, from/to `CodStatus`, actor, note, meta,
+at) for the audit trail — never edited or deleted, so even a later dispute
+that reopens an approved entry leaves the original approval visible in the
+trail.
+
+**Backend** (`apps/api/src/modules/cod.ts`, new; `payment.ts`'s
+`recordCollection()` extended):
+- `POST /api/jobs/:id/collect` (existing endpoint, now wired to actually do
+  something useful) — rider or admin/dispatcher (late reconciliation) records
+  what was collected; on the first recording for a `cod` job this also flips
+  `codStatus` to `collected` and stamps `codCollectedAt`. Also fixed a real
+  permission gap found while extending it: it previously accepted ANY
+  authenticated staff role (accountant, viewer) with no restriction at all —
+  now restricted to rider (own job) or admin/dispatcher, matching the spec's
+  role split.
+- `POST /api/jobs/:id/cod/hand-in` — same permission rule; requires
+  `collected` or later; records the handed-in amount + timestamp, moves to
+  `handed_in`.
+- `POST /api/jobs/:id/cod/approve` / `.../dispute` — admin/accountant only.
+  Approve requires something already collected; dispute requires a non-empty
+  note. Once `approved`, `collect`/`hand-in`/re-`approve` all return 409
+  ("ask an accountant to dispute it first") — approved entries are locked
+  against silent edits, though a deliberate accountant dispute can still
+  reopen one (itself audited).
+- `GET /api/cod` — dispatcher/accountant/admin/viewer board: every `cod` job,
+  filterable by `codStatus`.
+- `GET /api/jobs/:id/cod/events` — the audit trail for one job (rider can see
+  their own job's; staff can see any).
+- Shortage/overage (`codVarianceMinor` = handedIn − collected) is a computed
+  DTO field, never stored, so it's always consistent with the two source
+  amounts.
+- Confirmed (and tested) the public customer tracking DTO
+  (`TrackingPublicDto`, hand-built in `tracking.ts`, never reuses `jobToDto`)
+  carries none of this — customers cannot see internal reconciliation by
+  construction, not by a filter that could be forgotten later.
+
+**Frontend**:
+- `rider-dashboard.tsx`: a `CodPanel` on any `cod` job's card — status badge,
+  expected/collected/handed-in shown as three distinct figures (never
+  conflated with the "Delivery fee" or "Order value" fields already on the
+  card, and rider earnings — a different figure entirely, shown on the offer
+  card pre-acceptance — is never mixed in here), "Record collected"/"Record
+  handed in" actions that disable once approved, a plain-language shortage/
+  overage line, and the accountant's note if one exists.
+- New page `apps/web/src/pages/cod.tsx` ("COD reconciliation", new `/cod`
+  nav tab, staff-only): a filterable board of every COD job — status,
+  expected/collected/handed-in/variance, an Approve/Dispute action pair
+  visible only to admin/accountant (dispatcher/viewer see the same data
+  read-only, matching "dispatcher/owner monitor; accountant/owner approve/
+  dispute").
+
+**Tests**:
+- `apps/api/test/cod.test.ts` (10 new) — full collect→hand-in→approve
+  lifecycle with variance calculation (shortage/exact/overage), every role's
+  permission boundary (accountant/viewer can't record, rider can't approve/
+  dispute, dispatcher can record on a rider's behalf, a rider can't touch
+  another rider's job), approved-entries-are-locked (and the dispute-reopens-
+  it exception), dispute requiring a note, and the audit trail's order.
+  Includes a direct assertion that the public tracking response contains
+  none of the `cod*` field names or rider note text at all.
+- `e2e/specs/cod.spec.ts` (new) — real browser flow: rider records a
+  collection and a short handover via the API, dispatcher views it on the
+  board (monitor-only, no action buttons), signs out, accountant logs in,
+  approves it from the UI, and the entry disappears from the "awaiting
+  approval" filter and reappears correctly under "Approved" — plus a final
+  API check that it's now locked.
+
+**Verification run**: `npm run typecheck --workspaces` clean; `apps/api`
+vitest 72/72 (62 prior + 10 new); `apps/web` vitest 8/8; clean web build; full
+e2e suite (19 tests, incl. the new spec) 19/19 serially.
+
+**Not done in this stage** (explicitly out of scope, tracked for later): no
+CSV export or reporting rollup of COD data yet — that's Stage 16 (5E,
+operating reports). No dispatcher-board consolidation of "COD awaiting
+handover" alongside rider load/location — that's Stage 14 (5C).

@@ -1131,11 +1131,65 @@ sqlite3 apps/api/data/dev.db "SELECT COUNT(*) FROM Rider;"   # expect 1
 sqlite3 apps/api/data/dev.db "SELECT name, phone FROM Rider;" # expect Kei Bearer, +8765550001
 ```
 
-## Next: Stage 12 (5A)
+---
 
-COD reconciliation ledger — new data model (expected/collected amounts,
-collection/handover timestamps, shortage/overage, status enum, approver +
-timestamp), role-gated mutation endpoints (rider records, dispatcher/owner
-monitor, accountant/owner approve/dispute), audit history, UI surfaces per
-role. See `WORK_IN_PROGRESS.md`'s Stage plan table for the full remaining
-Stage 12–18 sequence.
+# Stage 12 — 5A: COD reconciliation ledger (pre-production hardening, 2026-09-10)
+
+Full detail in `WORK_IN_PROGRESS.md` under "Stage 12 — 5A: COD reconciliation
+ledger (DONE)". Summary for resuming agents:
+
+**Found**: `POST /api/jobs/:id/collect` already existed but was never called
+from the frontend — no working COD recording UI existed at all before this
+stage. Also found and fixed a real permission gap while extending it: it
+previously let ANY authenticated staff role (including accountant/viewer)
+record a collection, with no restriction.
+
+**Schema** (backed up first as `dev.db.bak-cod-20260910-174615`): added
+`codStatus`/`codCollectedAt`/`codHandedInAmount`/`codHandoverAt`/
+`codRiderNote`/`codAccountantNote`/`codApprovedById`/`codApprovedAt` to `Job`
+(reusing existing `amountExpected`/`amountCollected`), plus a new append-only
+`CodEvent` audit-trail model. `ReconDaily` (an existing per-rider-per-day
+aggregate) was inspected and deliberately left alone — doesn't fit a per-job
+ledger with this exact status vocabulary.
+
+**Backend**: new `apps/api/src/modules/cod.ts` (`GET /api/cod` board,
+`POST /api/jobs/:id/cod/hand-in|approve|dispute`, `GET .../cod/events`);
+extended `recordCollection()` in `payment.ts` to drive `codStatus` too and
+fixed its permission gap (rider-own-job or admin/dispatcher only). Approved
+entries are locked against further rider edits (409); a deliberate accountant
+dispute can still reopen one, itself audited. Shortage/overage is a computed
+DTO field, never stored. Confirmed the public tracking DTO
+(`TrackingPublicDto`, hand-built, doesn't reuse `jobToDto`) carries none of
+this.
+
+**Frontend**: `CodPanel` on the rider dashboard's job cards (collect/hand-in
+actions, status badge, three clearly separate figures); new `/cod` page
+(staff-only nav tab) — filterable board, approve/dispute for admin/accountant,
+read-only monitor view for dispatcher/viewer.
+
+## Commands run and results (Stage 12)
+
+| # | Command | Result |
+| --- | --- | --- |
+| 1 | `npm run typecheck --workspaces` (root) | **PASS** — 0 errors |
+| 2 | `npx vitest run` (apps/api) | **PASS** — 72/72 (62 prior + 10 new) |
+| 3 | `npx vitest run` / `npm run build` (apps/web) | **PASS** — 8/8, clean build |
+| 4 | Full e2e suite (19 tests, incl. new `cod.spec.ts`), serial | **PASS** — 19/19 |
+
+## Re-verify (Stage 12)
+
+```bash
+npm run typecheck --workspaces
+npm run test --workspace @ronmacrae/api
+npm run test --workspace @ronmacrae/web
+cd e2e && npx playwright test --workers=1
+```
+
+## Next: Stage 13 (5B)
+
+Rider route queue — mobile-friendly, reorderable queue of a rider's active
+jobs; clear pickup/destination stops; urgent deliveries prominent; "Open in
+Maps" per stop (device's own nav app, honest about straight-line vs.
+traffic-aware distance); dispatcher can view a rider's queue; no silent
+auto-reordering. See `WORK_IN_PROGRESS.md`'s Stage plan table for the full
+remaining Stage 13–18 sequence.

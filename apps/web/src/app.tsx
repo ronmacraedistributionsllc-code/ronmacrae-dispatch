@@ -5,6 +5,7 @@ import { AuthProvider, useAuth } from "./lib/auth.js";
 import { RealtimeProvider } from "./lib/realtime.js";
 import { Layout } from "./components/layout.js";
 import { Book } from "./pages/book.js";
+import { CodReconciliation } from "./pages/cod.js";
 import { Dashboard } from "./pages/dashboard.js";
 import { Jobs } from "./pages/jobs.js";
 import { Login } from "./pages/login.js";
@@ -85,6 +86,14 @@ export default function App(): React.JSX.Element {
                 element={
                   <Protected>
                     <Notifications />
+                  </Protected>
+                }
+              />
+              <Route
+                path="/cod"
+                element={
+                  <Protected>
+                    <CodReconciliation />
                   </Protected>
                 }
               />

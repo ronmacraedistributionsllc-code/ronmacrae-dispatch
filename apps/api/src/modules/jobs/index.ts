@@ -60,6 +60,7 @@ export {
   jobSummaryToDto,
   proofToDto,
   eventToDto,
+  codEventToDto,
   assignmentToDto,
   linkToDto,
   actorType,

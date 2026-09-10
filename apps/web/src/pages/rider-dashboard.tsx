@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { JobDto, JobOfferDto, JobStatus, RiderStatus } from "@ronmacrae/contracts";
 import { ACTIVE_JOB_STATUSES, API } from "@ronmacrae/contracts";
+import { majorOf } from "@ronmacrae/money";
 import { ApiError, apiFetch, formatMoney } from "../lib/api.js";
 import { useAuth } from "../lib/auth.js";
 import { useRealtime } from "../lib/realtime.js";
@@ -203,6 +204,7 @@ function RiderJobCard({ job, onChanged }: { job: JobDto; onChanged: () => void }
     <div className="flex items-start justify-between gap-3"><div><h2 className="font-semibold">{job.jobNumber ?? job.id.slice(0, 8)}</h2><p className="text-xs text-zinc-400">{job.status.replaceAll("_", " ")} · {job.stage.replaceAll("_", " ")}</p></div><span className={`rounded px-2 py-1 text-xs font-medium ${urgent ? "bg-red-900/70 uppercase tracking-wide text-red-200" : "bg-zinc-800 text-zinc-200"}`}>{urgent ? "Urgent" : job.priority}</span></div>
     <dl className="grid gap-x-4 gap-y-2 text-sm sm:grid-cols-2">{fields.map(([label, value]) => <div key={label}><dt className="label !mb-0">{label}</dt><dd className="break-words text-zinc-200">{value}</dd></div>)}</dl>
     {job.pin ? <p className="rounded-lg bg-amber-900/30 p-3 text-sm text-amber-200">Delivery PIN: <strong className="tracking-widest">{job.pin}</strong></p> : null}
+    {job.paymentMethod === "cod" ? <CodPanel job={job} onChanged={onChanged} /> : null}
     {action ? <div className="space-y-2 rounded-lg border border-zinc-700 p-3"><p className="text-sm font-medium">{action.label}</p><label className="label" htmlFor={`note-${job.id}`}>Proof / action notes</label><textarea id={`note-${job.id}`} className="input min-h-20" value={note} onChange={(e) => setNote(e.target.value)} placeholder="Optional delivery proof or action note" />
       {action.needsPin ? <><label className="label" htmlFor={`pin-${job.id}`}>Delivery PIN</label><input id={`pin-${job.id}`} className="input" inputMode="numeric" value={pin} onChange={(e) => setPin(e.target.value)} /></> : null}
       {action.location ? <><label className="label" htmlFor={`address-${job.id}`}>New destination</label><input id={`address-${job.id}`} className="input" value={addressText} onChange={(e) => setAddressText(e.target.value)} /><label className="label" htmlFor={`landmark-${job.id}`}>New landmark</label><input id={`landmark-${job.id}`} className="input" value={landmark} onChange={(e) => setLandmark(e.target.value)} /></> : null}
@@ -210,4 +212,95 @@ function RiderJobCard({ job, onChanged }: { job: JobDto; onChanged: () => void }
       <div className="flex gap-2"><button className="btn-accent" disabled={mutation.isPending || (action.needsPin && pin === "")} onClick={() => void mutation.mutate(action)}>{mutation.isPending ? "Saving…" : "Confirm"}</button><button className="btn" disabled={mutation.isPending} onClick={() => setAction(null)}>Cancel</button></div>
     </div> : <div className="flex flex-wrap gap-2">{actionsFor(job).map((next) => <button key={next.label} className="btn" onClick={() => setAction(next)}>{next.label}</button>)}</div>}
   </section>;
+}
+
+const COD_STATUS_LABEL: Record<string, string> = {
+  pending_collection: "Pending collection",
+  collected: "Collected",
+  handed_in: "Handed in",
+  disputed: "Disputed",
+  approved: "Approved",
+};
+const COD_STATUS_BADGE: Record<string, string> = {
+  pending_collection: "bg-zinc-800 text-zinc-300",
+  collected: "bg-sky-900/50 text-sky-300",
+  handed_in: "bg-amber-900/40 text-amber-300",
+  disputed: "bg-red-900/60 text-red-200",
+  approved: "bg-emerald-900/50 text-emerald-300",
+};
+
+/**
+ * COD reconciliation actions for one job's card — kept deliberately separate
+ * from the "Order value" / "Delivery fee" fields above it (this is only the
+ * cash-in-hand side of the job: what was collected from the customer, and
+ * what's been handed over to the office; it is never the rider's own
+ * earnings, which is a different figure entirely, shown on the offer card
+ * before acceptance).
+ */
+function CodPanel({ job, onChanged }: { job: JobDto; onChanged: () => void }): React.JSX.Element {
+  const [collectOpen, setCollectOpen] = useState(false);
+  const [collectAmount, setCollectAmount] = useState(() => String(job.amountExpected ? majorOf(job.amountExpected) : ""));
+  const [handInOpen, setHandInOpen] = useState(false);
+  const [handInAmount, setHandInAmount] = useState(() => String(job.amountCollected ? majorOf(job.amountCollected) : ""));
+
+  const collect = useMutation({
+    mutationFn: () => apiFetch(API.jobs.collect(job.id), { method: "POST", body: JSON.stringify({ amountCollected: Number(collectAmount) }) }),
+    onSuccess: () => { setCollectOpen(false); onChanged(); },
+  });
+  const handIn = useMutation({
+    mutationFn: () => apiFetch(API.cod.handIn(job.id), { method: "POST", body: JSON.stringify({ amountHandedIn: Number(handInAmount) }) }),
+    onSuccess: () => { setHandInOpen(false); onChanged(); },
+  });
+
+  const locked = job.codStatus === "approved";
+  const canCollect = !locked && job.codStatus !== "handed_in" && job.codStatus !== "disputed";
+  const canHandIn = !locked && (job.codStatus === "collected" || job.codStatus === "handed_in");
+
+  return (
+    <div className="space-y-2 rounded-lg border border-zinc-700 bg-zinc-900/40 p-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="text-sm font-medium text-zinc-200">COD reconciliation</p>
+        <span className={`rounded px-2 py-0.5 text-xs font-medium ${COD_STATUS_BADGE[job.codStatus]}`}>{COD_STATUS_LABEL[job.codStatus]}</span>
+      </div>
+      <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm sm:grid-cols-3">
+        <div><dt className="label !mb-0">Expected</dt><dd className="text-zinc-200">{formatMoney(job.amountExpected)}</dd></div>
+        <div><dt className="label !mb-0">Collected</dt><dd className="text-zinc-200">{formatMoney(job.amountCollected)}</dd></div>
+        <div><dt className="label !mb-0">Handed in</dt><dd className="text-zinc-200">{formatMoney(job.codHandedInAmount)}</dd></div>
+      </dl>
+      {job.codVarianceMinor != null && job.codVarianceMinor !== 0 ? (
+        <p className={`text-xs ${job.codVarianceMinor < 0 ? "text-red-400" : "text-amber-300"}`}>
+          {job.codVarianceMinor < 0 ? "Shortage" : "Overage"}: {formatMoney({ amount: Math.abs(job.codVarianceMinor), currency: job.amountExpected?.currency ?? "JMD" })}
+        </p>
+      ) : null}
+      {job.codAccountantNote ? <p className="text-xs text-zinc-400">Accountant note: {job.codAccountantNote}</p> : null}
+      {locked ? (
+        <p className="text-xs text-zinc-500">Approved — locked. Contact an accountant if this needs correcting.</p>
+      ) : (
+        <div className="flex flex-wrap gap-2">
+          {canCollect ? <button className="btn !px-3 !py-1 text-xs" onClick={() => setCollectOpen((v) => !v)}>Record collected</button> : null}
+          {canHandIn ? <button className="btn !px-3 !py-1 text-xs" onClick={() => setHandInOpen((v) => !v)}>Record handed in</button> : null}
+        </div>
+      )}
+      {collectOpen ? (
+        <div className="flex flex-wrap items-end gap-2 rounded border border-zinc-700 p-2">
+          <div>
+            <label className="label" htmlFor={`collect-${job.id}`}>Amount collected from customer</label>
+            <input id={`collect-${job.id}`} className="input w-32" type="number" min={0} step="any" value={collectAmount} onChange={(e) => setCollectAmount(e.target.value)} />
+          </div>
+          <button className="btn-accent !px-3 !py-1 text-xs" disabled={collect.isPending} onClick={() => void collect.mutate()}>{collect.isPending ? "Saving…" : "Save"}</button>
+          {collect.error ? <p className="w-full text-xs text-red-400">{collect.error instanceof ApiError ? collect.error.message : "Could not record collection"}</p> : null}
+        </div>
+      ) : null}
+      {handInOpen ? (
+        <div className="flex flex-wrap items-end gap-2 rounded border border-zinc-700 p-2">
+          <div>
+            <label className="label" htmlFor={`handin-${job.id}`}>Amount handed in to the office</label>
+            <input id={`handin-${job.id}`} className="input w-32" type="number" min={0} step="any" value={handInAmount} onChange={(e) => setHandInAmount(e.target.value)} />
+          </div>
+          <button className="btn-accent !px-3 !py-1 text-xs" disabled={handIn.isPending} onClick={() => void handIn.mutate()}>{handIn.isPending ? "Saving…" : "Save"}</button>
+          {handIn.error ? <p className="w-full text-xs text-red-400">{handIn.error instanceof ApiError ? handIn.error.message : "Could not record handover"}</p> : null}
+        </div>
+      ) : null}
+    </div>
+  );
 }

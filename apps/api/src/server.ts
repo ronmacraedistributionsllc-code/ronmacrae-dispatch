@@ -23,6 +23,7 @@ import { offerRoutes } from "./modules/offers.js";
 import { pushRoutes } from "./modules/push.js";
 import { geoRoutes } from "./modules/geo.js";
 import { jobRoutes } from "./modules/jobs/index.js";
+import { codRoutes } from "./modules/cod.js";
 import { deliveryRequestRoutes } from "./modules/delivery.js";
 import { trackingRoutes } from "./modules/tracking.js";
 import { settingsRoutes } from "./modules/settings.js";
@@ -92,6 +93,7 @@ export async function createApp(ctx: AppCtx): Promise<FastifyInstance> {
   await pushRoutes(app, ctx);
   await geoRoutes(app, ctx);
   await jobRoutes(app, ctx);
+  await codRoutes(app, ctx);
   await deliveryRequestRoutes(app, ctx);
   await trackingRoutes(app, ctx);
   await settingsRoutes(app, ctx);

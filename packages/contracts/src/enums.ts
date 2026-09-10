@@ -45,6 +45,16 @@ export const PAYMENT_STATUSES = ["unpaid", "partial", "paid"] as const;
 export type PaymentStatus = (typeof PAYMENT_STATUSES)[number];
 
 /**
+ * Full COD reconciliation lifecycle for one job — independent of
+ * `PaymentStatus` (which only tracks whether *enough* was collected).
+ * pending_collection -> collected -> handed_in -> approved, with `disputed`
+ * reachable from collected/handed_in (and from approved, as a deliberate
+ * accountant re-open) instead of approved.
+ */
+export const COD_STATUSES = ["pending_collection", "collected", "handed_in", "disputed", "approved"] as const;
+export type CodStatus = (typeof COD_STATUSES)[number];
+
+/**
  * Where a delivery order came from. Knutsford / Zipmail / courier are the
  * store's own channels; `manual` is staff-keyed, `web` is the public
  * delivery-request form, `woo` is the online store sync.

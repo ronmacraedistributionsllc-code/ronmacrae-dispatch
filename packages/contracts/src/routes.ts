@@ -25,6 +25,22 @@ export const API = {
     assign: (id: string) => `/api/jobs/${id}/assignments`,
     cancel: (id: string) => `/api/jobs/${id}/cancel`,
     return: (id: string) => `/api/jobs/${id}/return`,
+    /** rider/staff records cash collected from the customer */
+    collect: (id: string) => `/api/jobs/${id}/collect`,
+  },
+
+  /** COD reconciliation ledger (Stage 12 / spec item 5A) */
+  cod: {
+    /** dispatcher/accountant/owner board: all cod jobs, filterable by status */
+    list: "/api/cod",
+    /** rider/staff records cash handed in to the office for one job */
+    handIn: (jobId: string) => `/api/jobs/${jobId}/cod/hand-in`,
+    /** accountant/owner sign-off */
+    approve: (jobId: string) => `/api/jobs/${jobId}/cod/approve`,
+    /** accountant/owner flags a discrepancy */
+    dispute: (jobId: string) => `/api/jobs/${jobId}/cod/dispute`,
+    /** append-only audit trail for one job's reconciliation */
+    events: (jobId: string) => `/api/jobs/${jobId}/cod/events`,
   },
 
   riders: {

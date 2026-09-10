@@ -1,6 +1,8 @@
 import type { Prisma } from "@prisma/client";
 import type {
   AssignmentDto,
+  CodEventDto,
+  CodStatus,
   JobDto,
   JobEventDto,
   JobSource,
@@ -22,6 +24,7 @@ export const jobInclude = {
   assignments: true,
   proofs: true,
   link: true,
+  codApprover: true,
 } as const;
 
 /** viewer context for field-level visibility (PIN etc.) */
@@ -102,6 +105,16 @@ export function jobToDto(
     pin: pinVisibleFor(viewer, job) ? job.pin : null,
     amountExpected: moneyField(job.amountExpected, cur),
     amountCollected: moneyField(job.amountCollected, cur),
+    codStatus: job.codStatus as CodStatus,
+    codCollectedAt: job.codCollectedAt?.toISOString() ?? null,
+    codHandedInAmount: moneyField(job.codHandedInAmount, cur),
+    codHandoverAt: job.codHandoverAt?.toISOString() ?? null,
+    codVarianceMinor: job.codHandedInAmount != null ? job.codHandedInAmount - (job.amountCollected ?? 0) : null,
+    codRiderNote: job.codRiderNote,
+    codAccountantNote: job.codAccountantNote,
+    codApprovedById: job.codApprovedById,
+    codApprovedByName: job.codApprover?.name ?? null,
+    codApprovedAt: job.codApprovedAt?.toISOString() ?? null,
     failureReason: job.failureReason,
     failureNote: job.failureNote,
     scheduledAt: job.scheduledAt?.toISOString() ?? null,
@@ -139,6 +152,9 @@ export function jobSummaryToDto(job: JobRow): JobSummaryDto {
     paymentMethod: job.paymentMethod,
     paymentStatus: job.paymentStatus,
     amountExpected: moneyField(job.amountExpected, cur),
+    amountCollected: moneyField(job.amountCollected, cur),
+    codStatus: job.codStatus as CodStatus,
+    codHandedInAmount: moneyField(job.codHandedInAmount, cur),
     riderId: job.rider?.id ?? null,
     riderName: job.rider?.name ?? null,
     stage: job.stage,
@@ -186,6 +202,32 @@ export function eventToDto(e: {
     from: (e.from as JobStatus | null) ?? null,
     to: e.to as JobStatus,
     actorType: e.actorType as JobEventDto["actorType"],
+    actorId: e.actorId,
+    actorName: e.actorName,
+    note: e.note,
+    meta: (e.meta as Record<string, unknown> | null) ?? null,
+    at: e.at.toISOString(),
+  };
+}
+
+export function codEventToDto(e: {
+  id: string;
+  jobId: string;
+  from: string | null;
+  to: string;
+  actorType: string;
+  actorId: string | null;
+  actorName: string | null;
+  note: string | null;
+  meta: unknown;
+  at: Date;
+}): CodEventDto {
+  return {
+    id: e.id,
+    jobId: e.jobId,
+    from: (e.from as CodStatus | null) ?? null,
+    to: e.to as CodStatus,
+    actorType: e.actorType as CodEventDto["actorType"],
     actorId: e.actorId,
     actorName: e.actorName,
     note: e.note,

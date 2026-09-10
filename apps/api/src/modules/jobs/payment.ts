@@ -80,11 +80,24 @@ export async function recordCollection(
   if (actor.role === "rider" && row.riderId !== actor.riderId) {
     throw httpErrors.createError(403, "You can only record collections for your own jobs");
   }
+  // Collecting/handing in is the rider's job (or, for late reconciliation,
+  // dispatch/admin acting on their behalf) — never the accountant/viewer, who
+  // monitor and approve/dispute what's already recorded, not record it themselves.
+  if (actor.role !== "rider" && !["admin", "dispatcher"].includes(actor.role)) {
+    throw httpErrors.createError(403, "Insufficient permissions to record a COD collection");
+  }
+  // Once the accountant has signed off, the collected amount is locked — a
+  // correction goes through a dispute, not a silent overwrite here.
+  if (row.codStatus === "approved") {
+    throw httpErrors.createError(409, "This entry is already approved and cannot be changed — ask an accountant to dispute it first if it needs correcting");
+  }
 
   const reported = input.amountCollected ?? null;
   const cash = resolveCollection(row, reported);
   const reportedMajor =
     reported != null ? reported : majorOf(money(row.amountCollected ?? 0, row.currency));
+  const fromCodStatus = row.codStatus;
+  const toCodStatus = row.paymentMethod === "cod" && fromCodStatus === "pending_collection" ? "collected" : fromCodStatus;
 
   const updated = await ctx.prisma.$transaction(async (tx) => {
     const job = await tx.job.update({
@@ -93,6 +106,8 @@ export async function recordCollection(
       data: {
         amountCollected: cash.amountCollected,
         paymentStatus: cash.paymentStatus,
+        ...(toCodStatus !== fromCodStatus ? { codStatus: toCodStatus, codCollectedAt: new Date() } : row.codCollectedAt == null && row.paymentMethod === "cod" ? { codCollectedAt: new Date() } : {}),
+        ...(input.note ? { codRiderNote: input.note } : {}),
       },
     });
     await tx.jobEvent.create({
@@ -107,6 +122,20 @@ export async function recordCollection(
         meta: { amountCollectedMajor: reportedMajor, currency: row.currency } as object,
       },
     });
+    if (row.paymentMethod === "cod" && toCodStatus !== fromCodStatus) {
+      await tx.codEvent.create({
+        data: {
+          jobId,
+          from: fromCodStatus,
+          to: toCodStatus,
+          actorType: actorType(actor.role),
+          actorId: actor.id,
+          actorName: actor.name,
+          note: input.note ?? null,
+          meta: { amountCollectedMajor: reportedMajor, currency: row.currency } as object,
+        },
+      });
+    }
     return job;
   });
 
