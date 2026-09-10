@@ -1185,11 +1185,58 @@ npm run test --workspace @ronmacrae/web
 cd e2e && npx playwright test --workers=1
 ```
 
-## Next: Stage 13 (5B)
+---
 
-Rider route queue — mobile-friendly, reorderable queue of a rider's active
-jobs; clear pickup/destination stops; urgent deliveries prominent; "Open in
-Maps" per stop (device's own nav app, honest about straight-line vs.
-traffic-aware distance); dispatcher can view a rider's queue; no silent
-auto-reordering. See `WORK_IN_PROGRESS.md`'s Stage plan table for the full
-remaining Stage 13–18 sequence.
+# Stage 13 — 5B: Rider route queue (pre-production hardening, 2026-09-10)
+
+Full detail in `WORK_IN_PROGRESS.md` under "Stage 13 — 5B: Rider route queue
+(DONE)". Summary for resuming agents:
+
+**Found**: `Job.routeSeq` already existed in the schema and DTO but nothing
+ever wrote to it — no schema change needed. A separate, unrelated `Route`/
+`RouteStop`/`optimize` scaffold exists for a future real routing engine;
+inspected and deliberately left alone (wrong fit for this stage's "honest,
+no ETA claims" requirement).
+
+**Backend**: one new endpoint, `POST /api/bearer/jobs/reorder` (rider-only,
+all-or-nothing — submitted id set must exactly match the rider's current
+active jobs or the whole call is rejected). Expanded `JobSummaryDto` with
+`point`/`pickupAddressText`/`pickupPoint`/`routeSeq` so the dispatcher's
+read-only queue view doesn't need a heavier per-job fetch.
+
+**Frontend**: new shared `apps/web/src/components/route-queue.tsx`
+(`RouteQueue` + helpers) — a compact ↑/↓-reorderable queue section on the
+rider dashboard (next stop, address, COD amount, requested date, urgent
+badge, "Open in Maps" link to the device's own nav app) and a read-only
+`RiderQueuePanel` on the dispatcher's Jobs screen (new "Route queue" button
+per assigned job row). Default order (before any manual reorder): routeSeq →
+requested date → job-creation order (FIFO) — deterministic client-side.
+
+## Commands run and results (Stage 13)
+
+| # | Command | Result |
+| --- | --- | --- |
+| 1 | `npm run typecheck --workspaces` (root) | **PASS** — 0 errors |
+| 2 | `npx vitest run` (apps/api) | **PASS** — 77/77 (72 prior + 5 new) |
+| 3 | `npx vitest run` / `npm run build` (apps/web) | **PASS** — 8/8, clean build |
+| 4 | Full e2e suite (20 tests, incl. new `route-queue.spec.ts`), serial | **PASS** — 20/20 |
+
+## Re-verify (Stage 13)
+
+```bash
+npm run typecheck --workspaces
+npm run test --workspace @ronmacrae/api
+npm run test --workspace @ronmacrae/web
+cd e2e && npx playwright test --workers=1
+```
+
+## Next: Stage 14 (5C)
+
+Dispatcher operations board — one screen: available/unavailable riders,
+active-job count, configured capacity + remaining, connection state
+(Live/Reconnecting/Offline), latest location + accuracy + freshness/stale
+warning, active jobs, waiting offers, urgent/overdue jobs, COD awaiting
+handover, quick actions (assign/broadcast/contact rider/inspect route
+queue — the last of which Stage 13 already built). See
+`WORK_IN_PROGRESS.md`'s Stage plan table for the full remaining Stage
+14–18 sequence.

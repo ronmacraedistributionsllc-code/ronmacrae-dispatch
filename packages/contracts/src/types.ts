@@ -268,6 +268,9 @@ export interface JobSummaryDto {
   customerName: string;
   customerPhone: string;
   addressText: string | null;
+  point: GeoPoint | null;
+  pickupAddressText: string | null;
+  pickupPoint: GeoPoint | null;
   zoneName: string | null;
   itemSummary: string | null;
   quantity: number | null;
@@ -282,6 +285,7 @@ export interface JobSummaryDto {
   riderId: string | null;
   riderName: string | null;
   stage: RiderStage;
+  routeSeq: number | null;
   scheduledAt: string | null;
   completedAt: string | null;
   createdAt: string;

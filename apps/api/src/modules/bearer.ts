@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { httpErrors } from "@fastify/sensible";
 import type { AppCtx } from "../ctx.js";
+import { ACTIVE_JOB_STATUSES } from "@ronmacrae/contracts";
 import { jobToDto, listJobs, recordRiderStage, transitionJob, TransitionBody, type Actor, type Viewer } from "./jobs/index.js";
 
 function actorFor(req: FastifyRequest): Actor {
@@ -52,5 +53,29 @@ export async function bearerRoutes(app: FastifyInstance, ctx: AppCtx): Promise<v
     const job = await recordRiderStage(ctx, req.params.id, body.stage, { note: body.note || null }, actor, viewerFor(req));
     await ctx.audit.record(actor, `job.stage.${body.stage}`, "job", job.id);
     return { job };
+  });
+
+  /**
+   * Rider sets their own intended work order for their currently active jobs
+   * (spec 5B — route queue). This is an explicit, all-at-once reordering, not
+   * a partial patch: the submitted id list must be exactly the rider's
+   * current active-job set (same jobs, any order) — never adds, removes, or
+   * silently drops one, and the app never reorders this on its own.
+   */
+  app.post("/api/bearer/jobs/reorder", { preHandler: ctx.requireRider }, async (req) => {
+    const body = z.object({ jobIds: z.array(z.string().min(1)).min(1).max(50) }).parse(req.body);
+    const riderId = req.user!.riderId!;
+    const active = await ctx.prisma.job.findMany({ where: { riderId, status: { in: [...ACTIVE_JOB_STATUSES] } }, select: { id: true } });
+    const activeIds = new Set(active.map((j) => j.id));
+    const submitted = new Set(body.jobIds);
+    if (activeIds.size !== submitted.size || [...activeIds].some((id) => !submitted.has(id))) {
+      throw httpErrors.createError(409, "The submitted job list doesn't match your current active jobs — reload and try again");
+    }
+    await ctx.prisma.$transaction(
+      body.jobIds.map((jobId, i) => ctx.prisma.job.update({ where: { id: jobId, riderId }, data: { routeSeq: i } })),
+    );
+    await ctx.audit.record(actorFor(req), "job.route_reorder", "rider", riderId, { order: body.jobIds });
+    const jobs = await listJobs(ctx, { riderId, take: 100, sort: "scheduled" });
+    return { jobs: jobs.map((job) => jobToDto(job, viewerFor(req), ctx.config.APP_ORIGIN)) };
   });
 }

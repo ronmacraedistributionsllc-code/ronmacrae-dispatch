@@ -1,10 +1,11 @@
 import React, { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { JOB_SOURCES, JOB_STATUSES, RIDER_STAGE_LABELS, allowedTransitions } from "@ronmacrae/contracts";
+import { ACTIVE_JOB_STATUSES, JOB_SOURCES, JOB_STATUSES, RIDER_STAGE_LABELS, allowedTransitions } from "@ronmacrae/contracts";
 import type { JobSource, JobStatus, JobSummaryDto, RiderDto } from "@ronmacrae/contracts";
 import { ApiError, apiFetch, formatMoney } from "../lib/api.js";
 import { useAuth } from "../lib/auth.js";
 import { JobOffersPanel } from "../components/job-offers-panel.js";
+import { RouteQueue } from "../components/route-queue.js";
 
 const STATUS_BADGE: Record<JobStatus, string> = {
   new: "bg-zinc-800 text-zinc-300",
@@ -32,13 +33,15 @@ interface RowProps {
   canWrite: boolean;
   busy: boolean;
   offersOpen: boolean;
+  queueOpen: boolean;
   onAssign: (jobId: string, riderId: string) => void;
   onUnassign: (jobId: string) => void;
   onMove: (jobId: string, to: JobStatus) => void;
   onToggleOffers: (jobId: string) => void;
+  onToggleQueue: () => void;
 }
 
-function JobRow({ job, riders, canWrite, busy, offersOpen, onAssign, onUnassign, onMove, onToggleOffers }: RowProps): React.JSX.Element {
+function JobRow({ job, riders, canWrite, busy, offersOpen, queueOpen, onAssign, onUnassign, onMove, onToggleOffers, onToggleQueue }: RowProps): React.JSX.Element {
   const [riderId, setRiderId] = useState(job.riderId ?? "");
   const [moveTo, setMoveTo] = useState<JobStatus | "">("");
   const assignable = job.status === "new" || job.status === "assigned";
@@ -151,10 +154,35 @@ function JobRow({ job, riders, canWrite, busy, offersOpen, onAssign, onUnassign,
                 {offersOpen ? "Hide offers" : "Offers"}
               </button>
             ) : null}
+            {job.riderId ? (
+              <button className="btn !px-3 !py-1 text-xs" disabled={busy} onClick={() => onToggleQueue()}>
+                {queueOpen ? "Hide route queue" : "Route queue"}
+              </button>
+            ) : null}
           </div>
         </td>
       ) : null}
     </tr>
+  );
+}
+
+/** Dispatcher/owner read-only view of one rider's active-job queue — spec 5B
+ *  ("dispatchers can view a rider's queue"). No reorder controls here; only
+ *  the rider reorders their own queue (see rider-dashboard.tsx). */
+function RiderQueuePanel({ riderId }: { riderId: string }): React.JSX.Element {
+  const active = useQuery({
+    queryKey: ["rider-queue", riderId],
+    queryFn: () =>
+      apiFetch<{ jobs: JobSummaryDto[] }>(
+        `/jobs?riderId=${riderId}&status=${ACTIVE_JOB_STATUSES.join(",")}&take=100`,
+      ),
+    refetchInterval: 20_000,
+  });
+  return (
+    <div className="rounded-lg border border-zinc-700 bg-zinc-900/40 p-3">
+      {active.isLoading ? <p className="text-sm text-zinc-500">Loading queue…</p> : null}
+      {active.data ? <RouteQueue jobs={active.data.jobs} /> : null}
+    </div>
   );
 }
 
@@ -163,6 +191,7 @@ export function Jobs(): React.JSX.Element {
   const qc = useQueryClient();
   const canWrite = user?.role === "admin" || user?.role === "dispatcher";
   const [offersJobId, setOffersJobId] = useState<string | null>(null);
+  const [queueJobId, setQueueJobId] = useState<string | null>(null);
 
   const [status, setStatus] = useState<JobStatus | "">("");
   const [source, setSource] = useState<JobSource | "">("");
@@ -310,15 +339,24 @@ export function Jobs(): React.JSX.Element {
                     canWrite={canWrite}
                     busy={busy}
                     offersOpen={offersJobId === job.id}
+                    queueOpen={queueJobId === job.id}
                     onAssign={(id, rid) => void assign.mutate({ jobId: id, riderId: rid })}
                     onUnassign={(id) => void unassign.mutate(id)}
                     onMove={(id, to) => void move.mutate({ jobId: id, to })}
                     onToggleOffers={(id) => setOffersJobId((cur) => (cur === id ? null : id))}
+                    onToggleQueue={() => setQueueJobId((cur) => (cur === job.id ? null : job.id))}
                   />
                   {offersJobId === job.id ? (
                     <tr className="border-t border-zinc-800" data-testid={`offers-panel-${job.id}`}>
                       <td colSpan={canWrite ? 8 : 7} className="py-2">
                         <JobOffersPanel jobId={job.id} jobStatus={job.status} canWrite={canWrite} />
+                      </td>
+                    </tr>
+                  ) : null}
+                  {job.riderId && queueJobId === job.id ? (
+                    <tr className="border-t border-zinc-800" data-testid={`queue-panel-${job.riderId}`}>
+                      <td colSpan={canWrite ? 8 : 7} className="py-2">
+                        <RiderQueuePanel riderId={job.riderId} />
                       </td>
                     </tr>
                   ) : null}

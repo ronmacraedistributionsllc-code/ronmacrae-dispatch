@@ -550,7 +550,7 @@ tracked here as Stages 8+ (Stages 1-7 above are the prior work, already shipped)
 | 10 | Diagnose and repair rider notifications (offer/assign alerts, connection state) | DONE |
 | 11 | Remove extra test riders safely (backup first; keep Kei Bearer only) | DONE |
 | 12 | 5A — COD reconciliation ledger | DONE |
-| 13 | 5B — Rider route queue | NOT STARTED |
+| 13 | 5B — Rider route queue | DONE |
 | 14 | 5C — Dispatcher operations board | NOT STARTED |
 | 15 | 5D — Customer status message templates + notification log | NOT STARTED |
 | 16 | 5E — Operating reports + CSV export | NOT STARTED |
@@ -1003,3 +1003,72 @@ e2e suite (19 tests, incl. the new spec) 19/19 serially.
 CSV export or reporting rollup of COD data yet — that's Stage 16 (5E,
 operating reports). No dispatcher-board consolidation of "COD awaiting
 handover" alongside rider load/location — that's Stage 14 (5C).
+
+## Stage 13 — 5B: Rider route queue (DONE)
+
+**What existed already**: `Job.routeSeq: Int?` was already in the schema and
+already flowed through to `JobDto.routeSeq`, but nothing anywhere ever wrote
+to it — no schema change needed for this stage at all. There's also a
+separate, unrelated `Route`/`RouteStop` model pair plus a scaffolded (never
+implemented, never called from the frontend) `POST /api/routes/optimize` —
+inspected it and left it alone: that's clearly meant for a future real
+route-optimization engine, which is explicitly NOT what this stage wants
+("must NOT describe straight-line distance as driving distance/traffic-aware
+ETA" — this stage is a simple, honest, rider-manual-reorder feature).
+
+**Backend**: one new endpoint, `POST /api/bearer/jobs/reorder` (rider-only).
+Takes the full ordered list of the rider's own active job ids and writes
+`routeSeq` to match, in one transaction. Deliberately an all-or-nothing,
+explicit action rather than a partial patch: the submitted id set must
+exactly match the rider's current active jobs (same jobs, any order) or the
+whole thing is rejected (409) — this is what "must NOT auto-rearrange the
+queue without confirmation" turns into on the API side: there's no code path
+that can reorder a queue except this one, rider-initiated call. Also expanded
+`JobSummaryDto` with `point`/`pickupAddressText`/`pickupPoint`/`routeSeq` so
+the dispatcher's read-only queue view (below) doesn't need a heavier per-job
+fetch.
+
+**Frontend**: new shared component `apps/web/src/components/route-queue.tsx`
+(`RouteQueue`, `nextStopFor`, `mapsUrlFor`) used by both:
+- The rider dashboard — a compact, ordered "Route queue" section above the
+  full per-job detail cards (which are unchanged), with ↑/↓ buttons that
+  post the full reordered list on each move (no drag-and-drop dependency;
+  simpler and fully keyboard/accessible). Each row shows its *next* stop
+  (pickup while not yet collected, destination after) with address, item
+  summary, COD amount, requested date, an urgent badge/border, and an "Open
+  in Maps" link that hands off to the device's own map app
+  (`google.com/maps/dir/?api=1&destination=...`) — never our own map, never a
+  distance/ETA number.
+- A new read-only `RiderQueuePanel` on the dispatcher's Jobs screen — a
+  "Route queue" button per assigned job's row (next to "Offers") expands the
+  same rider's active-job queue in the same compact form, with no reorder
+  controls at all (`onReorder` simply isn't passed).
+- Default ordering (before a rider has ever manually reordered) is
+  `routeSeq` (once set) → requested date → job-creation order (oldest
+  first / FIFO) — deterministic on the client regardless of what order the
+  API happens to return rows in, rather than silently depending on it.
+
+**Tests**:
+- `apps/api/test/route-queue.test.ts` (5 new) — reorder writes `routeSeq` to
+  match the submitted order; rejects a submission that omits one of the
+  rider's active jobs; rejects one that includes another rider's job (and
+  confirms no partial write happened); a dispatcher cannot call the
+  rider-only reorder endpoint; dispatchers can read a rider's active jobs via
+  the existing `GET /api/jobs?riderId=` filter.
+- `e2e/specs/route-queue.spec.ts` (new) — real browser flow: two jobs
+  assigned to one rider, default FIFO order confirmed, rider moves the
+  second stop up (one tap), confirms both the "Open in Maps" link and that a
+  page reload shows the new order was actually persisted (not just local
+  state), then signs out and a dispatcher logs in and views the same rider's
+  queue with no reorder controls visible at all.
+
+**Verification run**: `npm run typecheck --workspaces` clean; `apps/api`
+vitest 77/77 (72 prior + 5 new); `apps/web` vitest 8/8; clean web build; full
+e2e suite (20 tests, incl. the new spec) 20/20 serially.
+
+**Not done in this stage** (explicitly out of scope, tracked for later): no
+drag-and-drop reordering (up/down buttons only — simpler, and fully
+accessible without an extra dependency); no live realtime push when a queue
+changes (dispatcher's read-only view polls every 20s, same as other list
+views in this app) — reordering isn't as time-critical as an offer/
+assignment, so this was a deliberate scope cut, not an oversight.

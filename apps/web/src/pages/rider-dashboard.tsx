@@ -8,6 +8,7 @@ import { useAuth } from "../lib/auth.js";
 import { useRealtime } from "../lib/realtime.js";
 import { PushOptIn } from "../components/push-opt-in.js";
 import { LocationSharing } from "../components/location-sharing.js";
+import { RouteQueue } from "../components/route-queue.js";
 
 type Action = { label: string; to?: JobStatus; stage?: "heading_to_pickup" | "at_pickup"; needsPin?: boolean; location?: boolean; failed?: boolean };
 
@@ -62,6 +63,11 @@ export function RiderDashboard(): React.JSX.Element {
     void qc.invalidateQueries({ queryKey: ["bearer-jobs"] });
   };
 
+  const reorder = useMutation({
+    mutationFn: (jobIds: string[]) => apiFetch<{ jobs: JobDto[] }>(API.bearer.reorder, { method: "POST", body: JSON.stringify({ jobIds }) }),
+    onSuccess: (data) => qc.setQueryData(["bearer-jobs"], { jobs: data.jobs }),
+  });
+
   const { subscribe, onReconnect } = useRealtime();
   // A direct assignment (job.assigned, source "assign") changes this rider's job
   // list just as much as a new offer does — both should update the screen without
@@ -107,6 +113,13 @@ export function RiderDashboard(): React.JSX.Element {
       </div>
       {atCapacity ? <span className="whitespace-nowrap rounded bg-amber-900/40 px-2 py-1 text-xs font-medium text-amber-300">At capacity</span> : null}
     </section>
+    {activeJobs.length > 0 ? (
+      <section className="space-y-2">
+        <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-400">Route queue</h2>
+        {reorder.error ? <p className="text-sm text-red-400">{reorder.error instanceof ApiError ? reorder.error.message : "Could not reorder — try again"}</p> : null}
+        <RouteQueue jobs={activeJobs} onReorder={(ids) => reorder.mutate(ids)} reordering={reorder.isPending} />
+      </section>
+    ) : null}
     <LocationSharing riderId={rider.id} />
     {availabilityChange.error ? <p className="text-sm text-red-400">{availabilityChange.error instanceof ApiError ? availabilityChange.error.message : "Could not update availability"}</p> : null}
     {offers.data && offers.data.offers.length > 0 ? (
