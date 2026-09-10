@@ -397,3 +397,77 @@ npm run test:unit
 ```
 
 Expected: push in sync (no data-loss warning), 0 typecheck errors, 27/27 unit tests.
+
+---
+
+# Delivery-offers Stage 1/2 — atomic accept/assign + concurrency/auth tests (Claude Code, 2026-09-10)
+
+**Status: PASS.** Resumed from an interrupted OpenCode session with no git history.
+See `WORK_IN_PROGRESS.md` for the full recovery narrative, the latent
+`effectiveDatabaseUrl` bug found (documented, not fixed — out of scope), and the
+`JobOfferDto` gap to resolve before Stage 3 (UI). Short version here.
+
+## Verified before touching anything
+
+Checked the actual code, not the interrupted session's summary: `apps/api/src/modules/jobs/assign.ts`
+already withdrew open offers atomically inside its conditional-claim transaction, and
+`apps/api/src/modules/offers.ts`'s accept route was already an atomic conditional
+claim (`status: "new", riderId: null` gate) that withdraws competing offers. The one
+real gap: `rebroadcast` never re-checked rider daily capacity the way `broadcast` did.
+
+## Fix (offers.ts)
+
+Extracted a shared `eligibleRiders()` helper (active + daily-capacity check), used by
+both `broadcast` and `rebroadcast`. Wrapped rebroadcast's offer creation in a
+`$transaction` (broadcast already had one). Added a `job.state` realtime broadcast on
+offer-accept, matching `assignJob`'s existing pattern.
+
+## New tests
+
+`apps/api/test/offers.test.ts` (8 tests) against a real Fastify app + a real,
+disposable per-run sqlite db (`apps/api/test/helpers/test-app.ts` — not mocks):
+
+1. Two riders racing to accept the same offer set — exactly one wins (200/409), one
+   `RiderAssignment` row.
+2. A rider's accept racing a dispatcher's direct assignment on the same job — exactly
+   one wins.
+3. A rider at daily capacity is excluded from both broadcast and rebroadcast
+   (regression test for the fix above).
+4. Expired offers can't be accepted and are lazily swept to `status: "expired"`.
+5. Withdrawn offers can't be accepted.
+6. Authorization: unauthenticated → 401; rider-role broadcast → 403; rider accepting
+   another rider's offer → 409, offer left untouched.
+
+## Commands run and results (2026-09-10)
+
+Working directory: `ronmacrae-dispatch` (repo root)
+
+| # | Command | Result |
+| --- | --- | --- |
+| 1 | `npm run typecheck --workspace @ronmacrae/api` | **PASS** — 0 errors |
+| 2 | `npm run test:unit --workspace @ronmacrae/api` | **PASS** — 6 files, **35/35** (27 pre-existing + 8 new) |
+| 3 | `npm run typecheck --workspace @ronmacrae/web` | **PASS** — 0 errors (unchanged) |
+| 4 | `npm run test:unit --workspace @ronmacrae/web` | **PASS** — 1 file, 3/3 (unchanged) |
+| 5 | `npm run build --workspace @ronmacrae/web` | **PASS** — 265.16 kB JS (gzip 79.20 kB), PWA generated |
+
+E2e was **not** re-run (no web/UI changes this session) — re-verify before trusting it:
+`cd e2e && CI=1 npx playwright test`.
+
+`apps/api/data/dev.db` and `apps/api/data/dev.db.bak-offers` are untouched by this
+session (byte-identical timestamps to before). The offers tests use a disposable
+`apps/api/data/test-offers.db`, deleted by the test itself after each run.
+
+## Still open (Stages 3–6)
+
+Dispatcher offer UI + rider Accept/Decline cards, in-app alerts + opt-in browser
+push, foreground GPS + dispatcher maps + secure customer tracking, and the final
+full-workflow gate pass. See `WORK_IN_PROGRESS.md` for the exact next steps and the
+`JobOfferDto` decision Stage 3 needs first.
+
+## Re-verify
+
+```bash
+cd apps/api && npx vitest run test/offers.test.ts   # expect 8/8
+npm run typecheck --workspace @ronmacrae/api        # expect 0 errors
+npm run test:unit --workspace @ronmacrae/api        # expect 35/35
+```
