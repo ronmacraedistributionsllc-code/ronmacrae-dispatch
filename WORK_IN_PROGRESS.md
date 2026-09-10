@@ -1,9 +1,11 @@
 # Work in progress — offers/GPS/alerts handoff (resumed by Claude Code, 2026-09-10)
 
-Read this first if you're resuming after a cutoff. It tracks exactly what's done vs.
-not, across the six stages requested. Long-form verification detail for completed
-work lives in `PHASE1_JOBS_CHECKPOINT.md`; this file is the short "where are we"
-status plus the concrete next action.
+**All 6 requested stages are DONE and verified as of this session.** This file is
+kept as the detailed record of what was actually found/built/tested at each stage —
+`PHASE1_JOBS_CHECKPOINT.md`'s Stage 6 entry has the final combined gate results and
+the preview/demo instructions a reviewer or the next builder actually needs. Read
+this file when you need the "why" behind a decision; read the checkpoint for the
+"does it work" proof.
 
 ## Recovery context
 
@@ -38,7 +40,7 @@ status plus the concrete next action.
 | 3 | Dispatcher broadcast/assign UI + rider Accept/Decline cards | **DONE** — see below |
 | 4 | Live in-app alerts + opt-in browser push | **DONE** — see below |
 | 5 | Foreground GPS, dispatcher maps, secure customer tracking | **DONE** — see below |
-| 6 | Full workflow tests, typecheck, build, preview instructions | **NEXT** — every stage's gates have been passing individually; Stage 6 is one final combined pass + writing the preview/demo instructions |
+| 6 | Full workflow tests, typecheck, build, preview instructions | **DONE** — full combined gate run (root `typecheck`/`test:unit`/`build`/`lint`/`audit`) plus the built preview server actually booted, all 5 demo logins tested for real, and verified instructions written into the checkpoint |
 
 ## Stage 1 — done (this session)
 
@@ -313,33 +315,35 @@ patching unrelated config code mid-task. Worth a 2-line fix later:
 in both places — the `if (rel.startsWith("/")) return cfg.DATABASE_URL` line then
 works correctly for absolute paths.
 
-## Exact next steps (Stage 6 — the last one)
+## Stage 6 — done (this session)
 
-All six of the user's original requirements now have working, tested code behind
-them (Stages 1-5 above). Stage 6 is verification and documentation, not new
-features:
+Ran every gate fresh, in one combined pass, from the repo root (not the per-workspace
+commands used during individual stages — the root `npm run typecheck`/`test:unit`/
+`build` scripts fan out to every workspace, so this is the actual "does the whole
+thing work together" check): 0 typecheck errors anywhere, unit **45/45** (api) +
+**3/3** (web) + **8/8** (contracts/geo/money) + **6/6** (notifications), **e2e 17/17**
+(the root `test:unit` script runs Playwright too, since `@ronmacrae/e2e`'s own
+`test:unit` is aliased to it), build clean across every workspace including
+`apps/api`'s `dist/main.js`. Lint: the same 8 pre-existing errors, unchanged. Audit:
+5 vulnerabilities, 0 critical.
 
-1. Run every gate together, fresh, in one pass, and record the actual output (not
-   assumed from the per-stage runs above — a full combined run is the honest final
-   check): `npm run build --workspace @ronmacrae/contracts`, api typecheck + unit,
-   web typecheck + unit + build, `cd e2e && CI=1 npx playwright test`, `npm run lint`,
-   `npm audit --omit=dev`.
-2. Write real preview/demo instructions into `PHASE1_JOBS_CHECKPOINT.md` — the
-   zero-service `DEV_DB=1` boot command, the seeded demo credentials (dispatcher,
-   admin, "Kei Bearer" rider — pull the exact ones from `apps/api/src/seed.ts` rather
-   than assuming), how to reach `/map`, `/jobs`, the rider dashboard, and a
-   `/track/:token` link, and the `WEB_DIST` preview-mode command (matching the
-   pattern already documented in earlier "Preview and demo rider" sections of the
-   checkpoint file).
-3. Do a final read through `WORK_IN_PROGRESS.md` end to end and fold anything still
-   open (the two documented-not-fixed latent bugs — `effectiveDatabaseUrl`'s
-   path-doubling, and the dangling `locationsFor` contract; the 8 pre-existing lint
-   errors; the `deepmerge-ts`/prisma and `react-router` audit advisories) into a
-   single "known issues, out of scope" list in the checkpoint, so a human reviewer
-   doesn't have to reconstruct it from six stages of session notes.
-4. Native mobile app remains explicitly out of scope, as the user asked from the
-   start.
+Then — not just built, actually **booted and exercised** — ran the real `make
+preview` flow (`npm run build --workspace @ronmacrae/web` +
+`WEB_DIST=... npm run preview:api`), confirmed `/api/health` reports the built PWA
+is being served, tested all 5 seeded demo logins for real against the running
+server (not assumed from reading `seed.ts`), hit `/map` and two Stage 4/5 API routes
+with a real token, then stopped it cleanly. Full verified preview instructions,
+demo credentials table, and a per-stage "where to look" guide are now in
+`PHASE1_JOBS_CHECKPOINT.md`'s Stage 6 section — that's the file to hand a human
+reviewer.
 
-No map provider, credentials, billing action, deploy, or notification/location
-behavior beyond what's listed as done across Stages 1-5 above was added or claimed
-as delivered in this session.
+Also folded every open item from Stages 1-5 into one consolidated "Known issues"
+list in the checkpoint (the `effectiveDatabaseUrl` path-doubling bug, the dangling
+`locationsFor` contract route, the 8 lint errors, and the `deepmerge-ts`/`react-router`
+audit advisories) so nobody has to reconstruct it from six stages of session notes.
+
+Native mobile app remains explicitly out of scope, as the user asked from the start.
+
+No map provider, credentials, billing action, or deploy was added at any point in
+this session. Everything above was actually run and its real output recorded — see
+`PHASE1_JOBS_CHECKPOINT.md` for the exact commands and results.

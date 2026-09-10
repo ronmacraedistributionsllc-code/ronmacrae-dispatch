@@ -676,3 +676,130 @@ npm run typecheck --workspace @ronmacrae/web && npm run test:unit --workspace @r
 cd e2e && CI=1 npx playwright test   # expect 17/17
 npm audit --omit=dev                 # expect 0 critical
 ```
+
+---
+
+# Stage 6 — final combined verification + preview instructions (Claude Code, 2026-09-10)
+
+**Status: PASS. All six of the original requirements have working, tested code
+behind them.** This is the final stage — verification and documentation, not new
+features. Everything below was actually run this session, fresh, in one pass —
+not assumed from the per-stage runs in the sections above.
+
+## Full combined gate run (root-level, all workspaces together)
+
+| # | Command | Result |
+| --- | --- | --- |
+| 1 | `npm run typecheck` (root — contracts, geo, money, notifications, api, web) | **PASS** — 0 errors in every workspace |
+| 2 | `npm run test:unit` (root — this also runs e2e, since `@ronmacrae/e2e`'s own `test:unit` script is `playwright test`) | **PASS** — contracts+geo+money 8/8, notifications 6/6, api 45/45, web 3/3, **e2e 17/17** |
+| 3 | `npm run build` (root — all workspaces, including `apps/api` to `dist/main.js`) | **PASS** — no errors; web build main bundle ~282 kB (map/courier-map code-split into their own chunks) |
+| 4 | `npm run lint` (root) | **8 pre-existing errors**, all in `apps/api/src/modules/jobs/{proofs,repository,transition}.ts`, `settings.ts`, `tracking.ts` (unused imports) — present before this session started, in files never touched across all 5 stages. Not fixed (out of scope: not part of the offers/GPS/alerts work), but flagged clearly here rather than left silently buried in per-stage notes. |
+| 5 | `npm audit --omit=dev` (root) | **5 vulnerabilities, 0 critical** — `deepmerge-ts`/`prisma` (high) and `react-router` (moderate), both pre-existing and both requiring a breaking major-version bump to fix. Not fixed (same reasoning as lint: real, but out of scope for this task, and each needs its own verification pass). The one critical finding that *was* in scope (`maplibre-gl`, made load-bearing by Stage 5) was fixed in that stage. |
+
+## Preview server actually booted and exercised (not just built)
+
+Ran the exact `make preview` flow for real this session:
+
+```bash
+npm run build --workspace @ronmacrae/web
+WEB_DIST="$PWD/apps/web/dist" DEV_DB=1 QUEUE_DRIVER=memory NOTIFICATION_PROVIDER=memory npm run preview:api
+```
+
+- `GET /api/health` → `{"ok":true,...,"web":true,...}` — confirms the built PWA is
+  being served from the API process on :3000, not just that the API boots.
+- All five seeded demo logins tested for real against the running server (not
+  assumed from `seed.ts`): `admin@ronmacrae.example` / `admin1234`,
+  `dispatcher@ronmacrae.example` / `dispatch1234`,
+  `accountant@ronmacrae.example` / `account1234`,
+  `viewer@ronmacrae.example` / `viewer1234`, and rider `+8765550001` / `rider1234`
+  ("Kei Bearer") — every one returned `200` with a real access token.
+- `GET /map` (client-side route) → `200`, SPA shell served correctly.
+- `GET /api/push/public-key` (Stage 4) and `GET /api/rider-locations` (Stage 5),
+  both called with a real dispatcher token → both returned real data, confirming
+  those routes work end-to-end in the built artifact, not just in dev/test mode.
+- Server stopped cleanly afterward; port 3000 confirmed free.
+
+## Preview / demo instructions (verified working, this session)
+
+```bash
+cd ronmacrae-dispatch
+npm run build --workspace @ronmacrae/web
+WEB_DIST="$PWD/apps/web/dist" DEV_DB=1 QUEUE_DRIVER=memory NOTIFICATION_PROVIDER=memory npm run preview:api
+# Open http://127.0.0.1:3000
+```
+
+(Equivalent to `make preview`, except the Makefile's `preview` target doesn't set
+`DEV_DB`/`QUEUE_DRIVER`/`NOTIFICATION_PROVIDER` itself — it relies on `.env` or
+your shell already having them, per config.ts's zero-service DEV_DB defaults. Set
+them explicitly as above if you haven't copied `.env.example` to `.env`.)
+
+**Demo accounts** (from `apps/api/src/seed.ts` — run `npm run seed` first if the
+database is empty):
+
+| Role | Identifier | Password |
+| --- | --- | --- |
+| Admin | `admin@ronmacrae.example` | `admin1234` |
+| Dispatcher | `dispatcher@ronmacrae.example` | `dispatch1234` |
+| Accountant | `accountant@ronmacrae.example` | `account1234` |
+| Viewer | `viewer@ronmacrae.example` | `viewer1234` |
+| Rider ("Kei Bearer") | `+8765550001` | `rider1234` |
+
+**Where to see each stage's work in the running preview:**
+
+- **Offers (Stages 1-3)**: log in as dispatcher → Jobs → create a job (or use an
+  existing `new` one) → click **Offers** on its row → Broadcast. In a second
+  browser (or private window), log in as the rider → the offer appears under
+  "Job offers" on the dashboard → Accept/Decline.
+- **Live alerts (Stage 4)**: with both windows open side by side, broadcasting an
+  offer or a rider accepting one should produce an in-app toast on the other
+  side within a couple of seconds (no reload) — this is the realtime websocket
+  path, not polling.
+- **Push (Stage 4)**: on the rider dashboard, "Enable push notifications" — the
+  browser's own permission prompt appears (this is real, not the e2e's mocked
+  version); a subsequent offer broadcast to that rider sends a real push via
+  `web-push` using the dev VAPID keys.
+- **Foreground GPS (Stage 5)**: on the rider dashboard, "Share my location" —
+  the browser will ask for location permission.
+- **Dispatcher map (Stage 5)**: dispatcher/admin nav → **Map** — shows rider
+  markers live (from real GPS shares above, or the preview's own simulated
+  rider movement once a job is assigned and the rider is heading to pickup).
+- **Customer tracking (Stage 5)**: create/book a job as staff or via the public
+  `/book` form, which returns a `/track/<token>` link — open it in an
+  incognito window (no login) to see the customer-facing view, including the
+  small courier map once a position exists.
+
+## Known issues (consolidated — everything found but out of scope, across all 5 stages)
+
+1. **`effectiveDatabaseUrl()` path-doubling** (`apps/api/src/config.ts`, and the
+   equivalent in `scripts/prepare-db.mjs`) — an absolute `file:/...` `DATABASE_URL`
+   under `DEV_DB=1` gets `apiRoot` prepended twice, because the strip-`"file:"`
+   regex also eats the URL's leading `/`. Doesn't affect the app's own `.env`
+   convention (relative `file:./data/dev.db`). 2-line fix identified in Stage 1/2
+   notes above; not applied (unrelated to the offers/GPS/alerts task).
+2. **`API.riders.locationsFor(riderId)`** (`packages/contracts/src/routes.ts`) is a
+   pre-existing dangling route constant — declared, no backend implementation.
+   Presumably meant for per-rider location history; nothing in this work needed it.
+3. **8 pre-existing lint errors** (unused imports) in
+   `apps/api/src/modules/jobs/{proofs,repository,transition}.ts`, `settings.ts`,
+   `tracking.ts` — present before this session, in files never touched.
+4. **`deepmerge-ts`/`prisma` (high) and `react-router` (moderate) audit
+   advisories** — both pre-existing, both need a breaking major-version bump to
+   fix (`prisma@6.12.0` downgrade for the first — check whether that's actually
+   older or a different major line before assuming it's safe to apply blindly;
+   `react-router-dom@7.18.3` for the second, a major version jump from the `^6`
+   currently used, likely with real API changes given this app's routes). Neither
+   touched this session — `maplibre-gl`'s critical finding was fixed (Stage 5)
+   because this session made it load-bearing; these two were already in active
+   use before this session and are a larger, separate verification effort.
+5. **Native mobile app**: explicitly out of scope from the start, per the user's
+   original instructions. Not started.
+
+## Re-verify (Stage 6 — the complete gate list, one command block)
+
+```bash
+npm run typecheck        # root: all workspaces, expect 0 errors everywhere
+npm run test:unit        # root: also runs e2e — expect api 45/45, web 3/3, e2e 17/17
+npm run build             # root: all workspaces including api dist + web dist
+npm run lint              # expect exactly the 8 pre-existing errors listed above
+npm audit --omit=dev      # expect 5 vulnerabilities, 0 critical
+```
