@@ -60,7 +60,10 @@ const CreateBody = z.object({
   plate: z.string().max(20).optional().or(z.literal("")).nullable().default(""),
   homeZoneId: z.string().optional().or(z.literal("")).nullable().default(""),
   basePoint: z.object({ lat: z.number().gte(-90).lte(90), lng: z.number().gte(-180).lte(180) }).optional().nullable(),
-  dailyCapacity: z.number().int().min(1).max(100).default(15),
+  /** Max concurrent active jobs this rider can carry at once (not a daily total,
+   *  despite the field's name — see the schema comment on Rider.dailyCapacity).
+   *  Owner/admin-configurable per rider; a rider is not limited to one job at a time. */
+  dailyCapacity: z.number().int().min(1).max(100).default(5),
   payRate: z.number().min(0).max(1_000_000).optional(),
   /** optional login account for the rider (bearer face) */
   password: z.string().min(8).max(128).optional(),
@@ -177,8 +180,12 @@ export class RidersService {
   }
 
   /**
-   * Status change. Riders may toggle their own status (available/offline);
-   * staff may set any status on any rider.
+   * Status change. Riders may toggle their own status ("Available for jobs" /
+   * "Unavailable"); staff may set any status on any rider. Going fully
+   * "offline" while carrying active jobs is blocked regardless of the rider's
+   * current status value — "unavailable" (stop sending me new work, but I'm
+   * still finishing what I have) is always allowed with active jobs; going
+   * fully offline is not, since that's meant to mean off-shift/unreachable.
    */
   async setStatus(
     riderId: string,
@@ -193,7 +200,7 @@ export class RidersService {
     if (actor.role === "rider" && actor.riderId !== riderId) {
       throw httpErrors.createError(403, "You can only change your own status");
     }
-    if (row.status === "on_job" && body.status === "offline") {
+    if (body.status === "offline") {
       const active = await this.app.prisma.job.count({ where: { riderId, status: { in: [...ACTIVE_JOB_STATUSES] } } });
       if (active > 0) throw httpErrors.createError(409, `Cannot go offline with ${active} active job(s)`);
     }

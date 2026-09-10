@@ -546,7 +546,7 @@ tracked here as Stages 8+ (Stages 1-7 above are the prior work, already shipped)
 | # | Stage | Status |
 | - | ----- | ------ |
 | 8 | Fix address entry (manual text is authoritative, never silently overwritten) | DONE |
-| 9 | Rider availability toggle + configurable multi-job capacity | NOT STARTED |
+| 9 | Rider availability toggle + configurable multi-job capacity | DONE |
 | 10 | Diagnose and repair rider notifications (offer/assign alerts, connection state) | NOT STARTED |
 | 11 | Remove extra test riders safely (backup first; keep Kei Bearer only) | NOT STARTED |
 | 12 | 5A — COD reconciliation ledger | NOT STARTED |
@@ -641,3 +641,111 @@ text field for the destination with no map/geocoding at all — it has no
 overwrite bug (nothing auto-fills it), so it wasn't touched, but it also has
 no pin-confirmation step; if that's wanted, it's a separate feature request,
 not a bug fix.
+
+## Stage 9 — Rider availability toggle + configurable multi-job capacity (DONE)
+
+**The bug** (found by reading the actual code paths, not assumed): a rider
+accepting a job had their `Rider.status` silently flipped from `available` to
+`on_job` (`transitionJob()` in `apps/api/src/modules/jobs/transition.ts`, on
+the `to === "accepted"` transition). Broadcast eligibility
+(`eligibleRiders()` in `apps/api/src/modules/offers.ts`) requires
+`status === "available"` — so the moment a rider accepted their first job,
+they silently stopped receiving any further offers, no matter how far under
+their capacity they were. The rider dashboard's own toggle button then
+compounded this by disabling itself entirely while `status === "on_job"`
+(`apps/web/src/pages/rider-dashboard.tsx`), so a rider on a job couldn't even
+manually mark themselves available/unavailable. A parallel bug: unassigning a
+rider's last active job force-reset their status back to `available`
+(`assign.ts`'s `unassignJob()`), silently overriding a rider's own
+"unavailable" choice.
+
+**The fix:**
+- Removed both automatic status mutations (`transition.ts`'s accept-triggered
+  `on_job`/`available` flip, and `assign.ts`'s unassign-triggered reset to
+  `available`). Rider status is now changed **only** by the rider (or staff)
+  explicitly, via the existing `PATCH /api/riders/:id/status` — job lifecycle
+  events never touch it. This is the whole fix for "must not auto-switch off
+  just because the rider accepted one job": since acceptance no longer moves
+  status away from `available`, `eligibleRiders()`'s existing
+  `status === "available"` check (unchanged) now correctly keeps a rider
+  eligible for more offers indefinitely, as long as they're under capacity —
+  no schema change needed, since the existing 4-value `RiderStatus` enum plus
+  the existing `dailyCapacity` field (the max-concurrent-active-jobs limit;
+  the field name predates this stage and is kept to avoid an unnecessary
+  schema migration, but is now documented as such everywhere it's used) were
+  already sufficient once the auto-mutation bug was removed.
+- Rider dashboard (`rider-dashboard.tsx`): the "Available for jobs" /
+  "Unavailable" toggle is now always clickable (no more disabling itself while
+  on a job), toggles only between `available`/`unavailable` (never touches
+  `offline`, and treats a legacy `on_job` value as "available" so old data
+  displays sensibly), and a new capacity summary section shows
+  "`N of dailyCapacity active jobs`" plus an "At capacity" warning once the
+  rider has no more room for offers.
+- `RidersService.setStatus()`: generalized the "can't go offline with active
+  jobs" guard from checking `status === "on_job"` (which, per the fix above,
+  will now rarely if ever be the current value) to checking the rider's actual
+  active-job count directly, regardless of their current status label. Going
+  `unavailable` is always allowed with active jobs (that's the point — stop
+  new offers, keep finishing what you have); going fully `offline` is not.
+- `RidersService`'s `CreateBody.dailyCapacity` default changed from 15 to 5,
+  per the requirement ("default 5, overridable per rider"). Existing riders'
+  already-set capacities are untouched — this only affects new riders created
+  from here on.
+- **Race-protection hardening**: since a rider can now legitimately hold
+  several open offers at once (accepting one no longer removes them from
+  future broadcasts), added a capacity re-check inside the offer-accept
+  transaction itself (`POST /api/bearer/offers/:id/accept`), mirroring the
+  check `assign.ts` already had for direct assignment. Two offers that were
+  each valid at broadcast time (rider under capacity then) can no longer both
+  be accepted if doing so would push the rider over their configured limit —
+  the second accept is rejected with a 409 and the job is left unassigned
+  rather than double-booking the rider.
+
+**Tests (new, in `apps/api/test/offers.test.ts`):**
+- A rider stays `status: "available"` through an offer accept, remains
+  eligible for a fresh broadcast while under capacity, and is correctly
+  excluded once truly at capacity.
+- The accept-path capacity race: two broadcasts each see the rider as under
+  capacity; accepting both is rejected on the second (409), leaving that job
+  `new`/unassigned rather than over-committing the rider.
+- Accepting a direct assignment and carrying it all the way to `delivered`
+  never changes `rider.status` away from whatever it already was.
+- A rider can set `unavailable` while carrying an active job, but not
+  `offline`.
+
+**Also fixed along the way (Stage 8 follow-up):** running the e2e suite
+against Stage 8's rewritten `AddressPicker` surfaced two stale assertions in
+`e2e/specs/booking.spec.ts` — the old placeholder text ("Start typing an
+address…", now "Type the exact delivery address…") and an ambiguous
+`getByText("Half Way Tree Road")` match that broke once the confirmed-address
+view started showing both the exact typed address *and* the provider's match
+as a secondary line (the Stage 8 fix working as intended, not a bug) — both
+updated to match the new, more precise UI.
+
+**Also found while re-verifying:** a long-lived manual preview server + TLS
+proxy from earlier in this session (`node dist/main.js` / `node proxy.mjs`,
+bound to port 3000 against the real `dev.db`) was still running and was being
+silently reused by Playwright's `reuseExistingServer` setting instead of its
+own isolated, freshly-seeded e2e server — causing spurious e2e failures
+unrelated to any code change. Stopped both processes so e2e runs against its
+own isolated `e2e-test.db` again; if manual real-device preview access is
+still wanted, it needs restarting (see the production-readiness/manual-test
+instructions from earlier in this file).
+
+**Verification run:** `npm run typecheck --workspaces` clean; `apps/api`
+vitest 62/62 (58 prior + 4 new this stage, across 2 new describe blocks in
+`offers.test.ts`); full e2e suite
+(`alerts`, `booking`, `gps-map`, `jobs`, `offers`, `push-optin`, `realtime`,
+`rider-dashboard`, `smoke` — 17 tests) passes 17/17 serially; under higher
+parallelism some specs intermittently fail due to the **already-documented,
+not-yet-fixed** `RidersService.create()` hardcoding new riders to
+`status: "available"` (see Stage 7's note in this file and the checkpoint) —
+confirmed via isolated re-runs that every such failure this round was that
+pre-existing cross-spec interference, not a Stage 9 regression.
+
+**Not done in this stage** (explicitly out of scope, tracked for later): there
+is still no admin/dispatcher UI page for creating or listing riders — capacity
+(`dailyCapacity`) is configurable via the existing `PATCH /api/riders/:id` API
+but has no settings-page form yet. Dispatcher-facing visibility of rider
+availability/active-count/capacity (beyond the existing live map) is Stage 14
+(5C — dispatcher operations board)'s job, not this one.

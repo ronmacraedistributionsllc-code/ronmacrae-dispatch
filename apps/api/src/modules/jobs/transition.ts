@@ -12,7 +12,6 @@ import type {
   RiderStage,
 } from "@ronmacrae/contracts";
 import {
-  ACTIVE_JOB_STATUSES,
   CUSTOMER_BROADCAST_STATUSES,
   FAILURE_REASONS,
   JOB_STATUSES,
@@ -219,18 +218,14 @@ export async function transitionJob(
         } as object,
       },
     });
-    if (row.riderId) {
-      const nextStatus =
-        to === "accepted" ? "on_job" : terminal || to === "failed" ? "available" : undefined;
-      if (nextStatus) {
-        const others = await tx.job.count({
-          where: { riderId: row.riderId, id: { not: jobId }, status: { in: [...ACTIVE_JOB_STATUSES] } },
-        });
-        if (to === "accepted" || others === 0) {
-          await tx.rider.update({ where: { id: row.riderId }, data: { status: nextStatus } });
-        }
-      }
-    }
+    // Rider status ("Available for jobs" / "Unavailable") is rider-controlled
+    // (see RidersService.setStatus) and is deliberately NOT touched by job
+    // lifecycle transitions here — accepting a job must not silently flip a
+    // rider out of "available" (that was the old behavior and is exactly the
+    // bug this comment replaces: it made a rider invisible to further offer
+    // broadcasts the moment they accepted their first job, even while well
+    // under capacity for more). A rider's active-job count is derived directly
+    // from their jobs, not tracked via a status enum.
     return { job, event };
   });
   const { job, event } = updated;

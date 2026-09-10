@@ -966,9 +966,77 @@ npm run test --workspace @ronmacrae/api
 npm run build --workspace @ronmacrae/web
 ```
 
-## Next: Stage 9
+---
 
-Rider "Available for jobs" / "Unavailable" toggle (rider-controlled, must not
-auto-toggle off on accept) + owner/admin-configurable per-rider max active jobs
-(default 5, not a 1-job cap). See `WORK_IN_PROGRESS.md` Stage plan table for
-the full remaining Stage 9–18 sequence.
+# Stage 9 — Rider availability + multi-job capacity (pre-production hardening, 2026-09-10)
+
+Full detail in `WORK_IN_PROGRESS.md` under "Stage 9 — Rider availability toggle
++ configurable multi-job capacity (DONE)". Summary for resuming agents:
+
+**Bug fixed**: accepting a job silently flipped `Rider.status` from
+`available` to `on_job` (`transition.ts`), which excluded the rider from
+further offer broadcasts (`eligibleRiders()` requires `status: "available"`)
+even while well under capacity — and the rider dashboard's toggle then
+disabled itself while `on_job`, so the rider couldn't even manually fix it.
+Fix: stopped job lifecycle code from ever touching `rider.status` at all
+(removed the auto-mutations in `transition.ts` and `assign.ts`'s
+`unassignJob`) — status is now 100% rider/staff-controlled via the existing
+`PATCH /api/riders/:id/status`. No schema change was needed.
+
+**Also hardened**: added a capacity re-check inside the offer-accept
+transaction (`offers.ts`) — a rider can now hold several open offers at once
+(since carrying jobs no longer disqualifies them), so accepting two near
+capacity had to be re-verified atomically, not just at broadcast time.
+
+**Files changed this stage**:
+- `apps/api/src/modules/jobs/transition.ts` (removed auto status mutation)
+- `apps/api/src/modules/jobs/assign.ts` (removed auto status mutation in `unassignJob`)
+- `apps/api/src/modules/offers.ts` (capacity re-check in accept transaction)
+- `apps/api/src/modules/riders.ts` (`dailyCapacity` create default 15→5; `setStatus`'s offline-guard generalized to active-job-count instead of `status === "on_job"`)
+- `apps/web/src/pages/rider-dashboard.tsx` (toggle always enabled, 2-state available/unavailable, active-job-count + capacity + at-capacity warning)
+- `e2e/specs/booking.spec.ts` (fixed 2 assertions broken by Stage 8's AddressPicker copy/UI changes — pre-existing gap in that stage's own verification, caught and fixed here)
+- New tests: 4 new cases in `apps/api/test/offers.test.ts` (62 total, up from 58)
+
+## Commands run and results (Stage 9)
+
+| # | Command | Result |
+| --- | --- | --- |
+| 1 | `npm run typecheck --workspaces` (root) | **PASS** — 0 errors |
+| 2 | `npx vitest run` (apps/api) | **PASS** — 62/62 (58 prior + 4 new) |
+| 3 | `npx vitest run` / `npm run build` (apps/web) | **PASS** — 8/8, clean build |
+| 4 | Full e2e suite (`alerts`,`booking`,`gps-map`,`jobs`,`offers`,`push-optin`,`realtime`,`rider-dashboard`,`smoke` — 17 tests), serial | **PASS** — 17/17 |
+| 5 | Same suite at 3x parallelism, several runs | Intermittent failures, confirmed (via isolated re-runs) to be the pre-existing, already-known `RidersService.create()` "every new rider defaults to status=available" cross-spec interference (see Known Issues below) — not a Stage 9 regression |
+
+**Environment note**: found a long-lived manual preview server + TLS proxy
+from earlier in this session still bound to port 3000 against the real
+`dev.db`, being silently reused by Playwright's `reuseExistingServer` instead
+of its own isolated e2e server. Stopped both so e2e verification actually ran
+against its own isolated `e2e-test.db`. If manual/real-device preview access
+is needed again, it will need restarting.
+
+## Known issues (unchanged from Stage 7/8, still not fixed by design)
+
+`RidersService.create()` still hardcodes `status: "available"` on every new
+rider — still an intentional non-fix pending a product decision (see Stage
+7's note). This stage's own new capacity/status tests avoid depending on it by
+always setting rider status/capacity explicitly.
+
+## Re-verify (Stage 9)
+
+```bash
+npm run typecheck --workspaces
+npm run test --workspace @ronmacrae/api
+npm run test --workspace @ronmacrae/web
+cd e2e && npx playwright test --workers=1   # serial, to avoid the known cross-spec flakiness above
+```
+
+## Next: Stage 10
+
+Diagnose and repair rider notifications (offer/assign alerts, unread badge,
+sound, connection state Live/Reconnecting/Offline, missed-offer retrieval on
+reconnect) — per `WORK_IN_PROGRESS.md`'s Stage plan table. Note that Stage 9
+already fixed the specific "rider stops receiving offers after accepting one
+job" bug that Stage 10's brief also calls out — Stage 10 should focus on the
+remaining diagnosis (toast/sound/badge on the *receiving* side, reconnect
+behavior, two-browser-session verification) rather than re-solving the
+capacity-eligibility part.

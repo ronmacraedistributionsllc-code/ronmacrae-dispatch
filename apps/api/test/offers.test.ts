@@ -294,3 +294,128 @@ describe("offer authorization", () => {
     expect(row.status).toBe("open");
   });
 });
+
+describe("a rider stays eligible for more offers after accepting one (multi-job capacity)", () => {
+  it("keeps status 'available' through accept, and remains eligible for a fresh broadcast while under capacity", async () => {
+    const customer = await makeCustomer(harness);
+    const dispatcher = await dispatcherToken(harness);
+    const rider = await makeRider(harness, { dailyCapacity: 2 });
+
+    const jobA = await makeJob(harness, customer.id);
+    const broadcastA = await harness.app.inject({
+      method: "POST",
+      url: `/api/jobs/${jobA.id}/offers/broadcast`,
+      headers: { authorization: `Bearer ${dispatcher}` },
+      payload: { riderIds: [rider.id] },
+    });
+    const { offers: offersA } = broadcastA.json() as { offers: { id: string }[] };
+    const riderTok = await riderToken(harness, rider.id);
+    const acceptA = await harness.app.inject({ method: "POST", url: `/api/bearer/offers/${offersA[0]!.id}/accept`, headers: { authorization: `Bearer ${riderTok}` } });
+    expect(acceptA.statusCode).toBe(200);
+
+    // The old bug: accepting a job used to flip the rider to "on_job", which
+    // excluded them from `status: "available"` broadcast eligibility even though
+    // they were still well under capacity (1/2). Confirm that no longer happens.
+    const afterAccept = await harness.prisma.rider.findUniqueOrThrow({ where: { id: rider.id } });
+    expect(afterAccept.status).toBe("available");
+
+    const jobB = await makeJob(harness, customer.id);
+    const broadcastB = await harness.app.inject({
+      method: "POST",
+      url: `/api/jobs/${jobB.id}/offers/broadcast`,
+      headers: { authorization: `Bearer ${dispatcher}` },
+      payload: { riderIds: [rider.id] },
+    });
+    const { offers: offersB } = broadcastB.json() as { offers: { id: string }[] };
+    expect(offersB).toHaveLength(1);
+    expect(offersB[0]!.riderId).toBe(rider.id);
+
+    // And a second accept succeeds too, bringing them to exactly capacity.
+    const acceptB = await harness.app.inject({ method: "POST", url: `/api/bearer/offers/${offersB[0]!.id}/accept`, headers: { authorization: `Bearer ${riderTok}` } });
+    expect(acceptB.statusCode).toBe(200);
+
+    const activeCount = await harness.prisma.job.count({ where: { riderId: rider.id, status: { in: ["assigned", "accepted", "picked_up", "in_transit", "delivering", "location_changed", "no_answer"] } } });
+    expect(activeCount).toBe(2);
+
+    // Now at capacity (2/2) — a third broadcast must exclude them.
+    const jobC = await makeJob(harness, customer.id);
+    const broadcastC = await harness.app.inject({
+      method: "POST",
+      url: `/api/jobs/${jobC.id}/offers/broadcast`,
+      headers: { authorization: `Bearer ${dispatcher}` },
+      payload: { riderIds: [rider.id] },
+    });
+    const { offers: offersC } = broadcastC.json() as { offers: { id: string }[] };
+    expect(offersC).toHaveLength(0);
+  });
+
+  it("rejects an accept that would push the rider over capacity, even when the offer itself is still open (race protection)", async () => {
+    const customer = await makeCustomer(harness);
+    const dispatcher = await dispatcherToken(harness);
+    const rider = await makeRider(harness, { dailyCapacity: 1 });
+    const riderTok = await riderToken(harness, rider.id);
+
+    // Two separate broadcasts, each seeing the rider as under capacity (0/1) at
+    // the time they were created — this can legitimately happen if the second
+    // broadcast is issued before the rider acts on the first offer.
+    const jobA = await makeJob(harness, customer.id);
+    const jobB = await makeJob(harness, customer.id);
+    const bA = await harness.app.inject({ method: "POST", url: `/api/jobs/${jobA.id}/offers/broadcast`, headers: { authorization: `Bearer ${dispatcher}` }, payload: { riderIds: [rider.id] } });
+    const bB = await harness.app.inject({ method: "POST", url: `/api/jobs/${jobB.id}/offers/broadcast`, headers: { authorization: `Bearer ${dispatcher}` }, payload: { riderIds: [rider.id] } });
+    const offerA = (bA.json() as { offers: { id: string }[] }).offers[0]!;
+    const offerB = (bB.json() as { offers: { id: string }[] }).offers[0]!;
+
+    const acceptA = await harness.app.inject({ method: "POST", url: `/api/bearer/offers/${offerA.id}/accept`, headers: { authorization: `Bearer ${riderTok}` } });
+    expect(acceptA.statusCode).toBe(200);
+
+    // Accepting the second would put them at 2/1 — must be rejected, and the
+    // rejection must not have left jobB half-claimed.
+    const acceptB = await harness.app.inject({ method: "POST", url: `/api/bearer/offers/${offerB.id}/accept`, headers: { authorization: `Bearer ${riderTok}` } });
+    expect(acceptB.statusCode).toBe(409);
+
+    const jobBRow = await harness.prisma.job.findUniqueOrThrow({ where: { id: jobB.id } });
+    expect(jobBRow.status).toBe("new");
+    expect(jobBRow.riderId).toBeNull();
+  });
+});
+
+describe("rider status is rider-controlled, not job-lifecycle-controlled", () => {
+  it("accepting an assignment and completing it never changes rider.status away from what the rider set", async () => {
+    const customer = await makeCustomer(harness);
+    const dispatcher = await dispatcherToken(harness);
+    const rider = await makeRider(harness, { dailyCapacity: 3 });
+    const riderTok = await riderToken(harness, rider.id);
+
+    const job = await makeJob(harness, customer.id, { pin: "482913" });
+    const assign = await harness.app.inject({ method: "POST", url: `/api/jobs/${job.id}/assignments`, headers: { authorization: `Bearer ${dispatcher}` }, payload: { riderId: rider.id } });
+    expect(assign.statusCode).toBe(200);
+
+    const accept = await harness.app.inject({ method: "POST", url: `/api/bearer/jobs/${job.id}/accept`, headers: { authorization: `Bearer ${riderTok}` } });
+    expect(accept.statusCode).toBe(200);
+    expect((await harness.prisma.rider.findUniqueOrThrow({ where: { id: rider.id } })).status).toBe("available");
+
+    // Take the job all the way to a terminal status — status must still be untouched.
+    for (const to of ["picked_up", "in_transit", "delivering"]) {
+      const res = await harness.app.inject({ method: "POST", url: `/api/bearer/jobs/${job.id}/transition`, headers: { authorization: `Bearer ${riderTok}` }, payload: { to } });
+      expect(res.statusCode).toBe(200);
+    }
+    const deliver = await harness.app.inject({ method: "POST", url: `/api/bearer/jobs/${job.id}/transition`, headers: { authorization: `Bearer ${riderTok}` }, payload: { to: "delivered", pin: "482913" } });
+    expect(deliver.statusCode).toBe(200);
+    expect((await harness.prisma.rider.findUniqueOrThrow({ where: { id: rider.id } })).status).toBe("available");
+  });
+
+  it("a rider can go 'unavailable' while still carrying an active job, but not fully 'offline'", async () => {
+    const customer = await makeCustomer(harness);
+    const dispatcher = await dispatcherToken(harness);
+    const rider = await makeRider(harness, { dailyCapacity: 3 });
+    const riderTok = await riderToken(harness, rider.id);
+    const job = await makeJob(harness, customer.id, { riderId: rider.id, status: "assigned" });
+    void job;
+
+    const toUnavailable = await harness.app.inject({ method: "PATCH", url: `/api/riders/${rider.id}/status`, headers: { authorization: `Bearer ${riderTok}` }, payload: { status: "unavailable" } });
+    expect(toUnavailable.statusCode).toBe(200);
+
+    const toOffline = await harness.app.inject({ method: "PATCH", url: `/api/riders/${rider.id}/status`, headers: { authorization: `Bearer ${riderTok}` }, payload: { status: "offline" } });
+    expect(toOffline.statusCode).toBe(409);
+  });
+});

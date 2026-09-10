@@ -191,6 +191,18 @@ export async function offerRoutes(app: FastifyInstance, ctx: AppCtx): Promise<vo
         data: { riderId, status: "assigned", stage: "heading_to_pickup" },
       });
       if (!claimed.count) throw httpErrors.createError(409, "Another rider has already claimed this job");
+      // Capacity was checked when this offer (and any others still open for this
+      // rider) was broadcast, but a rider can hold several open offers from
+      // separate broadcasts at once now that carrying jobs no longer excludes
+      // them from new ones — re-check inside the same transaction as the claim
+      // so accepting several of them near-simultaneously can't push the rider
+      // over their configured limit. Throwing here rolls back the claim above,
+      // leaving the job unassigned for another rider rather than double-booking.
+      const rider = await tx.rider.findUniqueOrThrow({ where: { id: riderId } });
+      const activeCount = await tx.job.count({ where: { riderId, status: { in: [...ACTIVE_JOB_STATUSES] } } });
+      if (activeCount > rider.dailyCapacity) {
+        throw httpErrors.createError(409, `You're at capacity (${activeCount}/${rider.dailyCapacity} active jobs) — decline or finish a job before accepting another`);
+      }
       await tx.jobOffer.updateMany({ where: { jobId: offer.jobId, status: "open" }, data: { status: "withdrawn", note: "claimed" } });
       await tx.jobOffer.update({ where: { id: offer.id }, data: { status: "accepted" } });
       await tx.riderAssignment.create({ data: { jobId: offer.jobId, riderId, status: "assigned", reason: "offer accepted" } });

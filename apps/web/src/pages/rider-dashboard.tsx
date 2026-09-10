@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { JobDto, JobOfferDto, JobStatus, RiderStatus } from "@ronmacrae/contracts";
-import { API } from "@ronmacrae/contracts";
+import { ACTIVE_JOB_STATUSES, API } from "@ronmacrae/contracts";
 import { ApiError, apiFetch, formatMoney } from "../lib/api.js";
 import { useAuth } from "../lib/auth.js";
 import { useRealtime } from "../lib/realtime.js";
@@ -28,6 +28,13 @@ function dateTime(value: string | null): string {
   return value ? new Date(value).toLocaleString("en-JM", { dateStyle: "medium", timeStyle: "short" }) : "Not scheduled";
 }
 
+/** Legacy `on_job` rows (from before rider status stopped being auto-managed by
+ *  job transitions) still read as "available for jobs" here — it was never a
+ *  distinct rider-facing choice, just a byproduct of the bug this fixes. */
+function isAvailableForJobs(status: RiderStatus | null): boolean {
+  return status === "available" || status === "on_job";
+}
+
 export function RiderDashboard(): React.JSX.Element {
   const { rider } = useAuth();
   const qc = useQueryClient();
@@ -41,8 +48,12 @@ export function RiderDashboard(): React.JSX.Element {
     // for a dropped connection and for sweeping expired offers off the list.
     refetchInterval: 20_000,
   });
+  // A rider can carry several jobs at once — this toggle is the rider's own,
+  // explicit "send me more work / don't" choice. It's independent of how many
+  // jobs they're already carrying: accepting a job never flips this off, and
+  // it stays on (so more offers keep arriving, up to capacity) the whole time.
   const availabilityChange = useMutation({
-    mutationFn: (status: "available" | "offline") => apiFetch<{ rider: { status: RiderStatus } }>(API.riders.status(rider!.id), { method: "PATCH", body: JSON.stringify({ status }) }),
+    mutationFn: (status: "available" | "unavailable") => apiFetch<{ rider: { status: RiderStatus } }>(API.riders.status(rider!.id), { method: "PATCH", body: JSON.stringify({ status }) }),
     onSuccess: ({ rider: updated }) => setAvailability(updated.status),
   });
   const refreshOffersAndJobs = () => {
@@ -54,16 +65,41 @@ export function RiderDashboard(): React.JSX.Element {
   useEffect(() => subscribe(["offer"], () => refreshOffersAndJobs()), [subscribe]);
 
   if (!rider) return <p className="text-sm text-zinc-400">Loading rider profile…</p>;
+
+  const activeJobs = (jobs.data?.jobs ?? []).filter((job) => ACTIVE_JOB_STATUSES.includes(job.status));
+  const capacity = rider.dailyCapacity;
+  const atCapacity = activeJobs.length >= capacity;
+  const available = isAvailableForJobs(availability);
+
   return <div className="space-y-4">
     <header className="flex flex-wrap items-center justify-between gap-3">
       <div><h1 className="text-xl font-bold">My deliveries</h1><p className="text-sm text-zinc-400">Only jobs assigned to you are shown.</p></div>
       <div className="flex flex-wrap items-center gap-2">
         <PushOptIn />
-        <button className="btn" disabled={availabilityChange.isPending || availability === "on_job"} onClick={() => void availabilityChange.mutate(availability === "available" ? "offline" : "available")}>
-          {availability === "available" ? "Go offline" : availability === "on_job" ? "On a job" : "Go online"}
+        <button
+          className={available ? "btn-accent" : "btn"}
+          disabled={availabilityChange.isPending}
+          onClick={() => void availabilityChange.mutate(available ? "unavailable" : "available")}
+        >
+          {available ? "Available for jobs" : "Unavailable"}
         </button>
       </div>
     </header>
+    <section className="card flex flex-wrap items-center justify-between gap-3">
+      <div>
+        <p className="text-sm text-zinc-200">
+          <span className="font-semibold">{activeJobs.length}</span> of <span className="font-semibold">{capacity}</span> active job{capacity === 1 ? "" : "s"}
+        </p>
+        <p className="text-xs text-zinc-500">
+          {available
+            ? atCapacity
+              ? "You're at capacity — no new offers will come in until you finish or drop a job."
+              : "You can still receive and accept new offers while carrying these."
+            : "You've marked yourself unavailable — you won't receive new offers, but can still finish active jobs."}
+        </p>
+      </div>
+      {atCapacity ? <span className="whitespace-nowrap rounded bg-amber-900/40 px-2 py-1 text-xs font-medium text-amber-300">At capacity</span> : null}
+    </section>
     <LocationSharing riderId={rider.id} />
     {availabilityChange.error ? <p className="text-sm text-red-400">{availabilityChange.error instanceof ApiError ? availabilityChange.error.message : "Could not update availability"}</p> : null}
     {offers.data && offers.data.offers.length > 0 ? (

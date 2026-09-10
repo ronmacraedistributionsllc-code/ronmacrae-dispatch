@@ -214,14 +214,10 @@ export async function unassignJob(
         meta: { declined } as object,
       },
     });
-    if (riderId) {
-      const others = await tx.job.count({
-        where: { riderId, id: { not: jobId }, status: { in: [...ACTIVE_JOB_STATUSES] } },
-      });
-      if (others === 0) {
-        await tx.rider.update({ where: { id: riderId }, data: { status: "available" } });
-      }
-    }
+    // Rider status is rider-controlled (RidersService.setStatus) and is not
+    // touched here — losing/declining one job must not silently override a
+    // rider's own "unavailable" choice, or their availability while other jobs
+    // are still active.
     return { job, event };
   });
   const dto = jobToDto(updated.job, viewer, ctx.config.APP_ORIGIN);

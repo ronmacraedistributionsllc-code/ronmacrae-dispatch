@@ -25,7 +25,7 @@ async function loginAsDispatcher(page: Page, request: APIRequestContext): Promis
  * timeout), pick the first one, and confirm the pin.
  */
 async function pickAddress(container: Locator, query: string): Promise<void> {
-  await container.getByPlaceholder("Start typing an address…").fill(query);
+  await container.getByPlaceholder("Type the exact delivery address…").fill(query);
   const firstSuggestion = container.locator("ul button").first();
   await expect(firstSuggestion).toBeVisible({ timeout: 15_000 });
   await firstSuggestion.click();
@@ -64,10 +64,10 @@ test("staff books a delivery from the New Order form and gets a tracking link", 
   // geocode call) — wait for it to resolve to the collapsed "confirmed" state
   // rather than assuming it's ready immediately.
   await expect(page.getByText("Loading default pickup location…")).not.toBeVisible({ timeout: 15_000 });
-  // The real geocoder's formatted address for the default pickup won't necessarily
-  // echo back the exact house-number string we searched for — just confirm it
-  // resolved to somewhere on the right street, not the literal input text.
-  await expect(page.getByText("Half Way Tree Road", { exact: false })).toBeVisible();
+  // The exact configured pickup text is shown verbatim as the delivery address —
+  // never silently replaced by whatever the geocoder reformats it to (the geocoder's
+  // own match, if different, appears only as a secondary "Provider match:" line).
+  await expect(page.getByText("15-17 Half Way Tree Road, Kingston, Jamaica", { exact: true })).toBeVisible();
 
   await page.getByLabel("Landmark", { exact: false }).fill("behind the red gate");
   await page.getByLabel("Product", { exact: true }).fill("Black bomber jacket");
