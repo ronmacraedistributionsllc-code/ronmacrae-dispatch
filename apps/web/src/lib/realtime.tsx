@@ -12,6 +12,24 @@ interface RealtimeState {
   connected: boolean;
   /** Subscribe to one or more message types (or "*" for all). Returns an unsubscribe function. */
   subscribe: (types: RealtimeMessage["type"][] | "*", handler: Handler) => () => void;
+  /** Count of alert-worthy realtime messages received since the last markRead(). */
+  unreadCount: number;
+  /** Acknowledge — call when the user has visited a screen that shows what came in. */
+  markRead: () => void;
+}
+
+/** Same "is this worth the user's attention" rule the alert toasts use — kept here
+ *  too (rather than only in alerts-toaster.tsx) so the unread badge counts exactly
+ *  what a toast would have shown, for whichever role is logged in. */
+function isAlertWorthy(msg: { type: string; payload?: unknown }, role: string | undefined): boolean {
+  const isRider = role === "rider";
+  if (msg.type === "offer") return isRider;
+  if (msg.type === "job.assigned") {
+    const source = (msg.payload as { source?: string } | undefined)?.source;
+    return isRider ? source === "assign" : true;
+  }
+  if (msg.type === "sos") return true;
+  return false;
 }
 
 const RealtimeContext = createContext<RealtimeState | null>(null);
@@ -31,7 +49,10 @@ const MAX_BACKOFF_MS = 30_000;
 export function RealtimeProvider({ children }: { children: ReactNode }): ReactNode {
   const { user } = useAuth();
   const [connected, setConnected] = useState(false);
+  const [unreadCount, setUnreadCount] = useState(0);
   const subscriptionsRef = useRef(new Set<Subscription>());
+  const roleRef = useRef(user?.role);
+  roleRef.current = user?.role;
 
   useEffect(() => {
     if (!user) {
@@ -78,6 +99,7 @@ export function RealtimeProvider({ children }: { children: ReactNode }): ReactNo
           return;
         }
         if (msg.type === "joined") return;
+        if (isAlertWorthy(msg, roleRef.current)) setUnreadCount((n) => n + 1);
         for (const sub of subscriptionsRef.current) {
           if (sub.types === "*" || (sub.types as string[]).includes(msg.type)) sub.handler(msg as RealtimeMessage);
         }
@@ -112,7 +134,9 @@ export function RealtimeProvider({ children }: { children: ReactNode }): ReactNo
     [],
   );
 
-  const value = useMemo(() => ({ connected, subscribe }), [connected, subscribe]);
+  const markRead = useMemo(() => () => setUnreadCount(0), []);
+
+  const value = useMemo(() => ({ connected, subscribe, unreadCount, markRead }), [connected, subscribe, unreadCount, markRead]);
   return <RealtimeContext.Provider value={value}>{children}</RealtimeContext.Provider>;
 }
 

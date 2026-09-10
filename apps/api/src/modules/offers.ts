@@ -30,6 +30,7 @@ type OfferRow = {
     fee: number | null;
     amountExpected: number | null;
     currency: string;
+    priority: string;
   };
   rider: { id: string; name: string; payRate: number | null; payCurrency: string };
 };
@@ -49,6 +50,7 @@ function dto(row: OfferRow, opts: { includeRider?: boolean } = {}): JobOfferDto 
     codAmount: moneyField(row.job.amountExpected, row.job.currency),
     requestedAt: null,
     createdAt: row.createdAt.toISOString(),
+    urgent: row.job.priority === "urgent",
     ...(opts.includeRider ? { riderId: row.rider.id, riderName: row.rider.name } : {}),
   };
 }
@@ -209,7 +211,7 @@ export async function offerRoutes(app: FastifyInstance, ctx: AppCtx): Promise<vo
     });
     const job = jobToDto(result.job, viewerFor(req), ctx.config.APP_ORIGIN);
     const eventDto = eventToDto(result.event);
-    ctx.hub.broadcastMany([ROOM_DISPATCH, roomForRider(riderId)], { type: "job.assigned", payload: { job, riderId } });
+    ctx.hub.broadcastMany([ROOM_DISPATCH, roomForRider(riderId)], { type: "job.assigned", payload: { job, riderId, source: "offer" } });
     ctx.hub.broadcastMany([roomForJob(job.id), ROOM_DISPATCH], { type: "job.state", payload: { job, event: eventDto } });
     await ctx.audit.record(actor, "offer.accept", "job", job.id, { offerId: req.params.id });
     return { job };

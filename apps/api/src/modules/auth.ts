@@ -206,6 +206,7 @@ export function registerAuthHook(app: FastifyInstance, ctx: AppCtx): void {
     if (url === "/api/delivery-requests" && method === "POST") return true;
     if (url === "/api/quotes/public" && method === "POST") return true;
     if (url === "/api/geo/geocode" && method === "POST") return true;
+    if (url === "/api/geo/reverse" && method === "POST") return true;
     return false;
   };
   app.addHook("onRequest", async (req, reply) => {

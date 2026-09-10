@@ -46,7 +46,8 @@ test("rider sees only assigned delivery details and completes the PIN-protected 
   await expect(card.getByText("10 Duke Street")).toBeVisible();
   await expect(card.getByText("School shoes")).toBeVisible();
   await expect(card.getByText("Black")).toBeVisible();
-  await expect(card.getByText("Priority").locator("..").getByText("urgent", { exact: true })).toBeVisible();
+  // Urgent priority is now shown as a prominent badge, not a plain "Priority" field.
+  await expect(card.getByText("Urgent", { exact: true })).toBeVisible();
   await card.getByRole("button", { name: "Accept" }).click();
   await card.getByRole("button", { name: "Confirm" }).click();
   await expect(card.getByRole("button", { name: "Heading to Pickup" })).toBeVisible();

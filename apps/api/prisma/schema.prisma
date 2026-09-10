@@ -122,6 +122,8 @@ model Zone {
   baseFee    Int      @default(0)
   feeCurrency String  @default("JMD")
   perKmFee   Int?
+  /** Optional flat surcharge (minor units) added when a job in this zone is marked urgent. */
+  urgentSurchargeFee Int?
   active     Boolean  @default(true)
   version    Int      @default(1)
   createdAt  DateTime @default(now())

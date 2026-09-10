@@ -1,6 +1,7 @@
-import type React from "react";
-import { NavLink } from "react-router-dom";
+import React, { useEffect } from "react";
+import { NavLink, useLocation } from "react-router-dom";
 import { useAuth } from "../lib/auth.js";
+import { useRealtime } from "../lib/realtime.js";
 import { AlertsToaster } from "./alerts-toaster.js";
 
 const TABS = [
@@ -15,6 +16,15 @@ const STAFF_ONLY_TABS = new Set(["/jobs", "/jobs/new", "/map"]);
 
 export function Layout({ children }: { children: React.ReactNode }): React.JSX.Element {
   const { user, logout } = useAuth();
+  const { unreadCount, markRead } = useRealtime();
+  const { pathname } = useLocation();
+  // Visiting any screen acknowledges pending alerts — coarse, but simple and honest
+  // (no per-item read-tracking to get subtly wrong).
+  useEffect(() => {
+    if (unreadCount > 0) markRead();
+    // Only re-run on navigation, not on every unreadCount tick — otherwise a new
+    // alert while sitting on the same page would clear itself immediately.
+  }, [pathname]);
   const tabs = user?.role === "rider" ? TABS.filter((t) => !STAFF_ONLY_TABS.has(t.to)) : TABS;
   return (
     <div className="flex h-full min-h-dvh flex-col md:flex-row">
@@ -31,12 +41,17 @@ export function Layout({ children }: { children: React.ReactNode }): React.JSX.E
               to={t.to}
               end={t.end}
               className={({ isActive }) =>
-                `whitespace-nowrap rounded-lg px-3 py-2 text-sm font-medium transition ${
+                `flex items-center gap-1.5 whitespace-nowrap rounded-lg px-3 py-2 text-sm font-medium transition ${
                   isActive ? "bg-brand text-white" : "text-zinc-300 hover:bg-zinc-800"
                 }`
               }
             >
               {t.label}
+              {t.to === "/" && unreadCount > 0 ? (
+                <span className="rounded-full bg-red-600 px-1.5 py-0.5 text-[10px] font-bold leading-none text-white">
+                  {unreadCount > 9 ? "9+" : unreadCount}
+                </span>
+              ) : null}
             </NavLink>
           ))}
         </nav>

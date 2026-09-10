@@ -1,11 +1,14 @@
 # Work in progress — offers/GPS/alerts handoff (resumed by Claude Code, 2026-09-10)
 
-**All 6 requested stages are DONE and verified as of this session.** This file is
-kept as the detailed record of what was actually found/built/tested at each stage —
-`PHASE1_JOBS_CHECKPOINT.md`'s Stage 6 entry has the final combined gate results and
-the preview/demo instructions a reviewer or the next builder actually needs. Read
-this file when you need the "why" behind a decision; read the checkpoint for the
-"does it work" proof.
+**All 6 originally-requested stages were DONE and verified (see below), then a 7th
+round of revisions was requested during manual testing** — address-first order
+creation, owner-only delivery-fee zones, alert refinements, e2e/dev-db isolation,
+and a dev-db order cleanup. See "Stage 7" further down for that work; it's also
+DONE and verified. This file is kept as the detailed record of what was actually
+found/built/tested at each stage — `PHASE1_JOBS_CHECKPOINT.md` has the final
+combined gate results and the preview/demo instructions a reviewer or the next
+builder actually needs. Read this file when you need the "why" behind a decision;
+read the checkpoint for the "does it work" proof.
 
 ## Recovery context
 
@@ -347,3 +350,182 @@ Native mobile app remains explicitly out of scope, as the user asked from the st
 No map provider, credentials, billing action, or deploy was added at any point in
 this session. Everything above was actually run and its real output recorded — see
 `PHASE1_JOBS_CHECKPOINT.md` for the exact commands and results.
+
+---
+
+# Stage 7 — address-first order creation, owner-only fee zones, alert refinements,
+# dev-db cleanup (Claude Code, 2026-09-10)
+
+Requested after Stage 6's manual-testing walkthrough began: revise order creation,
+add owner-only delivery-fee zone management, tighten courier alerts, isolate
+automated tests from the live dev db, and clean out its accumulated test orders.
+Preserved: the completed delivery workflow, all prior commits, users, roles, zones
+(the rows — their *editability* changed), and configuration.
+
+## 1. Address-first order creation
+
+New `apps/web/src/components/address-picker.tsx` + `pin-map.tsx`: search → ranked
+suggestions → map with a **draggable** pin → explicit **"Confirm location"** required
+before the value updates. Backed by two new public (rate-limited, same convention as
+`/api/quotes/public`) routes in new `apps/api/src/modules/geo.ts`:
+`POST /api/geo/geocode` (multi-result search — `packages/geo`'s `GeoProvider.geocode()`
+only ever returned one match, so added `searchAddresses()` to the interface,
+implemented for real in `OsmProvider` via Nominatim's own multi-result support, and
+composed through the existing failover chain in `CompositeGeoProvider`) and
+`POST /api/geo/reverse` (label a dragged pin).
+
+**Both failure modes the request called out are handled, not just hoped away:**
+- *Address search unavailable*: the existing deterministic offline fallback
+  (`SimulatedProvider`, already the last link in the geocode failover chain) still
+  returns a result so the order isn't blocked, but the response now carries a
+  `degraded: true` flag the picker surfaces as a visible amber banner — never
+  silently presented as a normal match.
+- *Map/tiles failing to load*: `AddressPicker` wraps the map in a small class-based
+  error boundary (`MapErrorBoundary` — React has no hook for this) that falls back to
+  a coordinates-only confirmation, so a tile-load failure doesn't block booking.
+
+`new-job.tsx` was rewritten around this: **Step 1 is the destination address**, and
+the rest of the form (customer, pickup, product, timing, payment) is hidden until
+it's confirmed. Customer name is now **First name** (required) / **Last name**
+(optional, concatenated server-side into the existing single `Customer.name`
+field — no schema change, since every other view already reads `customer.name`).
+Pickup defaults to **15-17 Half Way Tree Road, Kingston, Jamaica** (geocoded once on
+load) and is edited through the identical AddressPicker flow; the destination is
+shown a second time in the "Pickup & destination" section, bound to the *same*
+state as Step 1's picker, so editing it there uses the identical flow without extra
+plumbing. Requested delivery is now a **date-only** `<input type="date">` (no
+clickable time) plus an **"Urgent delivery"** checkbox — replacing the old
+Normal/Express/Urgent select in this form (the `express` priority value still
+exists in the schema/enum for other paths; this form just no longer exposes it).
+Delivery fee auto-suggests from the real fare engine (`POST /api/quotes` with both
+confirmed points + the urgent flag) once both pickup and destination are known, and
+stays editable — typing in the field stops the auto-fill from overwriting it again.
+
+## 2. Owner-only delivery-fee zones
+
+`Zone` gained `urgentSurchargeFee Int?` (additive migration — `dev.db` backed up
+first as `dev.db.bak-prefeature-<timestamp>`, confirmed additive: table count
+unchanged, only a new nullable column). `apps/api/src/modules/zones.ts`: zone
+**create/update/delete are now `admin`-only** (were `admin`+`dispatcher`) —
+dispatchers keep read access (they still need zones for order entry/quoting) but
+can no longer create, edit, enable/disable, or delete one; delete refuses (409) if
+any Job references the zone ("disable it instead" — no silent data loss). Creating
+a zone now accepts a `center` point (from the same AddressPicker, reused a third
+time) instead of requiring a hand-drawn polygon — a small square coverage area is
+generated around it via a new shared `squareZoneGeometry()` helper in
+`packages/geo` (the same shape `seed.ts` already used for the seeded zones, now
+shared rather than duplicated). `FareEngine.quote()` applies the destination zone's
+flat `urgentSurchargeFee` when `urgent: true` is passed, alongside the existing
+express/heavy/night percentage surcharges. New admin-only UI:
+`apps/web/src/components/zone-manager.tsx`, shown only to `role === "admin"` on the
+Zones & Fares page; the existing read-only zones table/quote tool stays for
+dispatchers. Tests: `apps/api/test/zones.test.ts` (8 tests) — the permission
+boundary (dispatcher 403 / admin 200 on every write route) and the delete-refuses-
+with-orders-attached case are the ones that actually matter here, and are covered.
+
+## 3. Courier alerts refined
+
+Three real gaps found and fixed:
+- **Direct assignment never pushed or carried enough info to alert correctly.**
+  `assign.ts`'s `job.assigned` broadcast gained a `source: "assign"` field (offers'
+  own accept path sets `source: "offer"`) so the frontend can tell "you were
+  assigned" apart from "you just accepted your own offer" (the latter doesn't need
+  a redundant toast). Wired `ctx.push.sendToRider()` into direct assignment too —
+  previously only offer-broadcast sent a push at all.
+- **No unread indicator existed.** `lib/realtime.tsx`'s `RealtimeProvider` now
+  tracks `unreadCount`/`markRead()`, incrementing on the same alert-worthy-message
+  rule `alerts-toaster.tsx` already used for toasts (kept in one place,
+  `isAlertWorthy()`, so the badge and the toasts can never disagree). Shown as a
+  small red badge on the Dashboard nav tab; cleared on navigation (coarse but
+  simple and honest — no per-item read-tracking to get subtly wrong).
+- **Urgent priority had no visual prominence anywhere it's seen.** Added a red
+  "Urgent" badge to the dispatcher Jobs table row, the rider's job card, the
+  rider's offer card, and the dispatcher's offer-list row — `JobOfferDto` gained a
+  `urgent: boolean` field for the offer-card cases.
+
+Content privacy is unchanged and re-verified: neither the toast text nor the push
+payload (for either broadcast or direct assignment) includes customer phone, name,
+or the delivery PIN — both still send only pickup/destination-area text.
+
+New e2e: `e2e/specs/alerts.spec.ts` — a direct assignment alerts (toast + unread
+badge) the assigned rider within ~5s and, over a 2s window, never reaches an
+uninvolved rider who's logged in and watching at the same time. **Caught a real,
+separate bug while writing this test** (see below).
+
+## 4. E2e/dev-db isolation
+
+`e2e/playwright.config.ts`'s `webServer` now sets `DATABASE_URL: "file:./data/e2e-test.db"`
+— e2e runs (including every future one) now use their own disposable sqlite file,
+never `apps/api/data/dev.db`. This was an explicit ask ("do not repopulate the live
+development database") and also fixes the root cause of a fragility this session
+hit twice before (Stage 3, Stage 5): accumulated same-named/same-position test
+riders from e2e runs subtly breaking other tests or polluting what a human sees in
+the manual-preview `dev.db`. Verified: ran a spec, confirmed `dev.db`'s mtime was
+unchanged and a new `e2e-test.db` appeared instead.
+
+**A real bug found and fixed while debugging `alerts.spec.ts`'s flakiness under
+full-parallel-suite load** (this is the one worth reading closely): `RidersService.create()`
+(`apps/api/src/modules/riders.ts`) hardcodes every newly-created rider to
+`status: "available"` at creation, regardless of the Prisma schema's own
+`@default(offline)`. A test's "uninvolved rider" fixture — created but deliberately
+left alone, expecting it to start `offline` per the schema default — was actually
+`available` from the moment of creation, making it silently eligible for *any other,
+concurrently-running spec's* unscoped "broadcast to all eligible riders" (like
+`offers.spec.ts`'s UI-driven broadcast test) and occasionally picking up a real
+alert that had nothing to do with the test being run. First fix attempt (removing an
+explicit status-PATCH call, based on the wrong assumption that offline was already
+the default) didn't help and the test kept failing under full-suite parallel load
+even though it passed 3/3 in isolation — the actual fix was an explicit
+`PATCH .../status {status:"offline"}` immediately after creation. Verified stable
+across 3 consecutive full-suite runs after the real fix (was reproducing on
+essentially every full-suite run before it). This is a real, if minor, production
+behavior worth knowing about too: `RidersService.create()`'s hardcoded
+`status: "available"` means a freshly-created rider is immediately live/offerable
+before anyone has confirmed they're actually on shift — not changed here (out of
+scope for this task), but flagged in the Known Issues list below.
+
+## 5. Dev-db order cleanup
+
+Backed up `dev.db` again (`dev.db.bak-cleanup-<timestamp>`, taken *before* the
+deletion, separate from the earlier pre-schema-change backup) and recorded exact
+row counts before and after. Deleted all 126 accumulated `Job` rows via
+`prisma.job.deleteMany({})`, relying on the schema's own cascade relations
+(`JobEvent`, `JobOffer`, `RiderAssignment`, `TrackingLink`, `Proof`, `RouteStop` are
+all `onDelete: Cascade` on `jobId`) rather than deleting each table by hand.
+`OutboxMessage.jobId` has no FK at all and `SosAlert`/`PayoutLine`'s `jobId` are
+`onDelete: SetNull` — neither blocks or needs separate handling. `AuditLog` and
+`RiderLocation` were deliberately left untouched (not "order records" — a general
+audit trail and general rider telemetry, respectively). Confirmed after: `Job` /
+`JobEvent` / `JobOffer` / `RiderAssignment` / `TrackingLink` / `Proof` all `0`;
+`User` (66) / `Rider` (62) / `Customer` (52) / `Zone` (3) / `FareRule` (1) /
+`Setting` (1) / `PushSubscription` (1) all exactly unchanged from before. The
+one-off cleanup script was run from a scratch location and deleted immediately
+after — it's not part of the repo (this was a one-time operational task, not a
+repeatable app feature).
+
+## Verified gates (this session, actual output)
+
+| Command | Result |
+| --- | --- |
+| `npm run typecheck` (root, all 6 workspaces) | PASS — 0 errors everywhere |
+| `npm run test:unit` (root) | PASS — api **55/55** (45 prior + 8 zones + 2 new quotes urgent-surcharge tests), web 3/3, contracts/geo/money 8/8, notifications 6/6, **e2e 18/18** (17 prior + 1 new alerts spec) |
+| `npm run build` (root) | PASS — all workspaces, including `apps/api`'s `dist/main.js` |
+| `npm run lint` | Same 8 pre-existing errors, unchanged |
+| `npm audit --omit=dev` | Same 5 vulnerabilities / 0 critical, unchanged (no new dependencies) |
+| Full e2e suite, 3 consecutive full-parallel runs after the `RidersService.create()` fix | **18/18 every time** — the earlier flakiness is confirmed gone, not just retried away |
+
+## Known issues (updated — folds in this stage's finding)
+
+Everything from Stage 6's list still applies (`effectiveDatabaseUrl` path-doubling,
+the dangling `locationsFor` contract route, the 8 lint errors, the
+`deepmerge-ts`/`react-router` audit advisories), plus:
+
+6. **`RidersService.create()` hardcodes `status: "available"`** on every new rider,
+   ignoring the schema's own `@default(offline)`. In production this means a
+   freshly-onboarded rider is immediately eligible for job offers before anyone —
+   the rider or a dispatcher — has actually confirmed they're on shift and ready.
+   Not fixed here (out of scope for this task, and changing it would need a design
+   decision: should rider creation default to offline and require an explicit
+   "I'm online" action, or is immediate availability the intended UX for onboarding
+   a rider who's standing in the store ready to start?). Worth asking about
+   before the next round of work.

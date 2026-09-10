@@ -40,6 +40,7 @@ export type ZoneRow = {
   baseFee: number;
   feeCurrency: string;
   perKmFee: number | null;
+  urgentSurchargeFee: number | null;
   active: boolean;
   version: number;
 };
@@ -53,6 +54,7 @@ export function zoneToDto(z: ZoneRow): ZoneDto {
     geometry: z.geometry as ZoneDto["geometry"],
     baseFee: money(z.baseFee, z.feeCurrency),
     perKmFee: z.perKmFee != null ? money(z.perKmFee, z.feeCurrency) : null,
+    urgentSurchargeFee: z.urgentSurchargeFee != null ? money(z.urgentSurchargeFee, z.feeCurrency) : null,
     active: z.active,
     version: z.version,
   };

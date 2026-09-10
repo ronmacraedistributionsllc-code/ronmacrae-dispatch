@@ -746,14 +746,27 @@ database is empty):
 
 **Where to see each stage's work in the running preview:**
 
+- **Address-first order creation (Stage 7)**: dispatcher → New Order — the
+  destination address (search → pick a suggestion → drag the pin if needed →
+  Confirm location) is the very first thing you fill in; the rest of the form
+  (customer, pickup, product, urgent checkbox, payment) appears only after. Pickup
+  defaults to the store address and is editable the same way.
+- **Owner-only fee zones (Stage 7)**: log in as **admin** (not dispatcher) →
+  Zones & Fares — a "Manage delivery-fee zones" section appears (create/edit/
+  disable/delete, with an urgent surcharge field). Log in as dispatcher instead and
+  that section is gone entirely — only the read-only zones table.
 - **Offers (Stages 1-3)**: log in as dispatcher → Jobs → create a job (or use an
   existing `new` one) → click **Offers** on its row → Broadcast. In a second
   browser (or private window), log in as the rider → the offer appears under
   "Job offers" on the dashboard → Accept/Decline.
-- **Live alerts (Stage 4)**: with both windows open side by side, broadcasting an
-  offer or a rider accepting one should produce an in-app toast on the other
-  side within a couple of seconds (no reload) — this is the realtime websocket
-  path, not polling.
+- **Live alerts (Stage 4, refined Stage 7)**: with both windows open side by side,
+  broadcasting an offer or a rider accepting one should produce an in-app toast on
+  the other side within a couple of seconds (no reload) — this is the realtime
+  websocket path, not polling. A red badge on the rider's Dashboard nav tab counts
+  unread alerts (clears on navigating). Directly assigning a job (Jobs screen,
+  Assign button, not Broadcast) alerts only that one rider — a different rider
+  logged in elsewhere sees nothing. An urgent order shows a red "Urgent" badge on
+  the Jobs table row, the rider's job/offer cards, and the dispatcher's offer list.
 - **Push (Stage 4)**: on the rider dashboard, "Enable push notifications" — the
   browser's own permission prompt appears (this is real, not the e2e's mocked
   version); a subsequent offer broadcast to that rider sends a real push via
@@ -802,4 +815,98 @@ npm run test:unit        # root: also runs e2e — expect api 45/45, web 3/3, e2
 npm run build             # root: all workspaces including api dist + web dist
 npm run lint              # expect exactly the 8 pre-existing errors listed above
 npm audit --omit=dev      # expect 5 vulnerabilities, 0 critical
+```
+
+---
+
+# Stage 7 — address-first order creation, owner-only fee zones, alert refinements,
+# dev-db cleanup (Claude Code, 2026-09-10)
+
+**Status: PASS.** Requested mid-manual-testing, after Stage 6. Full narrative and
+reasoning in `WORK_IN_PROGRESS.md`'s Stage 7 section — this is the verification
+summary.
+
+## What changed
+
+1. **Address-first order creation**: `apps/web/src/pages/new-job.tsx` rewritten —
+   destination address (search → suggestions → draggable map pin → explicit
+   confirm) is step 1; the rest of the form is hidden until it's confirmed. New
+   `apps/api/src/modules/geo.ts` (`POST /api/geo/geocode` multi-result search,
+   `POST /api/geo/reverse`), new `packages/geo` `searchAddresses()` capability. Both
+   "address search unavailable" (existing deterministic offline fallback, now
+   flagged `degraded: true` to the UI) and "map fails to load" (error boundary,
+   falls back to coordinates-only) are handled explicitly, not just hoped away.
+   Customer capture is now First name (required) / Last name (optional) — combined
+   server-side into the existing `Customer.name`, no schema change. Pickup defaults
+   to 15-17 Half Way Tree Road, Kingston (geocoded once, still editable via the
+   same flow). Requested delivery is now date-only + an "Urgent delivery" checkbox
+   (replacing the old Normal/Express/Urgent select in this form). Delivery fee
+   auto-suggests from the real fare engine once both points are confirmed, stays
+   editable.
+2. **Owner-only delivery-fee zones**: `Zone.urgentSurchargeFee` added (additive
+   migration, `dev.db` backed up first). Zone create/update/delete now `admin`-only
+   (was `admin`+`dispatcher`); delete refuses if any Job references the zone. New
+   admin-only UI (`apps/web/src/components/zone-manager.tsx`) creates a zone from a
+   geocoded center point (auto-generated coverage polygon, shared helper with
+   `seed.ts`) instead of a hand-drawn one. `FareEngine.quote()` applies the
+   destination zone's flat urgent surcharge when requested.
+3. **Courier alerts refined**: direct assignment now also sends a push (previously
+   only offer-broadcast did) and carries a `source: "assign"` vs `"offer"` field so
+   the frontend can tell direct assignment from a self-accepted offer. New unread
+   indicator (badge on the Dashboard nav tab). Urgent priority now shown as a
+   prominent red badge everywhere a job/offer appears to dispatchers or riders.
+   Privacy re-verified: no customer phone/name/PIN in any toast or push payload.
+4. **E2e isolated from the live dev db**: `e2e/playwright.config.ts` now points
+   e2e's server at its own `e2e-test.db`, never `apps/api/data/dev.db`. This also
+   fixed the root cause of test flakiness hit twice before this session
+   (accumulated e2e-created riders/data interfering with other tests or the human's
+   manual-preview view of `dev.db`).
+5. **Dev-db order cleanup**: backed up `dev.db` again, deleted all 126 accumulated
+   `Job` rows (cascade handled `JobEvent`/`JobOffer`/`RiderAssignment`/
+   `TrackingLink`/`Proof` automatically per the schema's own relations). Users,
+   riders, customers, zones, fare rules, settings, and push subscriptions all
+   confirmed unchanged (exact row-count match before/after).
+
+## A real bug found and fixed (not just a test-flakiness workaround)
+
+`RidersService.create()` (`apps/api/src/modules/riders.ts`) hardcodes every new
+rider to `status: "available"` at creation, ignoring the schema's own
+`@default(offline)`. Found while debugging `e2e/specs/alerts.spec.ts` failing
+intermittently under full-parallel-suite load (passed 3/3 in isolation, failed on
+nearly every full-suite run) — a test's "uninvolved rider" fixture was silently
+eligible for *other, concurrently-running specs'* unscoped broadcasts because it
+was `available` from creation, not `offline` as assumed. Fixed the test (explicit
+`status: "offline"` PATCH after creation); the underlying production behavior
+(new riders are immediately live/offerable, not created "off shift") is
+**intentionally not changed** here — that's a product decision, not a bug fix,
+flagged in Known Issues below for a deliberate call rather than a silent change.
+Verified stable across 3 consecutive full-suite e2e runs after the fix (was
+reproducing on nearly every run before it).
+
+## Commands run and results (2026-09-10)
+
+| # | Command | Result |
+| --- | --- | --- |
+| 1 | `npm run typecheck` (root) | **PASS** — 0 errors, all 6 workspaces |
+| 2 | `npm run test:unit` (root) | **PASS** — api **55/55**, web 3/3, contracts/geo/money 8/8, notifications 6/6, **e2e 18/18** |
+| 3 | `npm run build` (root) | **PASS** — all workspaces |
+| 4 | `npm run lint` | Same 8 pre-existing errors, unchanged |
+| 5 | `npm audit --omit=dev` | Same 5 vulnerabilities / 0 critical, unchanged |
+| 6 | Full e2e suite × 3 consecutive full-parallel runs (post `RidersService` test fix) | **18/18 every time** |
+| 7 | `dev.db` cleanup verification (row counts before/after) | Job/JobEvent/JobOffer/RiderAssignment/TrackingLink/Proof: all → 0. User 66, Rider 62, Customer 52, Zone 3, FareRule 1, Setting 1, PushSubscription 1: all **unchanged** |
+
+## Known issues (updated)
+
+Everything from Stage 6's list still applies, plus:
+
+6. **`RidersService.create()` hardcodes `status: "available"`** on every new
+   rider — a freshly-created rider is immediately eligible for offers before
+   anyone has confirmed they're on shift. Not changed (needs a product decision,
+   not a unilateral fix) — see `WORK_IN_PROGRESS.md` Stage 7 for the detail.
+
+## Re-verify (Stage 7)
+
+```bash
+npm run typecheck && npm run test:unit && npm run build   # root — expect 0 errors, api 55/55, e2e 18/18, clean build
+npm run lint && npm audit --omit=dev                       # expect 8 pre-existing lint errors, 5 vulns / 0 critical
 ```

@@ -88,6 +88,17 @@ export interface CustomerDto {
   createdAt: string;
 }
 
+/** One address-search suggestion. `provider: "simulated"` means real address search
+ *  is unavailable right now (no network / no map provider reachable) — the point is
+ *  a deterministic offline approximation, not a real match, and callers should say
+ *  so rather than presenting it as a normal result. */
+export interface GeoSuggestionDto {
+  point: GeoPoint;
+  label: string;
+  confidence: "high" | "medium" | "low";
+  provider: string;
+}
+
 export interface ZoneDto {
   id: string;
   name: string;
@@ -97,6 +108,8 @@ export interface ZoneDto {
   geometry: ZoneGeometry;
   baseFee: Money;
   perKmFee: Money | null;
+  /** Flat surcharge added when a job in this zone is marked urgent, if the zone has one set. */
+  urgentSurchargeFee: Money | null;
   active: boolean;
   version: number;
 }
@@ -121,6 +134,8 @@ export interface FareQuoteRequest {
   express?: boolean;
   heavy?: boolean;
   weightKg?: number;
+  /** Applies the destination zone's urgentSurchargeFee, if it has one set. */
+  urgent?: boolean;
 }
 
 export interface FareQuoteDto {
@@ -249,6 +264,7 @@ export interface JobOfferDto {
   codAmount: Money | null;
   requestedAt: string | null;
   createdAt: string;
+  urgent: boolean;
   /** Staff-facing only (dispatcher offers list) — omitted on rider-facing routes. */
   riderId?: string;
   riderName?: string;

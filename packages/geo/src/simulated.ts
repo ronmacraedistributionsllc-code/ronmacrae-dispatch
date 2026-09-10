@@ -87,6 +87,12 @@ export class SimulatedProvider extends OfflineProvider {
     return { point, label, confidence, provider: this.name };
   }
 
+  /** Always exactly one candidate — there's no real search index to rank against offline. */
+  async searchAddresses(query: string, bias?: GeoPoint): Promise<GeocodeResult[]> {
+    const result = await this.geocode(query, bias);
+    return result ? [result] : [];
+  }
+
   override async reverseGeocode(point: GeoPoint): Promise<string | null> {
     for (const place of KNOWN_PLACES) {
       const dLat = Math.abs(place.point.lat - point.lat);

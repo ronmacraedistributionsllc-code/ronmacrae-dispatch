@@ -17,7 +17,7 @@ export type RealtimeMessage =
   | { type: "rider.location"; payload: RiderLocationDto }
   | { type: "rider.status"; payload: { riderId: string; status: string } }
   | { type: "job.state"; payload: { job: JobDto; event: JobEventDto } }
-  | { type: "job.assigned"; payload: { job: JobDto; riderId: string } }
+  | { type: "job.assigned"; payload: { job: JobDto; riderId: string; source: "assign" | "offer" } }
   | { type: "job.rerouted"; payload: { jobId: string; route: RouteDto } }
   | { type: "job.eta"; payload: { jobId: string; riderId: string; etaAt: string | null } }
   | { type: "bearer.tracking"; payload: { bearerId: string; state: TrackingState; reason: string | null } }

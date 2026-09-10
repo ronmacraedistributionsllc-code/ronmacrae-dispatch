@@ -28,11 +28,12 @@ interface ZoneRow {
   baseFee: number;
   feeCurrency: string;
   perKmFee: number | null;
+  urgentSurchargeFee: number | null;
   active: boolean;
   version: number;
 }
 
-const row = (id: string, name: string, baseFee: number, perKmFee: number | null): ZoneRow => ({
+const row = (id: string, name: string, baseFee: number, perKmFee: number | null, urgentSurchargeFee: number | null = null): ZoneRow => ({
   id,
   name,
   slug: name.toLowerCase(),
@@ -41,6 +42,7 @@ const row = (id: string, name: string, baseFee: number, perKmFee: number | null)
   baseFee,
   feeCurrency: "JMD",
   perKmFee,
+  urgentSurchargeFee,
   active: true,
   version: 1,
 });
@@ -113,6 +115,21 @@ describe("FareEngine.quote", () => {
     const { app } = makeApp({ rule: { fee: 400, minFee: null }, zones: [row("z1", "Kingston", 300, 50)] });
     const q = await new FareEngine(app, new ZonesService(app)).quote({ fromPoint: KINGSTON, toPoint: PORTMORE, express: true });
     expect(q.fee.amount).toBe(500); // 400 * 1.25
+  });
+
+  it("adds the destination zone's flat urgent surcharge when urgent is requested", async () => {
+    const { app } = makeApp({ rule: null, zones: [row("z1", "Portmore", 300, 50, 150)] });
+    const q = await new FareEngine(app, new ZonesService(app)).quote({ fromPoint: KINGSTON, toPoint: PORTMORE, urgent: true });
+    // 300 base + 10km*50/km = 800, + flat 150 urgent surcharge = 950
+    expect(q.fee.amount).toBe(950);
+    expect(q.breakdown.some((b) => b.label === "Urgent delivery")).toBe(true);
+  });
+
+  it("does not add an urgent surcharge when the zone has none configured", async () => {
+    const { app } = makeApp({ rule: null, zones: [row("z1", "Kingston", 300, 50, null)] });
+    const q = await new FareEngine(app, new ZonesService(app)).quote({ fromPoint: KINGSTON, toPoint: PORTMORE, urgent: true });
+    expect(q.fee.amount).toBe(800); // unchanged from the non-urgent case
+    expect(q.breakdown.some((b) => b.label === "Urgent delivery")).toBe(false);
   });
 });
 

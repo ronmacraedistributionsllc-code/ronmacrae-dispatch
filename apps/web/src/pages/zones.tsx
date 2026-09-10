@@ -1,6 +1,8 @@
 import React, { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ApiError, apiFetch, formatMoney } from "../lib/api.js";
+import { useAuth } from "../lib/auth.js";
+import { ZoneManager } from "../components/zone-manager.js";
 import type { FareQuoteDto, GeoPoint, ZoneDto } from "@ronmacrae/contracts";
 
 interface FareRule {
@@ -32,6 +34,7 @@ function centroid(zone: ZoneDto): GeoPoint {
 }
 
 export function Zones(): React.JSX.Element {
+  const { user } = useAuth();
   const zones = useQuery({ queryKey: ["zones"], queryFn: () => apiFetch<{ zones: ZoneDto[] }>("/zones") });
   const rules = useQuery({
     queryKey: ["fare-rules"],
@@ -42,6 +45,7 @@ export function Zones(): React.JSX.Element {
   const [toId, setToId] = useState<string>("");
   const [express, setExpress] = useState(false);
   const [heavy, setHeavy] = useState(false);
+  const [urgent, setUrgent] = useState(false);
   const [quote, setQuote] = useState<FareQuoteDto | null>(null);
   const [quoting, setQuoting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -63,6 +67,7 @@ export function Zones(): React.JSX.Element {
           toZoneId: to.id,
           express,
           heavy,
+          urgent,
         }),
       });
       setQuote(q);
@@ -80,6 +85,8 @@ export function Zones(): React.JSX.Element {
         <h1 className="text-xl font-bold">Zones &amp; Fares</h1>
         <p className="text-sm text-zinc-400">Delivery areas, base fees and a quick fare quote</p>
       </header>
+
+      {user?.role === "admin" ? <ZoneManager /> : null}
 
       <section className="card">
         <div className="grid gap-4 md:grid-cols-2">
@@ -109,6 +116,10 @@ export function Zones(): React.JSX.Element {
             <label className="flex items-center gap-2 text-sm text-zinc-300">
               <input type="checkbox" checked={heavy} onChange={(e) => setHeavy(e.target.checked)} />
               Heavy item (+20%)
+            </label>
+            <label className="flex items-center gap-2 text-sm text-zinc-300">
+              <input type="checkbox" checked={urgent} onChange={(e) => setUrgent(e.target.checked)} />
+              Urgent (destination zone's surcharge)
             </label>
             <button className="btn ml-auto" disabled={!from || !to || quoting} onClick={() => void onQuote()}>
               {quoting ? "Quoting…" : "Quote fee"}
@@ -141,31 +152,33 @@ export function Zones(): React.JSX.Element {
         ) : null}
       </section>
 
-      <section className="card">
-        <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-zinc-400">Zones</h2>
-        <table className="w-full text-left text-sm">
-          <thead>
-            <tr className="text-xs uppercase tracking-wide text-zinc-500">
-              <th className="py-1 pr-4">Zone</th>
-              <th className="py-1 pr-4">Parish</th>
-              <th className="py-1 pr-4">Base fee</th>
-              <th className="py-1 pr-4">Per km</th>
-              <th className="py-1">Status</th>
-            </tr>
-          </thead>
-          <tbody>
-            {zones.data?.zones.map((z) => (
-              <tr key={z.id} className="border-t border-zinc-800">
-                <td className="py-2 pr-4 font-medium text-zinc-200">{z.name}</td>
-                <td className="py-2 pr-4 text-zinc-400">{z.parish ?? "–"}</td>
-                <td className="py-2 pr-4">{formatMoney(z.baseFee)}</td>
-                <td className="py-2 pr-4">{formatMoney(z.perKmFee)}</td>
-                <td className="py-2">{z.active ? "active" : "disabled"}</td>
+      {user?.role !== "admin" ? (
+        <section className="card">
+          <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-zinc-400">Zones</h2>
+          <table className="w-full text-left text-sm">
+            <thead>
+              <tr className="text-xs uppercase tracking-wide text-zinc-500">
+                <th className="py-1 pr-4">Zone</th>
+                <th className="py-1 pr-4">Parish</th>
+                <th className="py-1 pr-4">Base fee</th>
+                <th className="py-1 pr-4">Per km</th>
+                <th className="py-1">Status</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
-      </section>
+            </thead>
+            <tbody>
+              {zones.data?.zones.map((z) => (
+                <tr key={z.id} className="border-t border-zinc-800">
+                  <td className="py-2 pr-4 font-medium text-zinc-200">{z.name}</td>
+                  <td className="py-2 pr-4 text-zinc-400">{z.parish ?? "–"}</td>
+                  <td className="py-2 pr-4">{formatMoney(z.baseFee)}</td>
+                  <td className="py-2 pr-4">{formatMoney(z.perKmFee)}</td>
+                  <td className="py-2">{z.active ? "active" : "disabled"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </section>
+      ) : null}
 
       <section className="card">
         <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-zinc-400">Zone-pair fare rules</h2>

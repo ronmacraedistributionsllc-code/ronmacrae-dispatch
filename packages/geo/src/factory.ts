@@ -39,6 +39,7 @@ export class CompositeGeoProvider implements GeoProvider {
   readonly name = "composite";
   private primary: GeoProvider;
   private geocodeChain: ((q: string, bias?: GeoPoint) => Promise<GeocodeResult | null>)[];
+  private searchChain: ((q: string, bias?: GeoPoint, limit?: number) => Promise<GeocodeResult[]>)[];
   private readonly offline = new OfflineProvider();
   private readonly simulated = new SimulatedProvider();
   private readonly geocodeTimeoutMs: number;
@@ -57,18 +58,37 @@ export class CompositeGeoProvider implements GeoProvider {
 
     const bounded = (step: (q: string, b?: GeoPoint) => Promise<GeocodeResult | null>) =>
       (q: string, b?: GeoPoint) => withTimeout(step(q, b), this.geocodeTimeoutMs, null);
+    /** A provider without native multi-result support falls back to its single geocode(). */
+    const boundedSearch = (provider: Pick<GeoProvider, "geocode" | "searchAddresses">) =>
+      (q: string, b?: GeoPoint, limit?: number) =>
+        withTimeout(
+          provider.searchAddresses
+            ? provider.searchAddresses(q, b, limit)
+            : provider.geocode(q, b).then((r) => (r ? [r] : [])),
+          this.geocodeTimeoutMs,
+          [] as GeocodeResult[],
+        );
 
     const chain: ((q: string, bias?: GeoPoint) => Promise<GeocodeResult | null>)[] = [
       bounded((q, b) => this.primary.geocode(q, b)),
     ];
+    const searchChain: ((q: string, bias?: GeoPoint, limit?: number) => Promise<GeocodeResult[]>)[] = [
+      boundedSearch(this.primary),
+    ];
     if (cfg.jamnavEnabled || cfg.jamnavApiKey) {
       const jamnav = new JamnavProvider(cfg.jamnavApiKey || null);
       chain.push(bounded((q) => jamnav.geocode(q)));
+      searchChain.push(boundedSearch(jamnav));
     }
-    if (this.primary.name !== "osm") chain.push(bounded((q, b) => osm.geocode(q, b)));
+    if (this.primary.name !== "osm") {
+      chain.push(bounded((q, b) => osm.geocode(q, b)));
+      searchChain.push(boundedSearch(osm));
+    }
     // deterministic, network-free last resort: the preview always geocodes
     chain.push(bounded((q, b) => this.simulated.geocode(q, b)));
+    searchChain.push(boundedSearch(this.simulated));
     this.geocodeChain = chain;
+    this.searchChain = searchChain;
   }
 
   get routingProviderName(): string {
@@ -85,6 +105,26 @@ export class CompositeGeoProvider implements GeoProvider {
       }
     }
     return null;
+  }
+
+  /**
+   * Ranked address suggestions for a search-as-you-type UI. Same failover chain
+   * as geocode() (primary -> JAMNAV -> OSM -> deterministic offline), stopping at
+   * the first step that returns any results. The deterministic simulated
+   * provider guarantees this never throws / never returns empty for a non-blank
+   * query, but always as exactly one result labeled `provider: "simulated"` —
+   * callers should treat that as "address search is degraded" and say so.
+   */
+  async searchAddresses(query: string, bias?: GeoPoint, limit = 5): Promise<GeocodeResult[]> {
+    for (const step of this.searchChain) {
+      try {
+        const results = await step(query, bias, limit);
+        if (results.length > 0) return results;
+      } catch {
+        // try next in chain
+      }
+    }
+    return [];
   }
 
   async reverseGeocode(point: GeoPoint): Promise<string | null> {

@@ -46,9 +46,14 @@ function JobRow({ job, riders, canWrite, busy, offersOpen, onAssign, onUnassign,
   const moves = moveOptions(job.status);
 
   return (
-    <tr className="border-t border-zinc-800 align-top">
+    <tr className={`border-t align-top ${job.priority === "urgent" ? "border-red-900/40 bg-red-950/20" : "border-zinc-800"}`}>
       <td className="py-2 pr-3">
-        <div className="font-medium text-zinc-200">{job.jobNumber ?? job.id.slice(0, 8)}</div>
+        <div className="flex items-center gap-1.5">
+          <span className="font-medium text-zinc-200">{job.jobNumber ?? job.id.slice(0, 8)}</span>
+          {job.priority === "urgent" ? (
+            <span className="rounded bg-red-900/70 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-red-200">Urgent</span>
+          ) : null}
+        </div>
         <div className="text-xs text-zinc-500">
           {job.source} · {job.type}
         </div>

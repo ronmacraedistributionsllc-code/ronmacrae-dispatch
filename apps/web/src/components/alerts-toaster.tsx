@@ -13,9 +13,18 @@ interface ToastItem {
 function toastFor(msg: RealtimeMessage, isRider: boolean): { text: string; tone: ToastItem["tone"] } | null {
   if (msg.type === "offer" && isRider) {
     const route = [msg.payload.pickupArea, msg.payload.destinationArea].filter(Boolean).join(" → ");
-    return { text: `New delivery offer${route ? `: ${route}` : ""}`, tone: "info" };
+    const urgent = msg.payload.urgent ? "URGENT — " : "";
+    return { text: `${urgent}New delivery offer${route ? `: ${route}` : ""}`, tone: msg.payload.urgent ? "danger" : "info" };
   }
-  if (msg.type === "job.assigned" && !isRider) {
+  if (msg.type === "job.assigned") {
+    if (isRider) {
+      // Direct assignment only — a rider who just accepted their own offer doesn't
+      // need to be told they did the thing they just clicked.
+      if (msg.payload.source !== "assign") return null;
+      const label = msg.payload.job.jobNumber ?? msg.payload.job.id.slice(0, 8);
+      const urgent = msg.payload.job.priority === "urgent" ? "URGENT — " : "";
+      return { text: `${urgent}You've been assigned ${label}`, tone: msg.payload.job.priority === "urgent" ? "danger" : "info" };
+    }
     const label = msg.payload.job.jobNumber ?? msg.payload.job.id.slice(0, 8);
     return { text: `${label} assigned to ${msg.payload.job.riderName ?? "a rider"}`, tone: "info" };
   }

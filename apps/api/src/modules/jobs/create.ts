@@ -102,6 +102,7 @@ export async function createJob(
         fromPoint: body.pickupPoint as GeoPoint,
         toPoint: body.point as GeoPoint,
         express: body.priority === "express",
+        urgent: body.priority === "urgent",
       });
       feeMinor = quote.fee.amount;
     } catch {

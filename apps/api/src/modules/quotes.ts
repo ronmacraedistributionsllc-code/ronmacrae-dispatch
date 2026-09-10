@@ -67,6 +67,17 @@ export class FareEngine {
     }
     if (surcharge > 0) fee = Math.round(fee * (1 + surcharge));
 
+    // Urgent: a flat per-zone surcharge (not a percentage), set by the owner/admin
+    // on the destination zone. Applied after the percentage surcharges above, on
+    // top of the (already-surcharged) fee, since it's a separate flat add-on.
+    if (req.urgent && toZone.zoneId) {
+      const zone = await this.app.prisma.zone.findUnique({ where: { id: toZone.zoneId } });
+      if (zone?.urgentSurchargeFee) {
+        fee += zone.urgentSurchargeFee;
+        breakdown.push({ label: "Urgent delivery", amount: money(zone.urgentSurchargeFee, cur) });
+      }
+    }
+
     return {
       fare: money(0, cur), // product fare is supplied by the caller (order value)
       fee: money(fee, cur),
@@ -87,6 +98,7 @@ export const QuoteBody = z.object({
   express: z.boolean().default(false),
   heavy: z.boolean().default(false),
   weightKg: z.number().min(0).max(1000).optional(),
+  urgent: z.boolean().default(false),
 });
 
 export async function quoteRoutes(app: FastifyInstance, ctx: AppCtx): Promise<void> {

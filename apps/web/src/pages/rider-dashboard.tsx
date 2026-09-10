@@ -91,10 +91,13 @@ function OfferCard({ offer, onChanged }: { offer: JobOfferDto; onChanged: () => 
   const error = accept.error ?? decline.error;
   const expiresIn = Math.max(0, Math.round((new Date(offer.expiresAt).getTime() - Date.now()) / 60_000));
 
-  return <section className="card space-y-2 border border-sky-800/50">
+  return <section className={`card space-y-2 border ${offer.urgent ? "border-red-800/60" : "border-sky-800/50"}`}>
     <div className="flex items-start justify-between gap-3">
       <div>
-        <h2 className="font-semibold">{offer.pickupArea ?? "Pickup TBC"} → {offer.destinationArea ?? "Destination TBC"}</h2>
+        <h2 className="font-semibold">
+          {offer.urgent ? <span className="mr-2 rounded bg-red-900/70 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-red-200">Urgent</span> : null}
+          {offer.pickupArea ?? "Pickup TBC"} → {offer.destinationArea ?? "Destination TBC"}
+        </h2>
         <p className="text-xs text-zinc-400">{offer.itemSummary ?? "No item details"}</p>
       </div>
       <span className="whitespace-nowrap rounded bg-sky-900/50 px-2 py-1 text-xs font-medium text-sky-300">
@@ -128,13 +131,14 @@ function RiderJobCard({ job, onChanged }: { job: JobDto; onChanged: () => void }
     },
     onSuccess: () => { setAction(null); setNote(""); setPin(""); onChanged(); },
   });
+  const urgent = job.priority === "urgent";
   const fields = [
     ["Customer", `${job.customerName} · ${job.customerPhone}`], ["Pickup", job.pickupAddressText ?? "Not supplied"], ["Destination", job.addressText ?? "Not supplied"], ["Landmark", job.landmark ?? "—"],
     ["Products", job.itemSummary ?? "—"], ["Colour", job.itemColor ?? "—"], ["Size", job.itemSize ?? job.packageSize ?? "—"], ["Quantity", String(job.quantity ?? 1)],
-    ["Order value", formatMoney(job.fare)], ["Delivery fee", formatMoney(job.fee)], ["Payment", job.paymentMethod], ["COD amount", formatMoney(job.amountExpected)], ["Requested time", dateTime(job.scheduledAt)], ["Priority", job.priority], ["Instructions", job.instructions ?? "—"],
+    ["Order value", formatMoney(job.fare)], ["Delivery fee", formatMoney(job.fee)], ["Payment", job.paymentMethod], ["COD amount", formatMoney(job.amountExpected)], ["Requested date", dateTime(job.scheduledAt)], ["Instructions", job.instructions ?? "—"],
   ];
-  return <section className="card space-y-3">
-    <div className="flex items-start justify-between gap-3"><div><h2 className="font-semibold">{job.jobNumber ?? job.id.slice(0, 8)}</h2><p className="text-xs text-zinc-400">{job.status.replaceAll("_", " ")} · {job.stage.replaceAll("_", " ")}</p></div><span className="rounded bg-zinc-800 px-2 py-1 text-xs font-medium text-zinc-200">{job.priority}</span></div>
+  return <section className={`card space-y-3 ${urgent ? "border-red-900/50 bg-red-950/10" : ""}`}>
+    <div className="flex items-start justify-between gap-3"><div><h2 className="font-semibold">{job.jobNumber ?? job.id.slice(0, 8)}</h2><p className="text-xs text-zinc-400">{job.status.replaceAll("_", " ")} · {job.stage.replaceAll("_", " ")}</p></div><span className={`rounded px-2 py-1 text-xs font-medium ${urgent ? "bg-red-900/70 uppercase tracking-wide text-red-200" : "bg-zinc-800 text-zinc-200"}`}>{urgent ? "Urgent" : job.priority}</span></div>
     <dl className="grid gap-x-4 gap-y-2 text-sm sm:grid-cols-2">{fields.map(([label, value]) => <div key={label}><dt className="label !mb-0">{label}</dt><dd className="break-words text-zinc-200">{value}</dd></div>)}</dl>
     {job.pin ? <p className="rounded-lg bg-amber-900/30 p-3 text-sm text-amber-200">Delivery PIN: <strong className="tracking-widest">{job.pin}</strong></p> : null}
     {action ? <div className="space-y-2 rounded-lg border border-zinc-700 p-3"><p className="text-sm font-medium">{action.label}</p><label className="label" htmlFor={`note-${job.id}`}>Proof / action notes</label><textarea id={`note-${job.id}`} className="input min-h-20" value={note} onChange={(e) => setNote(e.target.value)} placeholder="Optional delivery proof or action note" />

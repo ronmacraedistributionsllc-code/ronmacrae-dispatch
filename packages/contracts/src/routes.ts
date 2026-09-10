@@ -51,6 +51,7 @@ export const API = {
     create: "/api/zones",
     get: (id: string) => `/api/zones/${id}`,
     update: (id: string) => `/api/zones/${id}`,
+    delete: (id: string) => `/api/zones/${id}`,
     detect: "/api/zones/detect",
     fareRules: "/api/zones/fare-rules",
   },
@@ -71,6 +72,7 @@ export const API = {
   /** public geocoding (rate limited); simulated fallback when no map provider */
   geo: {
     geocode: "/api/geo/geocode",
+    reverse: "/api/geo/reverse",
   },
 
   /** public delivery request (the store customer) */

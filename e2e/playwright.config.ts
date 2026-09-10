@@ -23,6 +23,10 @@ export default defineConfig({
     reuseExistingServer: !process.env.CI,
     env: {
       DEV_DB: "1",
+      // Isolated from the manually-used apps/api/data/dev.db on purpose: e2e runs
+      // must never grow or pollute the database a person is looking at in the
+      // preview. Same disposable-sqlite convention, different file.
+      DATABASE_URL: "file:./data/e2e-test.db",
       QUEUE_DRIVER: "memory",
       NOTIFICATION_PROVIDER: "memory",
       // self-sufficient: works whether or not the caller provides a secret

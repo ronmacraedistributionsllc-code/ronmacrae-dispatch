@@ -1,8 +1,10 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import type { CustomerDto, JobDto, JobSource, Priority, TrackingLinkDto } from "@ronmacrae/contracts";
+import type { CustomerDto, FareQuoteDto, JobDto, JobSource, TrackingLinkDto } from "@ronmacrae/contracts";
+import { API } from "@ronmacrae/contracts";
 import { ApiError, apiFetch } from "../lib/api.js";
 import { useAuth } from "../lib/auth.js";
+import { AddressPicker, type ConfirmedLocation } from "../components/address-picker.js";
 
 /** Store channels: where the order came from / which courier handles it. */
 export const CHANNELS: { value: JobSource; label: string }[] = [
@@ -24,11 +26,13 @@ export function paymentLabel(value: string): string {
   return value;
 }
 
+/** Store's default pickup — geocoded once on load, but always editable (same flow as the destination). */
+const DEFAULT_PICKUP_ADDRESS = "15-17 Half Way Tree Road, Kingston, Jamaica";
+
 interface FormState {
-  customerName: string;
+  firstName: string;
+  lastName: string;
   customerPhone: string;
-  pickup: string;
-  destination: string;
   landmark: string;
   product: string;
   colour: string;
@@ -37,17 +41,16 @@ interface FormState {
   orderValue: string;
   deliveryFee: string;
   payment: "cod" | "online";
-  requestedTime: string;
-  priority: Priority;
+  requestedDate: string;
+  urgent: boolean;
   channel: JobSource;
   instructions: string;
 }
 
 const EMPTY_FORM: FormState = {
-  customerName: "",
+  firstName: "",
+  lastName: "",
   customerPhone: "",
-  pickup: "",
-  destination: "",
   landmark: "",
   product: "",
   colour: "",
@@ -56,8 +59,8 @@ const EMPTY_FORM: FormState = {
   orderValue: "",
   deliveryFee: "",
   payment: "cod",
-  requestedTime: "",
-  priority: "normal",
+  requestedDate: "",
+  urgent: false,
   channel: "courier",
   instructions: "",
 };
@@ -67,14 +70,19 @@ export interface BookingResult {
   link: TrackingLinkDto | null;
 }
 
-/** Staff "book a delivery" form: the real store workflow, one screen. */
+/** Staff "book a delivery" form: address-first, one screen after the destination is confirmed. */
 export function NewJob(): React.JSX.Element {
   const { user } = useAuth();
   const canWrite = user?.role === "admin" || user?.role === "dispatcher";
 
+  const [destination, setDestination] = useState<ConfirmedLocation | null>(null);
+  const [pickup, setPickup] = useState<ConfirmedLocation | null>(null);
+  const [pickupLoadError, setPickupLoadError] = useState(false);
+
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
   const [selected, setSelected] = useState<CustomerDto | null>(null);
   const [matches, setMatches] = useState<CustomerDto[]>([]);
+  const [feeAutoFilled, setFeeAutoFilled] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [linkError, setLinkError] = useState<string | null>(null);
@@ -82,10 +90,31 @@ export function NewJob(): React.JSX.Element {
 
   const set = (patch: Partial<FormState>) => setForm((f) => ({ ...f, ...patch }));
 
-  // debounce customer search on name/phone (matches when the fields look edited)
-  const searchKey = `${form.customerName.trim().toLowerCase()}|${form.customerPhone.replace(/[^\d]/g, "")}`;
+  // Resolve the default pickup once — still fully editable via its own AddressPicker.
   useEffect(() => {
-    const name = form.customerName.trim();
+    let cancelled = false;
+    apiFetch<{ results: { point: { lat: number; lng: number }; label: string }[] }>(API.geo.geocode, {
+      method: "POST",
+      body: JSON.stringify({ query: DEFAULT_PICKUP_ADDRESS, limit: 1 }),
+    })
+      .then((r) => {
+        if (cancelled) return;
+        const first = r.results[0];
+        if (first) setPickup({ address: first.label, point: first.point });
+        else setPickupLoadError(true);
+      })
+      .catch(() => {
+        if (!cancelled) setPickupLoadError(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // debounce customer search on name/phone (matches when the fields look edited)
+  const searchKey = `${form.firstName.trim().toLowerCase()} ${form.lastName.trim().toLowerCase()}|${form.customerPhone.replace(/[^\d]/g, "")}`;
+  useEffect(() => {
+    const name = `${form.firstName.trim()} ${form.lastName.trim()}`.trim();
     const digits = form.customerPhone.replace(/[^\d]/g, "");
     if (name.length < 2 && digits.length < 7) {
       setMatches([]);
@@ -102,9 +131,31 @@ export function NewJob(): React.JSX.Element {
 
   const pickCustomer = (c: CustomerDto) => {
     setSelected(c);
-    set({ customerName: c.name, customerPhone: c.phone });
+    const [first, ...rest] = c.name.split(" ");
+    set({ firstName: first ?? c.name, lastName: rest.join(" ") });
     setMatches([]);
   };
+
+  // Auto-suggest the delivery fee once both points are known — the real zone/distance
+  // engine (POST /api/quotes), not a guess. The staff member can still override it by
+  // typing in the field directly; once they do, auto-fill stops touching it.
+  useEffect(() => {
+    if (!feeAutoFilled || !pickup || !destination) return;
+    let cancelled = false;
+    apiFetch<FareQuoteDto>(API.quotes.create, {
+      method: "POST",
+      body: JSON.stringify({ fromPoint: pickup.point, toPoint: destination.point, urgent: form.urgent }),
+    })
+      .then((q) => {
+        if (!cancelled) set({ deliveryFee: String(q.fee.amount) });
+      })
+      .catch(() => {
+        // no quote available (offline routing, no zone match) — leave the field for manual entry
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [pickup?.point.lat, pickup?.point.lng, destination?.point.lat, destination?.point.lng, form.urgent, feeAutoFilled]);
 
   const money = (raw: string): number | undefined => {
     const n = Number(raw);
@@ -113,24 +164,25 @@ export function NewJob(): React.JSX.Element {
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!canWrite) return;
+    if (!canWrite || !destination) return;
     setError(null);
-    if (form.customerName.trim().length < 1) return setError("Customer name is required");
+    if (form.firstName.trim().length < 1) return setError("Customer first name is required");
     if (form.customerPhone.replace(/[^\d]/g, "").length < 7) return setError("A valid customer phone is required");
-    if (form.destination.trim().length < 3) return setError("Destination address is required");
+    if (!pickup) return setError("Pickup location is required");
     if (form.product.trim().length < 1) return setError("Product is required");
 
     setBusy(true);
     setLinkError(null);
     try {
+      const fullName = form.lastName.trim() ? `${form.firstName.trim()} ${form.lastName.trim()}` : form.firstName.trim();
       let customerId = selected?.id ?? "";
       if (!customerId) {
         const created = await apiFetch<{ customer: CustomerDto }>("/customers", {
           method: "POST",
           body: JSON.stringify({
-            name: form.customerName.trim(),
+            name: fullName,
             phone: form.customerPhone.trim(),
-            addressText: form.destination.trim(),
+            addressText: destination.address,
             landmark: form.landmark.trim(),
           }),
         });
@@ -141,11 +193,13 @@ export function NewJob(): React.JSX.Element {
         body: JSON.stringify({
           customerId,
           type: "delivery",
-          priority: form.priority,
+          priority: form.urgent ? "urgent" : "normal",
           source: form.channel,
-          addressText: form.destination.trim(),
+          addressText: destination.address,
+          point: destination.point,
           landmark: form.landmark.trim() || undefined,
-          pickupAddressText: form.pickup.trim() || undefined,
+          pickupAddressText: pickup.address,
+          pickupPoint: pickup.point,
           itemSummary: form.product.trim(),
           quantity: Math.min(999, Math.max(1, Number(form.quantity) || 1)),
           itemSize: form.size.trim() || undefined,
@@ -153,7 +207,8 @@ export function NewJob(): React.JSX.Element {
           fare: money(form.orderValue),
           fee: money(form.deliveryFee),
           paymentMethod: form.payment,
-          scheduledAt: form.requestedTime ? new Date(form.requestedTime).toISOString() : undefined,
+          // Date-only in the UI; store at local noon so no timezone rollover flips the date.
+          scheduledAt: form.requestedDate ? new Date(`${form.requestedDate}T12:00:00`).toISOString() : undefined,
           instructions: form.instructions.trim() || undefined,
         }),
       });
@@ -169,6 +224,8 @@ export function NewJob(): React.JSX.Element {
       setForm(EMPTY_FORM);
       setSelected(null);
       setMatches([]);
+      setDestination(null);
+      setFeeAutoFilled(true);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Booking failed, please try again");
     } finally {
@@ -207,7 +264,7 @@ export function NewJob(): React.JSX.Element {
       <header className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="text-xl font-bold">Book a delivery</h1>
-          <p className="text-sm text-zinc-400">Key the order, and we'll book the job and the customer tracking link</p>
+          <p className="text-sm text-zinc-400">Confirm the destination first, then key the rest of the order</p>
         </div>
         <Link className="btn" to="/jobs">
           Jobs queue
@@ -215,271 +272,277 @@ export function NewJob(): React.JSX.Element {
       </header>
 
       <section className="card">
-        <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-zinc-400">Customer</h2>
-        <div className="grid gap-3 md:grid-cols-2">
-          <div>
-            <label className="label" htmlFor="nj-name">
-              Customer name
-            </label>
-            <input
-              id="nj-name"
-              className="input"
-              required
-              value={form.customerName}
-              onChange={(e) => {
-                setSelected(null);
-                set({ customerName: e.target.value });
+        <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-zinc-400">Step 1 — Delivery destination</h2>
+        <AddressPicker title="Destination address" value={destination} onChange={setDestination} required />
+      </section>
+
+      {destination ? (
+        <>
+          <section className="card">
+            <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-zinc-400">Customer</h2>
+            <div className="grid gap-3 md:grid-cols-3">
+              <div>
+                <label className="label" htmlFor="nj-first-name">
+                  First name
+                </label>
+                <input
+                  id="nj-first-name"
+                  className="input"
+                  required
+                  value={form.firstName}
+                  onChange={(e) => {
+                    setSelected(null);
+                    set({ firstName: e.target.value });
+                  }}
+                  placeholder="e.g. Shelly"
+                />
+              </div>
+              <div>
+                <label className="label" htmlFor="nj-last-name">
+                  Last name <span className="text-zinc-500">(optional)</span>
+                </label>
+                <input
+                  id="nj-last-name"
+                  className="input"
+                  value={form.lastName}
+                  onChange={(e) => {
+                    setSelected(null);
+                    set({ lastName: e.target.value });
+                  }}
+                  placeholder="e.g. Smith"
+                />
+              </div>
+              <div>
+                <label className="label" htmlFor="nj-phone">
+                  Phone
+                </label>
+                <input
+                  id="nj-phone"
+                  className="input"
+                  required
+                  type="tel"
+                  value={form.customerPhone}
+                  onChange={(e) => {
+                    setSelected(null);
+                    set({ customerPhone: e.target.value });
+                  }}
+                  placeholder="e.g. 876 555 1234"
+                />
+              </div>
+            </div>
+            {matches.length > 0 ? (
+              <div className="mt-2">
+                <div className="label">Known customers — click to reuse</div>
+                <ul className="divide-y divide-zinc-800 rounded-lg border border-zinc-800">
+                  {matches.map((c) => (
+                    <li key={c.id}>
+                      <button type="button" className="flex w-full items-center justify-between px-3 py-2 text-left text-sm hover:bg-zinc-800" onClick={() => pickCustomer(c)}>
+                        <span className="text-zinc-200">{c.name}</span>
+                        <span className="text-xs text-zinc-500">{c.phone}</span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+            {selected ? (
+              <p className="mt-2 text-xs text-emerald-400">
+                Booking for {selected.name} ({selected.phone})
+              </p>
+            ) : null}
+          </section>
+
+          <section className="card space-y-3">
+            <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-400">Pickup &amp; destination</h2>
+            {pickup ? (
+              <AddressPicker title="Pickup location" value={pickup} onChange={setPickup} bias={destination.point} required />
+            ) : pickupLoadError ? (
+              <AddressPicker title="Pickup location" value={null} onChange={setPickup} required />
+            ) : (
+              <p className="text-sm text-zinc-500">Loading default pickup location…</p>
+            )}
+            <AddressPicker title="Destination address" value={destination} onChange={setDestination} bias={pickup?.point} required />
+            <div>
+              <label className="label" htmlFor="nj-landmark">
+                Landmark <span className="text-zinc-500">(optional)</span>
+              </label>
+              <input
+                id="nj-landmark"
+                className="input"
+                value={form.landmark}
+                onChange={(e) => set({ landmark: e.target.value })}
+                placeholder="e.g. next to the church"
+              />
+            </div>
+          </section>
+
+          <section className="card">
+            <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-zinc-400">Product</h2>
+            <div className="grid gap-3 md:grid-cols-4">
+              <div className="md:col-span-2">
+                <label className="label" htmlFor="nj-product">
+                  Product
+                </label>
+                <input
+                  id="nj-product"
+                  className="input"
+                  required
+                  value={form.product}
+                  onChange={(e) => set({ product: e.target.value })}
+                  placeholder="e.g. Black bomber jacket"
+                />
+              </div>
+              <div>
+                <label className="label" htmlFor="nj-colour">
+                  Colour <span className="text-zinc-500">(optional)</span>
+                </label>
+                <input id="nj-colour" className="input" value={form.colour} onChange={(e) => set({ colour: e.target.value })} placeholder="e.g. Black" />
+              </div>
+              <div>
+                <label className="label" htmlFor="nj-size">
+                  Size <span className="text-zinc-500">(optional)</span>
+                </label>
+                <input id="nj-size" className="input" value={form.size} onChange={(e) => set({ size: e.target.value })} placeholder="e.g. Large" />
+              </div>
+              <div>
+                <label className="label" htmlFor="nj-quantity">
+                  Quantity
+                </label>
+                <input
+                  id="nj-quantity"
+                  className="input"
+                  type="number"
+                  min={1}
+                  max={999}
+                  required
+                  value={form.quantity}
+                  onChange={(e) => set({ quantity: e.target.value })}
+                />
+              </div>
+            </div>
+          </section>
+
+          <section className="card">
+            <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-zinc-400">Requested delivery</h2>
+            <div className="grid gap-3 md:grid-cols-3">
+              <div>
+                <label className="label" htmlFor="nj-date">
+                  Requested date
+                </label>
+                <input id="nj-date" className="input" type="date" value={form.requestedDate} onChange={(e) => set({ requestedDate: e.target.value })} />
+              </div>
+              <div className="flex items-end pb-2 md:col-span-2">
+                <label className="flex items-center gap-2 text-sm text-zinc-200">
+                  <input type="checkbox" checked={form.urgent} onChange={(e) => set({ urgent: e.target.checked })} />
+                  <span>
+                    <span className="font-medium text-amber-300">Urgent delivery</span> — this order should be completed sooner than a normal delivery
+                  </span>
+                </label>
+              </div>
+              <div>
+                <label className="label" htmlFor="nj-channel">
+                  Courier type
+                </label>
+                <select id="nj-channel" className="input" value={form.channel} onChange={(e) => set({ channel: e.target.value as JobSource })}>
+                  {CHANNELS.map((c) => (
+                    <option key={c.value} value={c.value}>
+                      {c.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="md:col-span-3">
+                <label className="label" htmlFor="nj-instructions">
+                  Delivery instructions <span className="text-zinc-500">(optional)</span>
+                </label>
+                <textarea
+                  id="nj-instructions"
+                  className="input min-h-20"
+                  rows={3}
+                  maxLength={500}
+                  value={form.instructions}
+                  onChange={(e) => set({ instructions: e.target.value })}
+                  placeholder="Gate code, who answers the phone, leave with the neighbour…"
+                />
+              </div>
+            </div>
+          </section>
+
+          <section className="card">
+            <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-zinc-400">Payment</h2>
+            <div className="grid gap-3 md:grid-cols-3">
+              <div>
+                <label className="label" htmlFor="nj-order-value">
+                  Order value <span className="text-zinc-500">(optional)</span>
+                </label>
+                <input
+                  id="nj-order-value"
+                  className="input"
+                  type="number"
+                  min={0}
+                  step="any"
+                  value={form.orderValue}
+                  onChange={(e) => set({ orderValue: e.target.value })}
+                  placeholder="0.00"
+                />
+              </div>
+              <div>
+                <label className="label" htmlFor="nj-fee">
+                  Delivery fee {feeAutoFilled ? <span className="text-zinc-500">(auto-calculated — edit to override)</span> : null}
+                </label>
+                <input
+                  id="nj-fee"
+                  className="input"
+                  type="number"
+                  min={0}
+                  step="any"
+                  value={form.deliveryFee}
+                  onChange={(e) => {
+                    setFeeAutoFilled(false);
+                    set({ deliveryFee: e.target.value });
+                  }}
+                  placeholder="e.g. 350"
+                />
+              </div>
+              <div>
+                <label className="label" htmlFor="nj-payment">
+                  Payment
+                </label>
+                <select id="nj-payment" className="input" value={form.payment} onChange={(e) => set({ payment: e.target.value as "cod" | "online" })}>
+                  <option value="cod">Cash on delivery</option>
+                  <option value="online">Paid online</option>
+                </select>
+              </div>
+            </div>
+          </section>
+
+          {error ? <p className="text-sm text-red-400">{error}</p> : null}
+
+          <div className="flex items-center gap-3">
+            <button className="btn" type="submit" disabled={busy}>
+              {busy ? "Booking…" : "Book delivery"}
+            </button>
+            <button
+              className="btn-accent"
+              type="button"
+              disabled={busy}
+              onClick={() => {
+                setForm((f) => ({ ...EMPTY_FORM, channel: f.channel }));
+                setDestination(null);
+                setFeeAutoFilled(true);
               }}
-              placeholder="e.g. Shelly Smith"
-            />
-          </div>
-          <div>
-            <label className="label" htmlFor="nj-phone">
-              Phone
-            </label>
-            <input
-              id="nj-phone"
-              className="input"
-              required
-              type="tel"
-              value={form.customerPhone}
-              onChange={(e) => {
-                setSelected(null);
-                set({ customerPhone: e.target.value });
-              }}
-              placeholder="e.g. 876 555 1234"
-            />
-          </div>
-        </div>
-        {matches.length > 0 ? (
-          <div className="mt-2">
-            <div className="label">Known customers — click to reuse</div>
-            <ul className="divide-y divide-zinc-800 rounded-lg border border-zinc-800">
-              {matches.map((c) => (
-                <li key={c.id}>
-                  <button type="button" className="flex w-full items-center justify-between px-3 py-2 text-left text-sm hover:bg-zinc-800" onClick={() => pickCustomer(c)}>
-                    <span className="text-zinc-200">{c.name}</span>
-                    <span className="text-xs text-zinc-500">{c.phone}</span>
-                  </button>
-                </li>
-              ))}
-            </ul>
-          </div>
-        ) : null}
-        {selected ? (
-          <p className="mt-2 text-xs text-emerald-400">
-            Booking for {selected.name} ({selected.phone})
-          </p>
-        ) : null}
-      </section>
-
-      <section className="card">
-        <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-zinc-400">Pickup &amp; destination</h2>
-        <div className="grid gap-3 md:grid-cols-3">
-          <div>
-            <label className="label" htmlFor="nj-pickup">
-              Pickup
-            </label>
-            <input
-              id="nj-pickup"
-              className="input"
-              value={form.pickup}
-              onChange={(e) => set({ pickup: e.target.value })}
-              placeholder="Store address (if not the usual)"
-            />
-          </div>
-          <div>
-            <label className="label" htmlFor="nj-destination">
-              Destination
-            </label>
-            <input
-              id="nj-destination"
-              className="input"
-              required
-              value={form.destination}
-              onChange={(e) => set({ destination: e.target.value })}
-              placeholder="Street, area, town"
-            />
-          </div>
-          <div>
-            <label className="label" htmlFor="nj-landmark">
-              Landmark
-            </label>
-            <input
-              id="nj-landmark"
-              className="input"
-              value={form.landmark}
-              onChange={(e) => set({ landmark: e.target.value })}
-              placeholder="e.g. next to the church"
-            />
-          </div>
-        </div>
-      </section>
-
-      <section className="card">
-        <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-zinc-400">Product</h2>
-        <div className="grid gap-3 md:grid-cols-4">
-          <div className="md:col-span-2">
-            <label className="label" htmlFor="nj-product">
-              Product
-            </label>
-            <input
-              id="nj-product"
-              className="input"
-              required
-              value={form.product}
-              onChange={(e) => set({ product: e.target.value })}
-              placeholder="e.g. Black bomber jacket"
-            />
-          </div>
-          <div>
-            <label className="label" htmlFor="nj-colour">
-              Colour
-            </label>
-            <input id="nj-colour" className="input" value={form.colour} onChange={(e) => set({ colour: e.target.value })} placeholder="e.g. Black" />
-          </div>
-          <div>
-            <label className="label" htmlFor="nj-size">
-              Size
-            </label>
-            <input id="nj-size" className="input" value={form.size} onChange={(e) => set({ size: e.target.value })} placeholder="e.g. Large" />
-          </div>
-          <div>
-            <label className="label" htmlFor="nj-quantity">
-              Quantity
-            </label>
-            <input
-              id="nj-quantity"
-              className="input"
-              type="number"
-              min={1}
-              max={999}
-              value={form.quantity}
-              onChange={(e) => set({ quantity: e.target.value })}
-            />
-          </div>
-        </div>
-      </section>
-
-      <section className="card">
-        <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-zinc-400">Payment &amp; timing</h2>
-        <div className="grid gap-3 md:grid-cols-4">
-          <div>
-            <label className="label" htmlFor="nj-order-value">
-              Order value
-            </label>
-            <input
-              id="nj-order-value"
-              className="input"
-              type="number"
-              min={0}
-              step="any"
-              value={form.orderValue}
-              onChange={(e) => set({ orderValue: e.target.value })}
-              placeholder="0.00"
-            />
-          </div>
-          <div>
-            <label className="label" htmlFor="nj-fee">
-              Delivery fee
-            </label>
-            <input
-              id="nj-fee"
-              className="input"
-              type="number"
-              min={0}
-              step="any"
-              value={form.deliveryFee}
-              onChange={(e) => set({ deliveryFee: e.target.value })}
-              placeholder="e.g. 350"
-            />
-          </div>
-          <div>
-            <label className="label" htmlFor="nj-payment">
-              Payment
-            </label>
-            <select
-              id="nj-payment"
-              className="input"
-              value={form.payment}
-              onChange={(e) => set({ payment: e.target.value as "cod" | "online" })}
             >
-              <option value="cod">Cash on delivery</option>
-              <option value="online">Paid online</option>
-            </select>
+              Clear
+            </button>
           </div>
-          <div>
-            <label className="label" htmlFor="nj-time">
-              Requested time
-            </label>
-            <input
-              id="nj-time"
-              className="input"
-              type="datetime-local"
-              value={form.requestedTime}
-              onChange={(e) => set({ requestedTime: e.target.value })}
-            />
-          </div>
-        </div>
-      </section>
-
-      <section className="card">
-        <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-zinc-400">Courier &amp; priority</h2>
-        <div className="grid gap-3 md:grid-cols-2">
-          <div>
-            <label className="label" htmlFor="nj-channel">
-              Courier type
-            </label>
-            <select id="nj-channel" className="input" value={form.channel} onChange={(e) => set({ channel: e.target.value as JobSource })}>
-              {CHANNELS.map((c) => (
-                <option key={c.value} value={c.value}>
-                  {c.label}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <label className="label" htmlFor="nj-priority">
-              Priority
-            </label>
-            <select id="nj-priority" className="input" value={form.priority} onChange={(e) => set({ priority: e.target.value as Priority })}>
-              <option value="normal">Normal</option>
-              <option value="express">Express</option>
-              <option value="urgent">Urgent</option>
-            </select>
-          </div>
-          <div className="md:col-span-2">
-            <label className="label" htmlFor="nj-instructions">
-              Delivery instructions
-            </label>
-            <textarea
-              id="nj-instructions"
-              className="input min-h-20"
-              rows={3}
-              maxLength={500}
-              value={form.instructions}
-              onChange={(e) => set({ instructions: e.target.value })}
-              placeholder="Gate code, who answers the phone, leave with the neighbour…"
-            />
-          </div>
-        </div>
-      </section>
-
-      {error ? <p className="text-sm text-red-400">{error}</p> : null}
-
-      <div className="flex items-center gap-3">
-        <button className="btn" type="submit" disabled={busy}>
-          {busy ? "Booking…" : "Book delivery"}
-        </button>
-        <button className="btn-accent" type="button" disabled={busy} onClick={() => setForm((f) => ({ ...EMPTY_FORM, priority: f.priority, channel: f.channel }))}>
-          Clear
-        </button>
-      </div>
+        </>
+      ) : null}
 
       {result ? (
         <section className="card border-emerald-800/60 bg-emerald-950/30">
           <h2 className="text-base font-semibold text-emerald-300">
             Booked — {result.job.jobNumber ?? result.job.id.slice(0, 8)}
+            {result.job.priority === "urgent" ? <span className="ml-2 rounded bg-red-900/60 px-2 py-0.5 text-xs font-medium text-red-200">URGENT</span> : null}
           </h2>
           <p className="mt-1 text-sm text-zinc-400">
             {result.job.customerName} · {channelLabel(result.job.source)} · {paymentLabel(result.job.paymentMethod)}

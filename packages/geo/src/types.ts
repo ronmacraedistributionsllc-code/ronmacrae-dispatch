@@ -38,6 +38,12 @@ export interface MatrixCell {
 export interface GeoProvider {
   readonly name: string;
   geocode(query: string, bias?: GeoPoint): Promise<GeocodeResult | null>;
+  /**
+   * Multiple ranked candidates, for an address-search-with-suggestions UI.
+   * Optional — a provider without native multi-result support can omit it;
+   * callers (see CompositeGeoProvider.searchAddresses) fall back to geocode().
+   */
+  searchAddresses?(query: string, bias?: GeoPoint, limit?: number): Promise<GeocodeResult[]>;
   reverseGeocode(point: GeoPoint): Promise<string | null>;
   route(points: GeoPoint[], mode: RouteMode): Promise<Route>;
   matrix(from: GeoPoint, to: GeoPoint[], mode: RouteMode): Promise<MatrixCell[]>;
@@ -97,6 +103,26 @@ export function centroidOf(zone: ZoneGeometry): GeoPoint {
     }
   }
   return n > 0 ? { lat: lat / n, lng: lng / n } : { lat: 17.9714, lng: -76.7932 };
+}
+
+/**
+ * A simple rectangular zone polygon centered on a point — the same shape
+ * `apps/api/src/seed.ts` already builds for the seeded zones. Shared here so an
+ * admin creating a new fee zone from a geocoded address gets a real,
+ * point-in-polygon-usable geometry without needing a polygon-drawing UI.
+ */
+export function squareZoneGeometry(center: GeoPoint, radiusKm = 3): ZoneGeometry {
+  // ~111.32 km per degree latitude; longitude degrees shrink with cos(latitude).
+  const dLat = radiusKm / 111.32;
+  const dLng = radiusKm / (111.32 * Math.max(0.2, Math.cos((center.lat * Math.PI) / 180)));
+  const ring: [number, number][] = [
+    [center.lng - dLng, center.lat - dLat],
+    [center.lng + dLng, center.lat - dLat],
+    [center.lng + dLng, center.lat + dLat],
+    [center.lng - dLng, center.lat + dLat],
+    [center.lng - dLng, center.lat - dLat],
+  ];
+  return { type: "Polygon", coordinates: [ring] };
 }
 
 export function formatDistance(m: number | null): string {

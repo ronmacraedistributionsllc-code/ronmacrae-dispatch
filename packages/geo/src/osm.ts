@@ -11,7 +11,7 @@ export class OsmProvider implements GeoProvider {
   readonly name = "osm";
   private nominatim = new RateLimiter(1100);
   private osrm = new RateLimiter(250);
-  private geocodeCache = new TtlCache<GeocodeResult>(1000 * 60 * 60 * 24, 5000);
+  private searchCache = new TtlCache<GeocodeResult[]>(1000 * 60 * 60 * 24, 5000);
   private reverseCache = new TtlCache<string>(1000 * 60 * 60 * 24, 5000);
   private matrixCache = new TtlCache<MatrixCell[]>(1000 * 60 * 30, 1000);
 
@@ -23,14 +23,19 @@ export class OsmProvider implements GeoProvider {
   ) {}
 
   async geocode(query: string, bias?: GeoPoint): Promise<GeocodeResult | null> {
-    const key = `geo:${query}`;
-    const cached = this.geocodeCache.get(key);
+    const results = await this.searchAddresses(query, bias, 1);
+    return results[0] ?? null;
+  }
+
+  async searchAddresses(query: string, bias?: GeoPoint, limit = 5): Promise<GeocodeResult[]> {
+    const key = `search:${limit}:${bias ? `${bias.lat.toFixed(3)},${bias.lng.toFixed(3)}` : ""}:${query}`;
+    const cached = this.searchCache.get(key);
     if (cached) return cached;
     await this.nominatim.wait();
     const url = new URL(`${this.base.nominatim}/search`);
     url.searchParams.set("q", query);
     url.searchParams.set("format", "jsonv2");
-    url.searchParams.set("limit", "5");
+    url.searchParams.set("limit", String(Math.max(1, Math.min(10, limit))));
     if (bias) {
       url.searchParams.set("viewbox", `${bias.lng - 0.2},${bias.lat - 0.2},${bias.lng + 0.2},${bias.lat + 0.2}`);
       url.searchParams.set("bounded", "1");
@@ -40,16 +45,16 @@ export class OsmProvider implements GeoProvider {
       lat?: string;
       lon?: string;
     }[];
-    const first = data[0];
-    if (!first?.lat || !first.lon) return null;
-    const result: GeocodeResult = {
-      point: { lat: Number(first.lat), lng: Number(first.lon) },
-      label: first.display_name ?? query,
-      confidence: "medium",
-      provider: this.name,
-    };
-    this.geocodeCache.set(key, result);
-    return result;
+    const results: GeocodeResult[] = data
+      .filter((d) => d.lat && d.lon)
+      .map((d) => ({
+        point: { lat: Number(d.lat), lng: Number(d.lon) },
+        label: d.display_name ?? query,
+        confidence: "medium" as const,
+        provider: this.name,
+      }));
+    this.searchCache.set(key, results);
+    return results;
   }
 
   async reverseGeocode(point: GeoPoint): Promise<string | null> {
