@@ -1,0 +1,27 @@
+# Gitleaks - secret scanning baseline (used by CI)
+title = Ronmacrae Dispatch Secret Detection
+
+[allowlist]
+description = "Safe files"
+paths = [
+  'package-lock\.json',
+  '\.env\.example$',
+  'docker-compose\.yml',
+]
+regexes = ["\"SESSION_SECRET=change-me-to-a-long-random-string\""]
+
+[secrets]
+# Twilio
+[id] = "twilio-account-sid"
+regex = '''(AC)[a-f0-9]{32}'''
+description = "Twilio Account SID"
+
+# Google
+[id] = "google-api-key"
+regex = '''(AIza)[0-9A-Za-z\-_]{35}'''
+description = "Google API key"
+
+# Generic high-entropy secret assignments
+[id] = "high-entropy-secret"
+regex = '''(password|passwd|pwd|token|secret|api_?key)\s*[:=]\s*['"]?[A-Za-z0-9+/\-=_]{32,}['"]?'''
+description = "Possible hardcoded secret"

@@ -1,0 +1,42 @@
+{
+  "name": "ronmacrae-dispatch",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Store delivery dispatch system for Jamaica - dispatcher, bearer and customer interfaces",
+  "workspaces": [
+    "packages/*",
+    "apps/*",
+    "e2e"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "lint": "eslint .",
+    "test": "npm run test --workspaces --if-present",
+    "test:unit": "npm run test:unit --workspaces --if-present",
+    "dev": "npm run dev --workspace @ronmacrae/api & npm run dev --workspace @ronmacrae/web",
+    "seed": "npm run seed --workspace @ronmacrae/api",
+    "preview:api": "npm run preview --workspace @ronmacrae/api",
+    "preview:web": "npm run preview --workspace @ronmacrae/web",
+    "e2e": "npm run test --workspace @ronmacrae/e2e",
+    "db:prepare": "npm run db:prepare --workspace @ronmacrae/api"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.17.0",
+    "eslint": "^9.17.0",
+    "prettier": "^3.4.2",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.70.0"
+  },
+  "allowScripts": {
+    "@prisma/client@6.19.3": true,
+    "@prisma/engines@6.19.3": true,
+    "prisma@6.19.3": true,
+    "esbuild@0.28.2": true,
+    "esbuild@0.21.5": true,
+    "msgpackr-extract@3.0.4": true
+  }
+}

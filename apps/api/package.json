@@ -1,0 +1,47 @@
+{
+  "name": "@ronmacrae/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "db:prepare": "node ./scripts/prepare-db.mjs",
+    "prebuild": "node ./scripts/prepare-db.mjs",
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "dev": "node ./scripts/prepare-db.mjs && tsx watch src/main.ts",
+    "start": "node ./scripts/prepare-db.mjs && node dist/main.js",
+    "preview": "node ./scripts/prepare-db.mjs && node dist/main.js",
+    "seed": "node ./scripts/prepare-db.mjs && tsx src/seed.ts",
+    "test:unit": "vitest run",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@fastify/cookie": "^11.1.2",
+    "@fastify/jwt": "^10.2.2",
+    "@fastify/multipart": "^10.1.1",
+    "@fastify/rate-limit": "^11.2.0",
+    "@fastify/sensible": "^6.0.5",
+    "@fastify/static": "^10.1.3",
+    "@fastify/websocket": "^11.3.0",
+    "@prisma/client": "^6.19.3",
+    "@ronmacrae/contracts": "*",
+    "@ronmacrae/geo": "*",
+    "@ronmacrae/money": "*",
+    "@ronmacrae/notifications": "*",
+    "bullmq": "^6.3.4",
+    "fastify": "^5.12.3",
+    "ioredis": "^6.0.0",
+    "jose": "^6.2.12",
+    "pino": "^9.6.0",
+    "ws": "^8.21.3",
+    "zod": "^4.5.4"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "@types/ws": "^8.18.1",
+    "prisma": "^6.19.3",
+    "tsx": "^4.23.13",
+    "typescript": "^5.9.3",
+    "vitest": "^2.1.9"
+  }
+}

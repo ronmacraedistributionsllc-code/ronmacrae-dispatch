@@ -1,0 +1,49 @@
+# Production-like local stack (requires Docker).
+# The portable zero-service preview (DEV_DB=1, QUEUE_DRIVER=memory) does NOT need this.
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: rmd
+      POSTGRES_PASSWORD: change-me
+      POSTGRES_DB: rondispatch
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rmd"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file: .env
+    environment:
+      DEV_DB: "0"
+      DATABASE_URL: postgresql://rmd:change-me@postgres:5432/rondispatch
+      REDIS_URL: redis://redis:6379
+      QUEUE_DRIVER: bullmq
+    ports:
+      - "3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+volumes:
+  pgdata:

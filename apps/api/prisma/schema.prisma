@@ -1,0 +1,641 @@
+// Canonical schema. The datasource provider is templated by scripts/prepare-db.mjs:
+//   - postgresql for production (DigitalOcean managed)
+//   - sqlite     for zero-service local preview / CI
+// All field types are portable across both providers (no pg-specific @db.*).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------- Auth & identity ----------
+
+enum Role {
+  admin
+  dispatcher
+  accountant
+  viewer
+  rider
+}
+
+model User {
+  id           String   @id @default(cuid())
+  email        String?  @unique
+  phone        String?  @unique
+  passwordHash String
+  name         String
+  role         Role     @default(viewer)
+  totpSecret   String?
+  totpEnabled  Boolean  @default(false)
+  active       Boolean  @default(true)
+  lastLoginAt  DateTime?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  rider     Rider?
+  sessions  Session[]
+  audits    AuditLog[]
+  payouts   Payout[]           @relation("payoutApprover")
+  recon     ReconDaily[]       @relation("reconResolver")
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String   @unique
+  userAgent String?
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+}
+
+// ---------- Bearer (rider) ----------
+
+enum VehicleType {
+  motorcycle
+  car
+}
+
+enum RiderStatus {
+  offline
+  available
+  on_job
+  unavailable
+}
+
+model Rider {
+  id                 String      @id @default(cuid())
+  userId             String?     @unique
+  user               User?       @relation(fields: [userId], references: [id], onDelete: SetNull)
+  name               String
+  phone              String      @unique
+  vehicle            VehicleType @default(motorcycle)
+  plate              String?
+  photoUrl           String?
+  homeZoneId         String?
+  homeZone           Zone?       @relation("riderHomeZone", fields: [homeZoneId], references: [id], onDelete: SetNull)
+  basePoint          Json?
+  status             RiderStatus @default(offline)
+  dailyCapacity      Int         @default(15)
+  payRate            Int?
+  payCurrency        String      @default("JMD")
+  active             Boolean     @default(true)
+  createdAt          DateTime    @default(now())
+  updatedAt          DateTime    @updatedAt
+
+  jobs        Job[]
+  assignments RiderAssignment[]
+  locations   RiderLocation[]
+  routes      Route[]
+  recon       ReconDaily[]
+  payouts     Payout[]
+  alerts      SosAlert[]
+  offers      JobOffer[]
+}
+
+// ---------- Geography / pricing ----------
+
+model Zone {
+  id         String   @id @default(cuid())
+  name       String
+  slug       String   @unique
+  parish     String?
+  geometry   Json
+  baseFee    Int      @default(0)
+  feeCurrency String  @default("JMD")
+  perKmFee   Int?
+  active     Boolean  @default(true)
+  version    Int      @default(1)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  customers Customer[] @relation("customerZone")
+  jobs      Job[]      @relation("jobZone")
+  homeRiders Rider[]   @relation("riderHomeZone")
+}
+
+model FareRule {
+  id         String   @id @default(cuid())
+  fromZoneId String
+  toZoneId   String
+  fee        Int
+  currency   String   @default("JMD")
+  minFee     Int?
+  note       String?
+  validFrom  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([fromZoneId, toZoneId])
+}
+
+// ---------- Customers ----------
+
+model Customer {
+  id               String    @id @default(cuid())
+  name             String
+  phone            String    @unique
+  email            String?
+  addressText      String?
+  landmark         String?
+  point            Json?
+  zoneId           String?
+  zone             Zone?      @relation("customerZone", fields: [zoneId], references: [id], onDelete: SetNull)
+  preferredChannel String?
+  consentTracking  Boolean   @default(false)
+  consentTrackingAt DateTime?
+  consentMarketing Boolean   @default(false)
+  note             String?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  jobs    Job[]
+  consents ConsentRecord[]
+}
+
+// ---------- Jobs ----------
+
+enum JobType {
+  pickup
+  delivery
+  pickup_delivery
+  return
+}
+
+enum JobStatus {
+  new
+  assigned
+  accepted
+  picked_up
+  in_transit
+  delivering
+  delivered
+  no_answer
+  location_changed
+  failed
+  returned
+  cancelled
+}
+
+enum Priority {
+  normal
+  express
+  urgent
+}
+
+enum PaymentMethod {
+  cod
+  online
+  card
+  transfer
+}
+
+enum PaymentStatus {
+  unpaid
+  partial
+  paid
+}
+
+enum FailureReason {
+  no_answer
+  refused
+  wrong_number
+  address_not_found
+  damaged
+  absent
+  other
+}
+
+/// Rider sub-progress inside the current status (rider-face detail; recorded as events).
+enum RiderStage {
+  none
+  heading_to_pickup
+  at_pickup
+  heading_to_dropoff
+}
+
+model Job {
+  id               String        @id @default(cuid())
+  jobNumber        String?       @unique
+  externalRef      String?       @unique
+  source           String        @default("manual")
+  originalJobId    String?
+  customerId       String
+  customer         Customer      @relation(fields: [customerId], references: [id])
+  type             JobType       @default(delivery)
+  status           JobStatus     @default(new)
+  priority         Priority      @default(normal)
+  addressText        String?
+  landmark           String?
+  point              Json?
+  pickupPoint        Json?
+  pickupAddressText  String?
+  pickupContact      String?
+  itemSummary        String?
+  quantity           Int?
+  itemSize           String?
+  itemColor          String?
+  packageSize        String?
+  instructions       String?
+  stage              RiderStage @default(none)
+  zoneId             String?
+  zone               Zone?        @relation("jobZone", fields: [zoneId], references: [id], onDelete: SetNull)
+  vehicle            VehicleType?
+  fare             Int?
+  fee              Int?
+  subtotal         Int?
+  currency         String        @default("JMD")
+  paymentMethod    PaymentMethod @default(cod)
+  paymentStatus    PaymentStatus @default(unpaid)
+  pin              String?
+  amountExpected   Int?
+  amountCollected  Int?
+  failureReason    FailureReason?
+  failureNote      String?
+  riderId          String?
+  rider            Rider?        @relation(fields: [riderId], references: [id], onDelete: SetNull)
+  routeSeq         Int?
+  routeEta         DateTime?
+  scheduledAt      DateTime?
+  promisedAt       DateTime?
+  completedAt      DateTime?
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+
+  assignments RiderAssignment[]
+  events    JobEvent[]
+  proofs    Proof[]
+  link      TrackingLink?
+  alerts    SosAlert[]
+  offers    JobOffer[]
+  stops     RouteStop[]
+  payoutLines PayoutLine[]
+}
+
+enum OfferStatus {
+  open
+  accepted
+  declined
+  withdrawn
+  expired
+}
+
+/// A time-bound invitation to a rider. Direct assignment remains on Job;
+/// offers are an auditable, race-safe way to let an eligible rider claim it.
+model JobOffer {
+  id        String      @id @default(cuid())
+  jobId     String
+  job       Job         @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  riderId   String
+  rider     Rider       @relation(fields: [riderId], references: [id], onDelete: Cascade)
+  status    OfferStatus @default(open)
+  expiresAt DateTime
+  note      String?
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+
+  @@index([riderId, status, expiresAt])
+  @@index([jobId, status])
+}
+
+enum AssignmentStatus {
+  assigned
+  accepted
+  declined
+  reassigned
+}
+
+model RiderAssignment {
+  id        String           @id @default(cuid())
+  jobId     String
+  job       Job              @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  riderId   String
+  rider     Rider            @relation(fields: [riderId], references: [id], onDelete: Cascade)
+  status    AssignmentStatus @default(assigned)
+  reason    String?
+  oldRiderId String?
+  at        DateTime         @default(now())
+
+  @@index([jobId])
+  @@index([riderId, at])
+}
+
+model JobEvent {
+  id        String   @id @default(cuid())
+  jobId     String
+  job       Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  from      String?
+  to        String
+  actorType String   @default("system")
+  actorId   String?
+  actorName String?
+  note      String?
+  meta      Json?
+  at        DateTime @default(now())
+
+  @@index([jobId, at])
+}
+
+// ---------- Routing ----------
+
+enum RouteStatus {
+  planned
+  active
+  abandoned
+  completed
+}
+
+model Route {
+  id             String        @id @default(cuid())
+  riderId        String
+  rider          Rider         @relation(fields: [riderId], references: [id], onDelete: Cascade)
+  date           DateTime
+  status         RouteStatus   @default(planned)
+  totalDistanceM Int?
+  totalDurationS Int?
+  provider       String?
+  createdAt      DateTime      @default(now())
+
+  stops RouteStop[]
+
+  @@index([riderId, date])
+}
+
+model RouteStop {
+  id          String   @id @default(cuid())
+  routeId     String
+  route       Route    @relation(fields: [routeId], references: [id], onDelete: Cascade)
+  jobId       String
+  job         Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  seq         Int
+  point       Json
+  customerName String?
+  addressText String?
+  etaAt       DateTime?
+
+  @@index([routeId, seq])
+}
+
+// ---------- Live location ----------
+
+model RiderLocation {
+  id            String   @id @default(cuid())
+  riderId       String
+  rider         Rider    @relation(fields: [riderId], references: [id], onDelete: Cascade)
+  point         Json
+  heading       Float?
+  speedKph      Float?
+  battery       Int?
+  trackingState String   @default("active")
+  clientSeq     Int
+  at            DateTime @default(now())
+
+  @@index([riderId, at])
+}
+
+// ---------- Evidence ----------
+
+enum ProofKind {
+  pickup_photo
+  delivery_photo
+  receipt_photo
+  signature
+  package_photo
+}
+
+model Proof {
+  id       String     @id @default(cuid())
+  jobId    String
+  job      Job        @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  kind     ProofKind
+  filename String
+  url      String
+  hash     String
+  size     Int
+  point    Json?
+  at       DateTime   @default(now())
+
+  @@index([jobId])
+}
+
+// ---------- Customer tracking link ----------
+
+model TrackingLink {
+  id           String    @id @default(cuid())
+  jobId        String    @unique
+  job          Job       @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  token        String    @unique
+  expiresAt    DateTime
+  revoked      Boolean   @default(false)
+  lastAccessAt DateTime?
+  createdAt    DateTime  @default(now())
+
+  @@index([expiresAt])
+}
+
+// ---------- Consent ----------
+
+enum ConsentScope {
+  live_tracking
+  marketing
+  contacts
+}
+
+model ConsentRecord {
+  id         String       @id @default(cuid())
+  subjectType String     @default("customer")
+  subjectId  String
+  customer   Customer?    @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  scope      ConsentScope
+  granted    Boolean
+  channel    String?
+  at         DateTime     @default(now())
+
+  @@index([subjectType, subjectId])
+}
+
+// ---------- Notifications (outbox) ----------
+
+enum NotificationChannel {
+  whatsapp
+  sms
+  push
+  in_app
+}
+
+enum NotificationStatus {
+  queued
+  sending
+  delivered
+  failed
+  suppressed
+}
+
+model OutboxMessage {
+  id          String              @id @default(cuid())
+  channel     NotificationChannel
+  to          String
+  template    String
+  params      Json
+  jobId       String?
+  status      NotificationStatus  @default(queued)
+  provider    String
+  providerRef String?
+  error       String?
+  attempts    Int                 @default(0)
+  scheduledAt DateTime?
+  sentAt      DateTime?
+  costMinor   Int?
+  costCurrency String?
+  createdAt   DateTime            @default(now())
+
+  @@index([status, scheduledAt])
+}
+
+// ---------- Money: reconciliation & payouts ----------
+
+enum ReconStatus {
+  open
+  matched
+  shortage
+  overage
+  investigating
+  resolved
+}
+
+model ReconDaily {
+  id           String       @id @default(cuid())
+  riderId      String
+  rider        Rider        @relation(fields: [riderId], references: [id], onDelete: Cascade)
+  date         String
+  expected     Int
+  collected    Int
+  declared     Int?
+  variance     Int
+  currency     String       @default("JMD")
+  status       ReconStatus  @default(open)
+  note         String?
+  resolvedById String?
+  resolvedBy   User?        @relation("reconResolver", fields: [resolvedById], references: [id], onDelete: SetNull)
+  resolvedAt   DateTime?
+
+  @@unique([riderId, date])
+}
+
+enum PayoutStatus {
+  draft
+  approved
+  paid
+}
+
+enum PayoutMethod {
+  cash
+  bank_transfer
+  wire
+  wipay
+}
+
+model Payout {
+  id           String        @id @default(cuid())
+  riderId      String
+  rider        Rider         @relation(fields: [riderId], references: [id], onDelete: Cascade)
+  periodStart  DateTime
+  periodEnd    DateTime
+  base         Int
+  perDelivery  Int
+  codCollected Int
+  deductions   Int
+  net          Int
+  currency     String        @default("JMD")
+  method       PayoutMethod?
+  status       PayoutStatus  @default(draft)
+  reference    String?
+  note         String?
+  approvedById String?
+  approvedBy   User?         @relation("payoutApprover", fields: [approvedById], references: [id], onDelete: SetNull)
+  approvedAt   DateTime?
+  paidAt       DateTime?
+  createdAt    DateTime      @default(now())
+
+  lines PayoutLine[]
+
+  @@index([riderId, periodStart])
+}
+
+model PayoutLine {
+  id          String  @id @default(cuid())
+  payoutId    String
+  payout      Payout  @relation(fields: [payoutId], references: [id], onDelete: Cascade)
+  jobId       String?
+  job         Job?    @relation(fields: [jobId], references: [id], onDelete: SetNull)
+  description String
+  amount      Int
+  currency    String  @default("JMD")
+}
+
+// ---------- Safety ----------
+
+enum SosStatus {
+  active
+  acknowledged
+  resolved
+}
+
+model SosAlert {
+  id              String     @id @default(cuid())
+  riderId         String
+  rider           Rider      @relation(fields: [riderId], references: [id], onDelete: Cascade)
+  jobId           String?
+  job             Job?       @relation(fields: [jobId], references: [id], onDelete: SetNull)
+  point           Json?
+  note            String?
+  status          SosStatus  @default(active)
+  acknowledgedAt  DateTime?
+  resolvedAt      DateTime?
+  at              DateTime   @default(now())
+
+  @@index([status, at])
+}
+
+// ---------- Auditing & sync ----------
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  userId     String?
+  user       User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  role       String?
+  action     String
+  entityType String
+  entityId   String?
+  ip         String?
+  meta       Json?
+  at         DateTime @default(now())
+
+  @@index([at])
+  @@index([entityType, entityId])
+}
+
+model ExternalOrder {
+  id         String   @id @default(cuid())
+  source     String   @default("woocommerce")
+  externalId String
+  status     String?
+  currency   String?
+  placedAt   DateTime?
+  syncedAt   DateTime @default(now())
+  data       Json
+  jobCreated Boolean  @default(false)
+
+  @@unique([source, externalId])
+}
+
+// ---------- Settings ----------
+
+model Setting {
+  key       String   @id
+  value     Json
+  updatedAt DateTime @updatedAt
+}

@@ -1,0 +1,43 @@
+# Dependencies
+node_modules/
+
+# Builds
+dist/
+build/
+*.tsbuildinfo
+
+# Environment - NEVER commit real credentials
+.env
+.env.*
+!.env.example
+
+# Databases
+*.db
+*.db-journal
+*.db.bak*
+dev.db
+.dev/
+
+# Uploads / media
+apps/api/data/uploads/
+apps/api/data/*.db
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# Test artifacts
+coverage/
+playwright-report/
+test-results/
+apps/web/dev-dist/
+apps/web/dist/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+
+# Prisma generated (regenerated per provider)
+apps/api/prisma/schema.generated.prisma
