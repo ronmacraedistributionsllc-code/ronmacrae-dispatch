@@ -9,6 +9,14 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: "autoUpdate",
+      // The default auto-injected registerSW.js is a bare `navigator.serviceWorker
+      // .register(...)` call with no update-checking or reload-on-new-version logic
+      // — registerType: "autoUpdate" alone doesn't add that for injectManifest (it
+      // only affects generateSW's own generated service worker). Registering
+      // manually via virtual:pwa-register in main.tsx instead, so a new deploy
+      // actually replaces an already-open tab's old shell instead of leaving it
+      // running stale JS until the tab is closed and reopened.
+      injectRegister: false,
       // injectManifest (not the default generateSW) so src/sw.ts can add a custom
       // `push`/`notificationclick` handler for opt-in Web Push, while still getting
       // the production asset list precached the same way generateSW did.
