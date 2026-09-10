@@ -38,7 +38,14 @@ const CreateBody = z.object({
   landmark: z.string().max(120).optional().or(z.literal("")).nullable().default(""),
   point: z.object({ lat: z.number().gte(-90).lte(90), lng: z.number().gte(-180).lte(180) }).optional().nullable(),
   preferredChannel: z.enum(["whatsapp", "sms", "push", "in_app"]).optional().nullable(),
-  consentTracking: z.boolean().default(false),
+  // Delivery-status tracking messages (this flag) are the operational
+  // notifications this stage wires up — not marketing (a separate flag,
+  // still opt-in below). Defaults on to match the public delivery-request
+  // form's own existing default (delivery.ts) and the spec's expectation of
+  // "automatic" lifecycle notifications for the ordinary staff-booking path;
+  // still fully toggleable per customer (e.g. one who asks not to be
+  // messaged) via this same field on update.
+  consentTracking: z.boolean().default(true),
   consentMarketing: z.boolean().default(false),
   note: z.string().max(300).optional().or(z.literal("")).nullable().default(""),
 });

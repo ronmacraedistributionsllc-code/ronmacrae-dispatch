@@ -541,9 +541,12 @@ enum NotificationChannel {
   in_app
 }
 
+/** See the matching comment in packages/contracts/src/enums.ts — `sent` means
+ *  the provider accepted it, not that it was confirmed delivered. */
 enum NotificationStatus {
   queued
   sending
+  sent
   delivered
   failed
   suppressed

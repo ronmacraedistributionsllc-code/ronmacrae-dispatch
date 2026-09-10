@@ -66,7 +66,9 @@ describe("TwilioProvider", () => {
       template: "delivered",
       params: { orderRef: "X", deliveredAt: "y", business: "z" },
     });
-    expect(res.status).toBe("delivered");
+    // Twilio accepting the API call means "sent" (queued on their end), never
+    // "delivered" — that only happens on their later status-callback webhook.
+    expect(res.status).toBe("sent");
     expect(res.providerRef).toBe("SM123");
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(url).toContain("/2010-04-01/Accounts/ACtest/Messages.json");

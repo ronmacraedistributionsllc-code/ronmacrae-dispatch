@@ -1,8 +1,10 @@
 import type { FastifyInstance } from "fastify";
+import { createHmac, timingSafeEqual } from "node:crypto";
 import { z } from "zod";
+import { httpErrors } from "@fastify/sensible";
 import type { AppCtx } from "../ctx.js";
 import type { PrismaClient } from "@prisma/client";
-import type { NotificationProvider, OutboundMessage } from "@ronmacrae/notifications";
+import { listTemplates, TEMPLATES, type NotificationProvider, type OutboundMessage } from "@ronmacrae/notifications";
 import type { QueueDriver } from "../queue/index.js";
 import type { RealtimeHub } from "../rt/hub.js";
 import type { AppConfig } from "../config.js";
@@ -13,8 +15,18 @@ import type {
   NotificationChannel,
   NotificationStatus,
   OutboxMessageDto,
+  RiderStage,
 } from "@ronmacrae/contracts";
 import { ROOM_DISPATCH } from "@ronmacrae/contracts";
+
+const TEMPLATES_SETTING_KEY = "notificationTemplates";
+
+/** Admin-configured template-body overrides — see the Setting model. Falls
+ *  back to an empty map (all defaults) on a fresh install. */
+export async function getTemplateOverrides(prisma: PrismaClient): Promise<Record<string, string>> {
+  const row = await prisma.setting.findUnique({ where: { key: TEMPLATES_SETTING_KEY } });
+  return (row?.value as Record<string, string> | undefined) ?? {};
+}
 
 /**
  * Notification orchestrator.
@@ -66,30 +78,36 @@ export class NotifyService {
   async dispatch(id: string): Promise<void> {
     const row = await this.prisma.outboxMessage.findUnique({ where: { id } });
     if (!row) return;
-    if (row.status === "delivered" || row.status === "suppressed") return;
+    // Already handed to the provider (or confirmed, or intentionally
+    // skipped) — never re-dispatch, which would double-send. Only a failed
+    // attempt schedules a retry (see below); "sent" waits on the provider's
+    // own delivery-confirmation callback, not another dispatch from us.
+    if (row.status === "sent" || row.status === "delivered" || row.status === "suppressed") return;
     if (row.attempts >= 5) {
       await this.prisma.outboxMessage.update({ where: { id }, data: { status: "failed", error: "max attempts" } });
       return;
     }
     await this.prisma.outboxMessage.update({ where: { id }, data: { status: "sending", attempts: row.attempts + 1 } });
+    const templateOverrides = await getTemplateOverrides(this.prisma);
     const msg: OutboundMessage = {
       channel: row.channel as "whatsapp" | "sms",
       to: row.to,
       template: row.template,
       params: row.params as Record<string, string>,
       refId: id,
+      templateOverrides,
     };
     const result = await this.provider.send(msg);
     await this.prisma.outboxMessage.update({
       where: { id },
       data: {
-        status: result.status === "delivered" ? "delivered" : "failed",
+        status: result.status,
         providerRef: result.providerRef ?? undefined,
         error: result.error ?? undefined,
         sentAt: new Date(),
       },
     });
-    if (result.status !== "delivered") {
+    if (result.status === "failed") {
       await this.queue.enqueue("notify.dispatch", { id }, { delayMs: 5 * 60_000 });
     }
     // mirror to dashboard
@@ -194,12 +212,24 @@ export class JobNotifier {
         await this.notify.enqueue({ channel, to: job.customerPhone, template: "picked_up", params: base, jobId: job.id });
         break;
       case "in_transit":
-      case "delivering":
+        // "in transit" and "near destination" (below) are distinct lifecycle
+        // events with their own messages — a customer told "on the way, ETA
+        // soon" and then later "your rider is right outside" are two
+        // different, useful signals, not the same one repeated.
         await this.notify.enqueue({
           channel,
           to: job.customerPhone,
           template: "out_for_delivery",
           params: { ...base, riderName: ctxJob.riderName ?? "", eta: job.routeEta ? new Date(job.routeEta).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" }) : "soon" },
+          jobId: job.id,
+        });
+        break;
+      case "delivering":
+        await this.notify.enqueue({
+          channel,
+          to: job.customerPhone,
+          template: "near_destination",
+          params: { ...base, riderName: ctxJob.riderName ?? "your courier" },
           jobId: job.id,
         });
         break;
@@ -234,10 +264,55 @@ export class JobNotifier {
         break;
     }
   }
+
+  /** Rider stage changes (heading_to_pickup/at_pickup/heading_to_dropoff)
+   *  aren't job-status transitions, so they don't go through forJobEvent —
+   *  called separately from recordRiderStage() for the one stage that's
+   *  customer-visible ("heading to pickup" — spec 5D's own event list). */
+  async forRiderStage(stage: RiderStage, ctxJob: JobNotifyContext): Promise<void> {
+    if (stage !== "heading_to_pickup") return;
+    const { job } = ctxJob;
+    await this.notify.enqueue({
+      channel: "whatsapp",
+      to: job.customerPhone,
+      template: "heading_to_pickup",
+      params: {
+        customerName: job.customerName,
+        orderRef: job.externalRef ?? job.id,
+        business: ctxJob.business,
+        dispatchPhone: ctxJob.dispatchPhone,
+        trackingUrl: ctxJob.linkUrl ?? "",
+        riderName: ctxJob.riderName ?? "your courier",
+      },
+      jobId: job.id,
+    });
+  }
+
+  /** The very first customer notification: order placed, tracking link ready.
+   *  Called once, the first time a job gets a tracking link (see
+   *  history.ts's createTrackingLinkInner) — never repeated on a later
+   *  link refresh, which isn't a new order. */
+  async forOrderCreated(ctxJob: JobNotifyContext & { ttlHours: number }): Promise<void> {
+    const { job } = ctxJob;
+    await this.notify.enqueue({
+      channel: "whatsapp",
+      to: job.customerPhone,
+      template: "order_confirmed",
+      params: {
+        customerName: job.customerName,
+        orderRef: job.externalRef ?? job.id,
+        business: ctxJob.business,
+        dispatchPhone: ctxJob.dispatchPhone,
+        trackingUrl: ctxJob.linkUrl ?? "",
+        ttl: `${ctxJob.ttlHours}h`,
+      },
+      jobId: job.id,
+    });
+  }
 }
 
 const ListQuery = z.object({
-  status: z.enum(["queued", "sending", "delivered", "failed", "suppressed"]).optional(),
+  status: z.enum(["queued", "sending", "sent", "delivered", "failed", "suppressed"]).optional(),
   jobId: z.string().optional(),
   take: z.coerce.number().int().min(1).max(500).optional(),
   skip: z.coerce.number().int().min(0).optional(),
@@ -259,4 +334,78 @@ export async function notificationRoutes(app: FastifyInstance, ctx: AppCtx): Pro
     await ctx.audit.record({ id: req.user!.sub, role: req.user!.role }, "notification.retry", "notification", req.params.id);
     return { ok: true };
   });
+
+  // Configurable message templates (spec 5D). Every template has a built-in
+  // default (packages/notifications) so the system is fully usable with none
+  // of this ever touched; an override here changes only its text, never
+  // which event triggers it or what channel it goes out on.
+  app.get("/api/notifications/templates", { preHandler: ctx.requireStaff("admin", "dispatcher", "accountant", "viewer") }, async () => {
+    const overrides = await getTemplateOverrides(ctx.prisma);
+    return { templates: listTemplates(overrides) };
+  });
+
+  app.put("/api/notifications/templates", { preHandler: ctx.requireStaff("admin") }, async (req) => {
+    const body = z.object({ templates: z.record(z.string(), z.string().max(1000)) }).parse(req.body);
+    const unknown = Object.keys(body.templates).filter((name) => !(name in TEMPLATES));
+    if (unknown.length > 0) throw httpErrors.createError(400, `Unknown template name(s): ${unknown.join(", ")}`);
+    // Merges into the existing override map rather than replacing it wholesale
+    // — saving one template's new wording must never silently wipe out
+    // another template's already-saved override. Blank entries fall back to
+    // the built-in default (see effectiveTemplateBody).
+    const existing = await getTemplateOverrides(ctx.prisma);
+    const merged = { ...existing, ...body.templates };
+    await ctx.prisma.setting.upsert({
+      where: { key: TEMPLATES_SETTING_KEY },
+      create: { key: TEMPLATES_SETTING_KEY, value: merged },
+      update: { value: merged },
+    });
+    await ctx.audit.record({ id: req.user!.sub, role: req.user!.role }, "notification.templates_update", "setting", TEMPLATES_SETTING_KEY, { names: Object.keys(body.templates) });
+    return { templates: listTemplates(merged) };
+  });
+
+  // Twilio's delivery-status webhook (see twilio.ts's send() and its own
+  // activation-steps comment) — the only thing that ever moves a message
+  // from "sent" to a confirmed "delivered"/"failed". Public (Twilio calls
+  // it directly, unauthenticated) but signature-verified whenever
+  // TWILIO_AUTH_TOKEN is configured; without one (dev/test/no real account
+  // yet) it's accepted unverified, since there's nothing to verify against.
+  app.post("/api/notifications/twilio-status", async (req, reply) => {
+    reply.header("cache-control", "no-store");
+    const body = req.body as Record<string, string> | undefined;
+    const sid = body?.MessageSid;
+    const twilioStatus = body?.MessageStatus;
+    if (!sid || !twilioStatus) {
+      throw httpErrors.createError(400, "Missing MessageSid/MessageStatus");
+    }
+    if (ctx.config.TWILIO_AUTH_TOKEN) {
+      const signature = req.headers["x-twilio-signature"];
+      const url = `${ctx.config.APP_ORIGIN}/api/notifications/twilio-status`;
+      if (typeof signature !== "string" || !verifyTwilioSignature(ctx.config.TWILIO_AUTH_TOKEN, url, body ?? {}, signature)) {
+        throw httpErrors.createError(403, "Invalid Twilio signature");
+      }
+    }
+    const row = await ctx.prisma.outboxMessage.findFirst({ where: { providerRef: sid } });
+    if (!row) return { ok: true }; // unknown/foreign message id — nothing to update, not an error
+    const nextStatus: NotificationStatus | null =
+      twilioStatus === "delivered" ? "delivered" : twilioStatus === "failed" || twilioStatus === "undelivered" ? "failed" : null;
+    if (nextStatus) {
+      await ctx.prisma.outboxMessage.update({ where: { id: row.id }, data: { status: nextStatus, error: nextStatus === "failed" ? `Twilio: ${twilioStatus}` : null } });
+      ctx.hub.broadcast(ROOM_DISPATCH, { type: "notification", payload: { id: row.id, channel: row.channel, to: row.to, template: row.template, status: nextStatus, at: new Date().toISOString() } });
+    }
+    return { ok: true };
+  });
+}
+
+/** Twilio signs each webhook request with HMAC-SHA1 over the full callback
+ *  URL plus every POST param (sorted, concatenated key+value), base64-encoded,
+ *  compared to the X-Twilio-Signature header. Constant-time compare to avoid
+ *  a timing side-channel. */
+export function verifyTwilioSignature(authToken: string, url: string, params: Record<string, string>, signature: string): boolean {
+  const data = Object.keys(params)
+    .sort()
+    .reduce((acc, key) => acc + key + params[key], url);
+  const expected = createHmac("sha1", authToken).update(data, "utf8").digest("base64");
+  const a = Buffer.from(expected);
+  const b = Buffer.from(signature);
+  return a.length === b.length && timingSafeEqual(a, b);
 }

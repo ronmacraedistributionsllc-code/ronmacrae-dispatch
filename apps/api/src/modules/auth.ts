@@ -207,6 +207,10 @@ export function registerAuthHook(app: FastifyInstance, ctx: AppCtx): void {
     if (url === "/api/quotes/public" && method === "POST") return true;
     if (url === "/api/geo/geocode" && method === "POST") return true;
     if (url === "/api/geo/reverse" && method === "POST") return true;
+    // Twilio's own delivery-status webhook — unauthenticated by nature (Twilio
+    // isn't a logged-in user), verified instead by its own signature header
+    // when TWILIO_AUTH_TOKEN is configured (see notify.ts).
+    if (url === "/api/notifications/twilio-status" && method === "POST") return true;
     return false;
   };
   app.addHook("onRequest", async (req, reply) => {

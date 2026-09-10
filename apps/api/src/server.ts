@@ -49,6 +49,21 @@ export async function createApp(ctx: AppCtx): Promise<FastifyInstance> {
     limits: { fileSize: ctx.config.MAX_UPLOAD_BYTES },
   });
 
+  // Twilio's status-callback webhook (see notify.ts) posts
+  // application/x-www-form-urlencoded, which Fastify doesn't parse by
+  // default (only JSON) — a tiny inline parser rather than a new dependency,
+  // since this is the only route that ever needs it.
+  app.addContentTypeParser("application/x-www-form-urlencoded", { parseAs: "string" }, (_req, body, done) => {
+    try {
+      const params = new URLSearchParams(body as string);
+      const out: Record<string, string> = {};
+      for (const [key, value] of params) out[key] = value;
+      done(null, out);
+    } catch (err) {
+      done(err as Error, undefined);
+    }
+  });
+
   // static web build in preview mode (API serves the built PWA on :3000)
   let servingWeb = false;
   if (ctx.config.WEB_DIST) {

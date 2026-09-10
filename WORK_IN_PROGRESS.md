@@ -552,7 +552,7 @@ tracked here as Stages 8+ (Stages 1-7 above are the prior work, already shipped)
 | 12 | 5A — COD reconciliation ledger | DONE |
 | 13 | 5B — Rider route queue | DONE |
 | 14 | 5C — Dispatcher operations board | DONE |
-| 15 | 5D — Customer status message templates + notification log | NOT STARTED |
+| 15 | 5D — Customer status message templates + notification log | DONE |
 | 16 | 5E — Operating reports + CSV export | NOT STARTED |
 | 17 | 5F — Emergency/contact-dispatch button | NOT STARTED |
 | 18 | 5G — Delivery messaging (customer/rider/dispatcher) | NOT STARTED |
@@ -1150,3 +1150,119 @@ on every invocation). Deleted `apps/api/data/e2e-test.db` and re-ran clean —
 back to 21/21 in ~21s. Worth remembering for future sessions: if e2e specs
 start running unusually slowly, delete that file (it's disposable and
 gitignored) before assuming a real regression.
+
+## Stage 15 — 5D: Customer status messages + notification log (DONE)
+
+**What existed already** (a lot — read all of it before writing anything):
+`packages/notifications` already had a full provider-agnostic outbox system —
+`NotificationProvider` interface, a `MemoryProvider` (dev-safe, zero
+credentials), a `TwilioProvider` (real WhatsApp/SMS via raw REST, no SDK),
+11 templates with `{{param}}` rendering, and a queue-backed `NotifyService` +
+`JobNotifier` already wired into several job-status transitions, plus an
+existing `/notifications` page listing the outbox. This stage's real job
+was diagnosing what was actually missing/wrong, not building from scratch —
+and there were three genuine, concrete gaps:
+
+1. **A real "never claim delivered without evidence" violation.**
+   `TwilioProvider.send()` returned `status: "delivered"` the moment Twilio's
+   API accepted the message — but accepting a message for sending is not the
+   same as it reaching the recipient; real delivery confirmation only comes
+   later via Twilio's own status-callback webhook, which this app never
+   received. Fixed by:
+   - Adding a genuine `sent` status (contracts `NotificationStatus` +
+     `NotificationStatus` Prisma enum) between `sending` and `delivered` —
+     "the provider accepted it," explicitly documented as not delivery
+     confirmation.
+   - `TwilioProvider.send()` now returns `"sent"`, never `"delivered"`, on a
+     successful API call.
+   - New `POST /api/notifications/twilio-status` (public — Twilio calls it
+     unauthenticated, allowlisted in the global auth hook, HMAC-SHA1
+     signature-verified whenever `TWILIO_AUTH_TOKEN` is configured) is the
+     **only** thing that ever moves a message to a confirmed `delivered` or
+     `failed`. Needed a small dependency-free
+     `application/x-www-form-urlencoded` body parser registered in
+     `server.ts` (Fastify only parses JSON by default) since that's the
+     content-type Twilio's callback actually sends. `MemoryProvider` is
+     untouched — it's an explicitly-labeled dev fake, not a real external
+     system making a false claim, so its instant "delivered" simulation is
+     honest within its own documented scope.
+2. **Two of the spec's 8 lifecycle events were never triggered at all.**
+   "Order created" had a template (`order_confirmed`) but nothing ever
+   enqueued it; "heading to pickup" had no template or trigger at all.
+   Fixed: `JobNotifier.forOrderCreated()` fires from
+   `history.ts`'s `createTrackingLinkInner()`, but only the very first time a
+   job gets a tracking link (a later refresh isn't a new order, so it's
+   never repeated) — this is also the natural point where the tracking URL
+   actually exists to include. `JobNotifier.forRiderStage()` fires a new
+   `heading_to_pickup` template from `recordRiderStage()` when that specific
+   stage is reported (not `at_pickup`/others, which aren't customer-facing
+   events per the spec's own list).
+3. **"In transit" and "near destination" were the same message.** Both the
+   `in_transit` and `delivering` job statuses enqueued the identical
+   `out_for_delivery` template — "on the way" and "arriving now" are
+   different, useful signals to a customer waiting for a delivery, not one
+   repeated. Split `delivering` onto its own new `near_destination` template.
+
+**Configurable templates** (the spec's other explicit ask): added a
+`notificationTemplates` `Setting` row (admin-only `PUT
+/api/notifications/templates`, merges into the existing override map rather
+than replacing it wholesale — verified with a dedicated test, since an
+earlier draft of this endpoint would have silently wiped out every other
+template's saved override on each save) holding text overrides; every
+template still has its hard-coded default, so the system is fully usable
+untouched. `renderTemplate`/`listTemplates` in `packages/notifications`
+take the effective (override-or-default) body; `NotifyService.dispatch()`
+resolves the current overrides on every send.
+
+**A real silent-notification-failure default, found and fixed.** New
+customers created via the staff booking flow (`POST /customers`) defaulted
+`consentTracking` to `false` — meaning the *ordinary* staff-booking path (not
+the public self-service form, which already defaulted it `true`) would
+silently send **zero** customer notifications ever, for every normal order,
+regardless of anything else in this stage. Flipped that default to `true`
+(delivery-status tracking is not marketing — `consentMarketing` stays a
+separate, still-opt-in flag — and matches the public form's own existing
+default), fully documented inline and still per-customer toggleable for
+someone who asks not to be messaged.
+
+**Frontend** (`notifications.tsx`, rewritten): friendly status labels
+(Pending/Sent/Delivered/Failed/Skipped, mapped from the underlying
+queued/sending/sent/delivered/failed/suppressed enum) with each failed
+message's error shown and a Retry button (admin/dispatcher); an explicit
+"Preview mode" banner when the active provider is `memory`, stating plainly
+that nothing is really sent and documenting the exact steps to connect a
+real provider later (env vars + the Twilio status-callback URL — no
+credentials/billing touched by this stage); a "Message templates" panel
+showing all templates with their effective text, editable by admin only,
+read-only (with an explicit "only an owner/admin can edit" note) for
+everyone else who can see the page.
+
+**Tests**:
+- `packages/notifications/test/index.test.ts` — fixed the one pre-existing
+  assertion that encoded the old, wrong "delivered" claim; now expects
+  `"sent"`.
+- `apps/api/test/notifications.test.ts` (14 new) — new customers default to
+  `consentTracking: true`; order-confirmed fires once on the first tracking
+  link and never again on a refresh; it's skipped entirely without consent;
+  heading-to-pickup fires on that stage and not on `at_pickup`; in_transit
+  and delivering produce genuinely different template names; templates
+  list/edit endpoints (unknown name rejected, admin-only write, an override
+  persists and reports `overridden: true`, and — the bug this test caught —
+  saving one template never wipes out another's already-saved override);
+  the Twilio webhook moves `sent → delivered`/`failed` correctly, is a safe
+  no-op for an unknown message id, and is reachable unauthenticated.
+- `e2e/specs/notifications.spec.ts` (new) — a real staff-booked order shows
+  up in the outbox with the `order_confirmed` template and a friendly status
+  label; a dispatcher sees the templates panel read-only while an admin can
+  edit it.
+
+**Verification run**: `npm run typecheck --workspaces` clean; `apps/api`
+vitest 98/98 (84 prior + 14 new); `packages/notifications` vitest 6/6;
+`apps/web` vitest 8/8; clean web build; full e2e suite (23 tests, incl. 2 new)
+23/23 serially, on a freshly-reseeded `e2e-test.db`.
+
+**Not done in this stage, explicitly** (per the instruction): no real
+WhatsApp/SMS provider was purchased, activated, or connected — `memory`
+remains the active provider; the Twilio path is fully built and tested with
+synthetic requests but stays dormant until real credentials are supplied
+later, exactly as documented in `twilio.ts`'s own activation-steps comment.

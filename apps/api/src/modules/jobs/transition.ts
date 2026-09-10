@@ -112,6 +112,27 @@ export async function recordRiderStage(
     type: "job.state",
     payload: { job: dto, event: eventToDto(updated.event) },
   });
+  if (row.customer.consentTracking) {
+    const business = await getBusinessSettings(ctx);
+    const linkUrl = updated.job.link ? `${ctx.config.APP_ORIGIN}/track/${updated.job.link.token}` : null;
+    await new JobNotifier(ctx.notify)
+      .forRiderStage(stage, {
+        job: {
+          id: jobId,
+          externalRef: updated.job.externalRef,
+          customerName: updated.job.customer.name,
+          customerPhone: updated.job.customer.phone,
+          failureReason: null,
+          routeEta: dto.routeEta,
+          completedAt: dto.completedAt,
+        },
+        linkUrl,
+        riderName: updated.job.rider?.name ?? null,
+        business: business.businessName,
+        dispatchPhone: business.dispatchPhone,
+      })
+      .catch((err) => ctx.log.error({ err: String(err), jobId }, "stage notification failed"));
+  }
   return dto;
 }
 

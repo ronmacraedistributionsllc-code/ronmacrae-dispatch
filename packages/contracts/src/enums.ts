@@ -107,9 +107,22 @@ export const FAILURE_REASON_LABELS: Record<FailureReason, string> = {
 export const NOTIFICATION_CHANNELS = ["whatsapp", "sms", "push", "in_app"] as const;
 export type NotificationChannel = (typeof NOTIFICATION_CHANNELS)[number];
 
+/**
+ * queued/sending: not yet handed to the provider (Pending in the UI).
+ * sent: the provider *accepted* it for delivery — this is NOT delivery
+ *   confirmation (a real provider's send-API call succeeding only means it
+ *   was queued on their end; actual delivery is a separate, later signal —
+ *   see the Twilio status callback in notify.ts). Only a provider telling us
+ *   so (a delivery receipt/webhook) moves a message to `delivered`.
+ * delivered: confirmed by the provider.
+ * failed: the provider rejected it, or later reported non-delivery.
+ * suppressed: skipped on purpose (e.g. no customer consent) — shown as
+ *   "Skipped" in the UI, never silently dropped.
+ */
 export const NOTIFICATION_STATUSES = [
   "queued",
   "sending",
+  "sent",
   "delivered",
   "failed",
   "suppressed",

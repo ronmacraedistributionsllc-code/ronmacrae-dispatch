@@ -116,6 +116,8 @@ export const API = {
     get: (id: string) => `/api/notifications/${id}`,
     retry: (id: string) => `/api/notifications/${id}/retry`,
     status: "/api/notifications/provider",
+    /** configurable message templates — spec 5D */
+    templates: "/api/notifications/templates",
   },
 
   recon: {

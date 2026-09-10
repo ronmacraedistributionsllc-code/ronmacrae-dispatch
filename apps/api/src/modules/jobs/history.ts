@@ -4,6 +4,7 @@ import type { JobEventDto, JobStatus, TrackingLinkDto } from "@ronmacrae/contrac
 import { toCustomerStatus, type CustomerJobStatus } from "@ronmacrae/contracts";
 import { randomToken } from "../../lib/ids.js";
 import { getBusinessSettings } from "../settings.js";
+import { JobNotifier } from "../notify.js";
 import { eventToDto, linkToDto } from "./dto.js";
 import { getJobRow, listEvents } from "./repository.js";
 
@@ -58,7 +59,8 @@ async function createTrackingLinkInner(ctx: AppCtx, jobId: string): Promise<Trac
   const job = await getJobRow(ctx, jobId);
   if (!job) throw httpErrors.createError(404, "Job not found");
   const existing = await ctx.prisma.trackingLink.findUnique({ where: { jobId } });
-  const ttlHours = (await getBusinessSettings(ctx)).trackingLinkTtlHours;
+  const business = await getBusinessSettings(ctx);
+  const ttlHours = business.trackingLinkTtlHours;
   const now = new Date();
   if (existing && !existing.revoked && existing.expiresAt > now) {
     return linkToDto(existing, ctx.config.APP_ORIGIN);
@@ -73,7 +75,31 @@ async function createTrackingLinkInner(ctx: AppCtx, jobId: string): Promise<Trac
     : await ctx.prisma.trackingLink.create({
         data: { jobId, token, expiresAt },
       });
-  return linkToDto(link, ctx.config.APP_ORIGIN);
+  const dto = linkToDto(link, ctx.config.APP_ORIGIN);
+  // The very first tracking link for a job is the "order confirmed" moment —
+  // a later refresh (existing branch above) is not a new order, so it's
+  // never re-sent then.
+  if (!existing && job.customer.consentTracking) {
+    await new JobNotifier(ctx.notify)
+      .forOrderCreated({
+        job: {
+          id: job.id,
+          externalRef: job.externalRef,
+          customerName: job.customer.name,
+          customerPhone: job.customer.phone,
+          failureReason: null,
+          routeEta: null,
+          completedAt: null,
+        },
+        linkUrl: dto.url,
+        riderName: job.rider?.name ?? null,
+        business: business.businessName,
+        dispatchPhone: business.dispatchPhone,
+        ttlHours,
+      })
+      .catch((err) => ctx.log.error({ err: String(err), jobId }, "order-created notification failed"));
+  }
+  return dto;
 }
 
 /** Revoke a tracking link by its token. */

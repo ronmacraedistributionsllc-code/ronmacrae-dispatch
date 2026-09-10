@@ -1277,11 +1277,68 @@ npm run test --workspace @ronmacrae/web
 rm -f apps/api/data/e2e-test.db && cd e2e && npx playwright test --workers=1
 ```
 
-## Next: Stage 15 (5D)
+---
 
-Customer status message templates + notification log + pluggable WhatsApp/
-SMS provider interface — 8 lifecycle events, tracking link included,
-configurable templates, Pending/Sent/Delivered/Failed/Skipped log, never
-claim sent/delivered without provider evidence, safe preview/test mode
-(no live credentials/billing). See `WORK_IN_PROGRESS.md`'s Stage plan table
-for the full remaining Stage 15–18 sequence.
+# Stage 15 — 5D: Customer status messages (pre-production hardening, 2026-09-10)
+
+Full detail in `WORK_IN_PROGRESS.md` under "Stage 15 — 5D: Customer status
+messages + notification log (DONE)". Summary for resuming agents:
+
+**Found**: extensive existing infra (providers, templates, outbox, queue,
+a notifications page) — but three real gaps: (1) `TwilioProvider` claimed
+"delivered" merely because Twilio *accepted* the API call — a genuine
+evidence violation, now fixed with a `sent` status plus a signature-verified
+Twilio status-callback webhook that's the only path to a confirmed
+`delivered`/`failed`; (2) "order created" and "heading to pickup" were never
+actually triggered despite templates existing for the former; (3) "in
+transit" and "near destination" sent the identical message. All fixed and
+wired: `JobNotifier.forOrderCreated()` (first tracking link only) and
+`.forRiderStage()` (heading_to_pickup only) added; `delivering` split onto
+its own `near_destination` template.
+
+**Also found and fixed**: staff-booked customers (`POST /customers`)
+defaulted `consentTracking` to `false` — meaning the ordinary booking flow
+sent zero customer notifications ever, silently. Flipped to `true` (matches
+the public self-service form's own existing default; `consentMarketing`
+stays separately opt-in).
+
+**Configurable templates**: new `notificationTemplates` Setting (admin-only
+write, merges — not replaces — so one save can't wipe out another
+template's override, caught by a dedicated test), read by everyone who can
+see the Notifications page.
+
+**Frontend**: rewrote `notifications.tsx` — friendly Pending/Sent/Delivered/
+Failed/Skipped labels, error text + Retry on failed rows, an explicit
+"Preview mode" banner with documented future-activation steps (no live
+provider connected), and an admin-editable/staff-readable templates panel.
+
+## Commands run and results (Stage 15)
+
+| # | Command | Result |
+| --- | --- | --- |
+| 1 | `npm run typecheck --workspaces` (root) | **PASS** — 0 errors |
+| 2 | `npx vitest run` (packages/notifications) | **PASS** — 6/6 (1 fixed to match the corrected "sent" status) |
+| 3 | `npx vitest run` (apps/api) | **PASS** — 98/98 (84 prior + 14 new) |
+| 4 | `npx vitest run` / `npm run build` (apps/web) | **PASS** — 8/8, clean build |
+| 5 | Full e2e suite (23 tests, incl. 2 new), serial, fresh `e2e-test.db` | **PASS** — 23/23 |
+
+## Re-verify (Stage 15)
+
+```bash
+npm run typecheck --workspaces
+npm run test --workspace @ronmacrae/notifications
+npm run test --workspace @ronmacrae/api
+npm run test --workspace @ronmacrae/web
+rm -f apps/api/data/e2e-test.db && cd e2e && npx playwright test --workers=1
+```
+
+## Next: Stage 16 (5E)
+
+Operating reports for owner/accountant — deliveries completed/active/
+failed-cancelled, delivery fees, COD expected/collected/handed-in/
+outstanding/shortages/overages, rider earnings/jobs-completed/avg delivery
+time, urgent-delivery count; filterable by date range/rider/zone/status/
+payment method; honest labeling of missing/incomplete data; CSV export
+without exposing PINs or unnecessary customer data. See
+`WORK_IN_PROGRESS.md`'s Stage plan table for the full remaining Stage
+16–18 sequence.

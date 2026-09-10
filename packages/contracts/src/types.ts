@@ -527,6 +527,17 @@ export interface OutboxMessageDto {
   createdAt: string;
 }
 
+/** One configurable customer-message template (spec 5D) — `body` is the
+ *  effective text (an override if one is set, else the built-in default);
+ *  `defaultBody` is always the built-in one, shown so an admin editing an
+ *  override can see what they're diverging from. */
+export interface NotificationTemplateDto {
+  name: string;
+  body: string;
+  defaultBody: string;
+  overridden: boolean;
+}
+
 export interface ReconDailyDto {
   id: string;
   riderId: string;

@@ -8,10 +8,15 @@ export interface OutboundMessage {
   params: Record<string, string>;
   /** id of the outbox row, used as provider reference */
   refId?: string;
+  /** admin-configured template-body overrides (Setting "notificationTemplates") */
+  templateOverrides?: Record<string, string>;
 }
 
 export interface SendResult {
-  status: "delivered" | "failed";
+  /** "sent" = the provider accepted it for delivery — NOT confirmation it
+   *  reached the recipient. Only use "delivered" when the provider has
+   *  actually told us so (see the Twilio status callback). */
+  status: "sent" | "delivered" | "failed";
   providerRef?: string;
   error?: string;
 }
@@ -45,6 +50,11 @@ export const TEMPLATES: Record<string, TemplateDef> = {
     body:
       "Hi {{customerName}}, {{riderName}} has been assigned to delivery {{orderRef}}. Track it: {{trackingUrl}}",
   },
+  heading_to_pickup: {
+    name: "heading_to_pickup",
+    body:
+      "Hi {{customerName}}, {{riderName}} is heading to collect order {{orderRef}} now. Track it: {{trackingUrl}}",
+  },
   picked_up: {
     name: "picked_up",
     body: "Update on order {{orderRef}}: your package has been picked up. Track: {{trackingUrl}}",
@@ -54,6 +64,11 @@ export const TEMPLATES: Record<string, TemplateDef> = {
     body:
       "Hi {{customerName}}, {{riderName}} is on the way with order {{orderRef}}. Estimated arrival {{eta}}. Track: {{trackingUrl}}",
   },
+  near_destination: {
+    name: "near_destination",
+    body:
+      "Hi {{customerName}}, {{riderName}} is close by with order {{orderRef}} — please have someone ready to receive it. Track: {{trackingUrl}}",
+  },
   delivered: {
     name: "delivered",
     body: "Order {{orderRef}} was delivered at {{deliveredAt}}. Thank you for shopping with {{business}}!",
@@ -61,7 +76,7 @@ export const TEMPLATES: Record<string, TemplateDef> = {
   failed: {
     name: "failed",
     body:
-      "Hi {{customerName}}, we could not complete delivery {{orderRef}} ({{failureReason}}). {{business}} will reach out to reschedule.",
+      "Hi {{customerName}}, we could not complete delivery {{orderRef}} ({{failureReason}}). {{business}} will reach out to reschedule. Track: {{trackingUrl}}",
   },
   cod_reminder: {
     name: "cod_reminder",
@@ -94,14 +109,28 @@ export const TEMPLATES: Record<string, TemplateDef> = {
   },
 };
 
-export function renderTemplate(name: string, params: Record<string, string>): string {
+/** Effective body for a template name: an admin-configured override (see the
+ *  Setting key "notificationTemplates" in apps/api/src/modules/notify.ts)
+ *  wins over the built-in default; falls back to the default when there's no
+ *  override or the override is blank. */
+export function effectiveTemplateBody(name: string, overrides?: Record<string, string>): string {
+  const override = overrides?.[name]?.trim();
+  if (override) return override;
   const tpl = TEMPLATES[name];
   if (!tpl) throw new Error(`Unknown notification template: ${name}`);
-  return tpl.body.replace(/\{\{(\w+)\}\}/g, (m, key: string) => params[key] ?? m);
+  return tpl.body;
 }
 
-export function listTemplates(): { name: string; body: string }[] {
-  return Object.values(TEMPLATES).map((t) => ({ name: t.name, body: t.body }));
+export function renderTemplate(name: string, params: Record<string, string>, overrides?: Record<string, string>): string {
+  const body = effectiveTemplateBody(name, overrides);
+  return body.replace(/\{\{(\w+)\}\}/g, (m, key: string) => params[key] ?? m);
+}
+
+export function listTemplates(overrides?: Record<string, string>): { name: string; defaultBody: string; body: string; overridden: boolean }[] {
+  return Object.values(TEMPLATES).map((t) => {
+    const override = overrides?.[t.name]?.trim();
+    return { name: t.name, defaultBody: t.body, body: override || t.body, overridden: Boolean(override) };
+  });
 }
 
 /**
@@ -114,7 +143,7 @@ export class MemoryProvider implements NotificationProvider {
   constructor(private readonly log: (line: string) => void = () => {}) {}
 
   async send(msg: OutboundMessage): Promise<SendResult> {
-    const text = renderTemplate(msg.template, msg.params);
+    const text = renderTemplate(msg.template, msg.params, msg.templateOverrides);
     this.log(
       `[notify:${msg.channel}] ${msg.to} <- (${msg.template}) ${text.replace(/\n/g, " ")}` +
         (msg.refId ? ` [${msg.refId}]` : ""),
