@@ -37,8 +37,8 @@ status plus the concrete next action.
 | 2 | Concurrency + authorization tests | **DONE** — `apps/api/test/offers.test.ts`, 8/8 passing |
 | 3 | Dispatcher broadcast/assign UI + rider Accept/Decline cards | **DONE** — see below |
 | 4 | Live in-app alerts + opt-in browser push | **DONE** — see below |
-| 5 | Foreground GPS, dispatcher maps, secure customer tracking | **NOT STARTED** |
-| 6 | Full workflow tests, typecheck, build, preview instructions | **PARTIAL** — backend + Stage 3/4 gates green (see below); Stage 6 still needs Stage 5 done first |
+| 5 | Foreground GPS, dispatcher maps, secure customer tracking | **DONE** — see below |
+| 6 | Full workflow tests, typecheck, build, preview instructions | **NEXT** — every stage's gates have been passing individually; Stage 6 is one final combined pass + writing the preview/demo instructions |
 
 ## Stage 1 — done (this session)
 
@@ -210,19 +210,92 @@ update (poll-only for now — a real but small gap, noted rather than hidden).
   click "Enable push notifications" as a real rider in a real browser, have a
   dispatcher broadcast an offer, confirm the OS notification appears.
 
+## Stage 5 — done (this session)
+
+**A real gap found and fixed before adding anything**: `RidersService.reportLocation`
+(`apps/api/src/modules/riders.ts`, real GPS reports) never stopped an in-progress
+simulated leg (`LocationSimulator`, `apps/api/src/rt/location-sim.ts`) for the same
+rider's active job. The simulator's own docstring already claimed "the web bearer
+app can override the simulation with real GPS" — the code just didn't do it. Fixed
+with one line (`if (job) this.app.sim.stopForJob(job.id)`) before writing the real
+point, so a real report now reliably wins instead of getting overwritten by the
+sim's next 5s tick.
+
+**Foreground GPS** (new `apps/web/src/lib/geolocation.ts` +
+`apps/web/src/components/location-sharing.tsx`, wired into the rider dashboard):
+explicit opt-in `watchPosition`, throttled to one report per 8s, posting to the
+already-registered `POST /api/rider-locations/:id/report`. Foreground-only is
+enforced structurally, not just claimed: a `visibilitychange` listener **clears**
+the watch (not just throttles it) the instant the tab is hidden, flips the state to
+"paused", and requires the rider to explicitly tap "Resume sharing" when they
+return — there is no code path that claims to still be tracking in the background.
+
+**Dispatcher map** (new `apps/web/src/pages/map.tsx`, code-split via `React.lazy`
+since `maplibre-gl` is ~1MB and only staff visiting `/map` need it): live rider
+markers from the realtime `rider.location` message (Stage 4's client) plus a new
+`GET /api/rider-locations` bootstrap endpoint (`apps/api/src/modules/riders.ts`,
+`RidersService.latestLocations()` — bounded to the last 24h so it never has to scan
+the ever-growing full history table) for the initial render before any realtime
+message arrives. Tiles are keyless OpenStreetMap raster (`apps/web/src/lib/map-style.ts`,
+shared with the customer tracking map below) — same "no API key" convention
+`packages/geo`'s geocoding fallback already uses. Each marker's colour and the
+riders list both surface `trackingState` and a relative "how long ago" — staleness
+is visible, not hidden, and the view doesn't distinguish (or claim to) whether a
+point came from real GPS or the preview simulator.
+
+**Secure customer tracking**: the public `/track/:token` page
+(`apps/api/src/modules/tracking.ts`, `apps/web/src/pages/track.tsx`) already existed
+and already handled the honesty requirement well — `trackingState` and a "last
+update" timestamp were already shown, the delivery PIN was already gated to
+in-transit-ish statuses only, and the link itself already expires/can be revoked.
+What Stage 5 added: a small read-only map (new `apps/web/src/components/courier-map.tsx`,
+also lazy-loaded) showing the courier's last known point, rendered only when a
+point exists — nothing else about the security model needed changing.
+
+**A pre-existing dangling contract, noted not fixed**: `packages/contracts/src/routes.ts`
+already declared `API.riders.locationsFor(riderId)` (presumably meant as a per-rider
+location-history endpoint) with no backend route ever implemented for it. Stage 5's
+own new endpoint (`API.riders.locations`, the aggregate "latest per rider" list) was
+also pre-declared and is now finally backed — `locationsFor` remains dangling; out of
+scope here since nothing in this stage needed per-rider history.
+
+**Found and fixed while verifying, not part of the plan**: `maplibre-gl` was a
+pre-existing, previously-*unused* dependency carrying a **critical** XSS advisory
+(`GHSA-jrc7-96c5-q579`, sanitizer bypass, fixed in 6.9.0). Activating it into the
+live render path (this stage) changes that from "dormant" to "shipped, exploitable
+surface" — so rather than just noting it, upgraded `5.24.0 → ^6.9.0`. This app's own
+usage (`Popup.setText()`, never `.setHTML()` with untrusted content) very likely
+wasn't on the vulnerable code path even before upgrading, but there was no reason to
+leave a critical advisory in place once it mattered. Verified: typecheck clean, web
+build clean, and — the real proof, since this is a major version bump — the full e2e
+suite still passes 17/17 including both map specs, which actually render
+`.maplibregl-canvas` and a marker popup. `npm audit --omit=dev` now shows 5
+vulnerabilities (0 critical), down from 6; the remaining ones (`deepmerge-ts`/prisma,
+`react-router`) are unrelated and still out of scope (breaking-change fixes, not
+touched).
+
+**Also found, NOT fixed (much lower stakes, explicitly out of scope)**: the same
+`jobs.spec.ts` e2e spec's rider-picker assertion assumed the seeded "Kei Bearer" is
+always dropdown option index 1. `RidersService.list()` orders riders alphabetically
+by name, and this session's own test-created riders (e.g. "GPS Test Rider" — "G"
+sorts before "K") pushed Kei out of that position, breaking the test. This one *was*
+fixed (not just noted) since it's a test-file change, not production code: the spec
+now selects by finding the `<option>` whose text starts with "Kei Bearer" and
+selecting its value, robust to both ordering and the status-suffix in the label.
+
 ## Verified gates (this session, actual output, not assumed)
 
 | Command (working dir) | Result |
 | --- | --- |
 | `npm run typecheck --workspace @ronmacrae/api` | PASS — 0 errors |
-| `npm run test:unit --workspace @ronmacrae/api` | PASS — 7 files, **45/45** (27 original + 8 offers + 8 push + 2 new config tests) |
+| `npm run test:unit --workspace @ronmacrae/api` | PASS — 7 files, **45/45** |
 | `npm run typecheck --workspace @ronmacrae/web` | PASS — 0 errors (app tsconfig + standalone `sw.ts` tsconfig) |
 | `npm run test:unit --workspace @ronmacrae/web` | PASS — 1 file, 3/3 |
-| `npm run build --workspace @ronmacrae/web` | PASS — 278.24 kB JS (gzip 82.97 kB), `injectManifest` PWA, 10 precache entries, `dist/sw.js` confirmed to contain `push`/`notificationclick` handlers |
+| `npm run build --workspace @ronmacrae/web` | PASS — main bundle back to ~282 kB (map code-split into its own ~1MB chunk, loaded only on `/map` or when a tracking page has a courier point) |
 | `npm run build --workspace @ronmacrae/contracts` | PASS |
-| `cd e2e && CI=1 npx playwright test` | PASS — **15/15** (12 pre-existing + 3 new: 2 realtime, 1 push opt-in) |
-| `npm run lint` (repo root) | Same **8 pre-existing errors**, all in files this session never touched — unchanged from Stage 3, not a regression |
-| `npm audit --omit=dev` (repo root) | Same 3 pre-existing production advisories as before `web-push` was added (deepmerge-ts/prisma, maplibre-gl, react-router) — no new one |
+| `cd e2e && CI=1 npx playwright test` | PASS — **17/17** (12 prior + 3 GPS/map + jobs.spec.ts fix) |
+| `npm run lint` (repo root) | Same **8 pre-existing errors**, all in files this session never touched — unchanged since Stage 3, not a regression |
+| `npm audit --omit=dev` (repo root) | **5 vulnerabilities, 0 critical** (was 6 with 1 critical before the `maplibre-gl` upgrade) — the remaining 5 (`deepmerge-ts`/prisma, `react-router`) are pre-existing, unrelated, breaking-change fixes, still out of scope |
 
 ## A latent bug found (documented, deliberately NOT fixed — out of scope)
 
@@ -240,36 +313,33 @@ patching unrelated config code mid-task. Worth a 2-line fix later:
 in both places — the `if (rel.startsWith("/")) return cfg.DATABASE_URL` line then
 works correctly for absolute paths.
 
-## Exact next steps (Stage 5 next)
+## Exact next steps (Stage 6 — the last one)
 
-1. **Foreground GPS**: the rider dashboard has no location capture at all yet. Add
-   opt-in foreground geolocation (`navigator.geolocation.watchPosition`, only while
-   the tab is open/visible — explicitly do **not** claim reliable background
-   tracking from a PWA, per the constraint) that posts to the existing
-   `POST /api/rider-locations/:id/report` route (`apps/api/src/modules/riders.ts:299`)
-   already registered and already storing `RiderLocation` rows. Show the rider
-   plainly when their last report was sent (staleness is honest UI, not hidden).
-2. **Dispatcher map**: `maplibre-gl` is already a web dependency (added by an earlier
-   session, unused so far — check whether a tile source needs picking: a keyless
-   provider like OSM raster tiles, or reuse whatever `@ronmacrae/geo`'s existing
-   `GOOGLE_MAPS_API_KEY`-optional fallback already resolves to for consistency).
-   Live rider markers should come from the realtime hub's `rider.location` message
-   type (already in the `RealtimeMessage` union, already broadcast somewhere in
-   `rt/location-sim.ts` presumably — check it before assuming), wired through
-   `useRealtime()` (Stage 4's client) rather than a new polling loop.
-3. **Secure customer tracking**: check `apps/api/src/modules/tracking.ts` and
-   `apps/web/src/pages/track.tsx` (or wherever `/track/:token` renders) for what
-   exists today before adding anything — the checkpoint history mentions tracking
-   links already work for the booking flow; Stage 5's job is adding live position to
-   that page (if not already present) without ever exposing more than an
-   approximate/last-known point, and showing staleness honestly (no fake "live"
-   badge on a location that's minutes old).
-4. Typecheck + build + an e2e spec for whichever of the above is added, before
-   calling Stage 5 done — same standard as every stage so far.
-5. Then Stage 6: run every gate (api, web, e2e, lint, audit) together one final
-   time, and write the actual preview/demo instructions (`npm run dev`, seeded
-   creds, `WEB_DIST` preview mode) into the checkpoint doc.
+All six of the user's original requirements now have working, tested code behind
+them (Stages 1-5 above). Stage 6 is verification and documentation, not new
+features:
+
+1. Run every gate together, fresh, in one pass, and record the actual output (not
+   assumed from the per-stage runs above — a full combined run is the honest final
+   check): `npm run build --workspace @ronmacrae/contracts`, api typecheck + unit,
+   web typecheck + unit + build, `cd e2e && CI=1 npx playwright test`, `npm run lint`,
+   `npm audit --omit=dev`.
+2. Write real preview/demo instructions into `PHASE1_JOBS_CHECKPOINT.md` — the
+   zero-service `DEV_DB=1` boot command, the seeded demo credentials (dispatcher,
+   admin, "Kei Bearer" rider — pull the exact ones from `apps/api/src/seed.ts` rather
+   than assuming), how to reach `/map`, `/jobs`, the rider dashboard, and a
+   `/track/:token` link, and the `WEB_DIST` preview-mode command (matching the
+   pattern already documented in earlier "Preview and demo rider" sections of the
+   checkpoint file).
+3. Do a final read through `WORK_IN_PROGRESS.md` end to end and fold anything still
+   open (the two documented-not-fixed latent bugs — `effectiveDatabaseUrl`'s
+   path-doubling, and the dangling `locationsFor` contract; the 8 pre-existing lint
+   errors; the `deepmerge-ts`/prisma and `react-router` audit advisories) into a
+   single "known issues, out of scope" list in the checkpoint, so a human reviewer
+   doesn't have to reconstruct it from six stages of session notes.
+4. Native mobile app remains explicitly out of scope, as the user asked from the
+   start.
 
 No map provider, credentials, billing action, deploy, or notification/location
-behavior beyond what's listed above as done was added or claimed as delivered in
-this session.
+behavior beyond what's listed as done across Stages 1-5 above was added or claimed
+as delivered in this session.

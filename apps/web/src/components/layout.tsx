@@ -7,13 +7,15 @@ const TABS = [
   { to: "/", label: "Dashboard", end: true },
   { to: "/jobs", label: "Jobs", end: true },
   { to: "/jobs/new", label: "New Order" },
+  { to: "/map", label: "Map" },
   { to: "/zones", label: "Zones & Fares" },
   { to: "/notifications", label: "Notifications" },
 ];
+const STAFF_ONLY_TABS = new Set(["/jobs", "/jobs/new", "/map"]);
 
 export function Layout({ children }: { children: React.ReactNode }): React.JSX.Element {
   const { user, logout } = useAuth();
-  const tabs = user?.role === "rider" ? TABS.filter((t) => t.to !== "/jobs" && t.to !== "/jobs/new") : TABS;
+  const tabs = user?.role === "rider" ? TABS.filter((t) => !STAFF_ONLY_TABS.has(t.to)) : TABS;
   return (
     <div className="flex h-full min-h-dvh flex-col md:flex-row">
       <AlertsToaster />

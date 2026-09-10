@@ -6,7 +6,7 @@ import { normalizePhone } from "./auth.js";
 import { pointFromJson, pointToJson, moneyField } from "../geo-mappers.js";
 import { minorOf } from "@ronmacrae/money";
 import { hashPassword } from "../lib/password.js";
-import { ACTIVE_JOB_STATUSES, type GeoPoint, type RiderDto, type RiderStatus, type VehicleType } from "@ronmacrae/contracts";
+import { ACTIVE_JOB_STATUSES, type GeoPoint, type RiderDto, type RiderLocationDto, type RiderStatus, type VehicleType } from "@ronmacrae/contracts";
 import { Prisma, type Rider } from "@prisma/client";
 
 /** Re-exported for backward compatibility; canonical set lives in contracts. */
@@ -242,6 +242,11 @@ export class RidersService {
       where: { riderId, status: { in: [...ACTIVE_JOB_STATUSES] } },
       select: { id: true },
     });
+    // A real report (this method) always wins over the preview-only simulated leg
+    // for the rider's active job — matches LocationSimulator's own documented intent
+    // ("the web bearer app can override the simulation with real GPS"), which the
+    // simulator's write path alone can't enforce since it never sees real reports.
+    if (job) this.app.sim.stopForJob(job.id);
     const dto = {
       id: `loc-${clientSeq}`,
       riderId,
@@ -255,6 +260,34 @@ export class RidersService {
     const rooms = [`rider:${riderId}`, "dispatch"];
     if (job) rooms.push(`job:${job.id}`);
     this.app.hub.broadcastMany(rooms, { type: "rider.location", payload: dto });
+  }
+
+  /**
+   * Latest known point per active rider, for the dispatcher map's initial render
+   * (realtime `rider.location` messages carry live updates after that). Bounded to
+   * the last 24h so a location scan never has to walk the full, ever-growing
+   * history table.
+   */
+  async latestLocations(): Promise<RiderLocationDto[]> {
+    const riders = await this.app.prisma.rider.findMany({ where: { active: true }, select: { id: true } });
+    const riderIds = riders.map((r) => r.id);
+    if (riderIds.length === 0) return [];
+    const rows = await this.app.prisma.riderLocation.findMany({
+      where: { riderId: { in: riderIds }, at: { gte: new Date(Date.now() - 24 * 3600_000) } },
+      orderBy: { at: "desc" },
+    });
+    const latestByRider = new Map<string, (typeof rows)[number]>();
+    for (const row of rows) if (!latestByRider.has(row.riderId)) latestByRider.set(row.riderId, row);
+    return [...latestByRider.values()].map((row) => ({
+      id: row.id,
+      riderId: row.riderId,
+      point: pointFromJson(row.point)!,
+      heading: row.heading,
+      speedKph: row.speedKph,
+      batteryPct: row.battery,
+      trackingState: row.trackingState as RiderLocationDto["trackingState"],
+      at: row.at.toISOString(),
+    }));
   }
 }
 
@@ -294,6 +327,10 @@ export async function riderRoutes(app: FastifyInstance, ctx: AppCtx): Promise<vo
       riderId: req.user!.riderId,
     });
     return { rider };
+  });
+
+  app.get("/api/rider-locations", { preHandler: ctx.requireStaff("admin", "dispatcher", "accountant", "viewer") }, async () => {
+    return { locations: await svc.latestLocations() };
   });
 
   app.post<{ Params: { id: string } }>("/api/rider-locations/:id/report", { preHandler: ctx.requireAuth }, async (req) => {

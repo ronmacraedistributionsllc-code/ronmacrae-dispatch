@@ -40,10 +40,17 @@ test("dispatcher assigns a rider to a job from the Jobs screen", async ({ page, 
   await expect(row.getByText("—")).toBeVisible();
 
   // assign the seeded rider
-  // The rider dashboard flow can legitimately move Kei to on_job in a
-  // parallel browser worker; assignment is still valid, so select the seeded
-  // rider by its stable first option rather than its transient availability.
-  await row.getByRole("combobox").first().selectOption({ index: 1 });
+  // The rider dashboard flow can legitimately move Kei to on_job in a parallel
+  // browser worker, and the disposable dev db accumulates other test riders across
+  // sessions (some alphabetically before "Kei Bearer") — so neither a fixed option
+  // index nor an exact full-label match (which also embeds the transient status
+  // suffix) is reliable. Find the <option> by its rider-name prefix and select by
+  // its value instead.
+  const riderSelect = row.getByRole("combobox").first();
+  const keiOption = riderSelect.locator("option", { hasText: "Kei Bearer" });
+  const keiRiderId = await keiOption.getAttribute("value");
+  expect(keiRiderId).toBeTruthy();
+  await riderSelect.selectOption(keiRiderId!);
   await row.getByRole("button", { name: "Assign" }).click();
   await expect(row.getByText("assigned", { exact: true })).toBeVisible();
   await expect(row.getByText("Kei Bearer", { exact: true })).toBeVisible();

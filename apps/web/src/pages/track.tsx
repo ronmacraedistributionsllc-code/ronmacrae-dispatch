@@ -9,6 +9,10 @@ import {
 import { ApiError, apiFetch, formatMoney } from "../lib/api.js";
 import { paymentLabel } from "./new-job.js";
 
+// Code-split: maplibre-gl is large and most tracking-page views (before a courier
+// is en route) never need it.
+const CourierMap = React.lazy(() => import("../components/courier-map.js").then((m) => ({ default: m.CourierMap })));
+
 function when(iso: string | null): string {
   return iso ? new Date(iso).toLocaleString("en-GB", { dateStyle: "medium", timeStyle: "short" }) : "—";
 }
@@ -106,6 +110,13 @@ export function Track(): React.JSX.Element {
                 ? `Last update ${new Date(data.location.updatedAt ?? data.generatedAt).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}`
                 : "The courier hasn't started yet — you'll see their position here once they're on the way."}
             </p>
+            {data.location.point ? (
+              <div className="mt-3">
+                <React.Suspense fallback={<p className="text-sm text-zinc-500">Loading map…</p>}>
+                  <CourierMap lat={data.location.point.lat} lng={data.location.point.lng} />
+                </React.Suspense>
+              </div>
+            ) : null}
           </section>
 
           <section className="card">

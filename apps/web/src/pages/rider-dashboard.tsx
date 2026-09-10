@@ -6,6 +6,7 @@ import { ApiError, apiFetch, formatMoney } from "../lib/api.js";
 import { useAuth } from "../lib/auth.js";
 import { useRealtime } from "../lib/realtime.js";
 import { PushOptIn } from "../components/push-opt-in.js";
+import { LocationSharing } from "../components/location-sharing.js";
 
 type Action = { label: string; to?: JobStatus; stage?: "heading_to_pickup" | "at_pickup"; needsPin?: boolean; location?: boolean; failed?: boolean };
 
@@ -63,6 +64,7 @@ export function RiderDashboard(): React.JSX.Element {
         </button>
       </div>
     </header>
+    <LocationSharing riderId={rider.id} />
     {availabilityChange.error ? <p className="text-sm text-red-400">{availabilityChange.error instanceof ApiError ? availabilityChange.error.message : "Could not update availability"}</p> : null}
     {offers.data && offers.data.offers.length > 0 ? (
       <section className="space-y-2">

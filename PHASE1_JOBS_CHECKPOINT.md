@@ -603,3 +603,76 @@ npm run typecheck --workspace @ronmacrae/api && npm run test:unit --workspace @r
 npm run typecheck --workspace @ronmacrae/web && npm run test:unit --workspace @ronmacrae/web && npm run build --workspace @ronmacrae/web
 cd e2e && CI=1 npx playwright test   # expect 15/15
 ```
+
+---
+
+# Delivery-offers Stage 5 — foreground GPS, dispatcher map, secure tracking (Claude Code, 2026-09-10)
+
+**Status: PASS.** Full detail in `WORK_IN_PROGRESS.md`. Short version here.
+
+## What was built
+
+- Fixed a real gap first: real GPS reports (`RidersService.reportLocation`) never
+  stopped the preview location simulator for the same rider's active job, so a real
+  position would have been overwritten by the sim's next tick — one line
+  (`ctx.sim.stopForJob(job.id)`) so real GPS reliably wins, matching what the
+  simulator's own docstring already claimed.
+- **Foreground GPS** (new `apps/web/src/lib/geolocation.ts` +
+  `components/location-sharing.tsx`, on the rider dashboard): explicit opt-in,
+  throttled `watchPosition` reports to the existing location-report route.
+  Foreground-only is structural, not just a claim — hiding the tab clears the watch
+  and requires an explicit "Resume sharing" tap, never silently keeps "sharing"
+  shown while nothing is being sent.
+- **Dispatcher map** (new `apps/web/src/pages/map.tsx`, code-split — `maplibre-gl`
+  is ~1MB and only staff need it): live rider markers via the realtime
+  `rider.location` message plus a new `GET /api/rider-locations` bootstrap endpoint,
+  keyless OpenStreetMap tiles (no API key, matching `packages/geo`'s existing
+  fallback convention). Each marker and list row shows `trackingState` and how
+  stale the position is.
+- **Secure customer tracking**: the public tracking page already handled the
+  honesty requirements well (staleness, PIN gating, link expiry/revocation) — added
+  a small read-only map (`components/courier-map.tsx`, also code-split) showing the
+  last known point, nothing else needed changing.
+- **Found while verifying, fixed though not part of the plan**: `maplibre-gl` was a
+  previously-unused dependency carrying a **critical** XSS advisory. Activating it
+  into the live render path this stage changed that from dormant to shipped, so
+  upgraded `5.24.0 → 6.9.0` (this app's own usage, `Popup.setText()` never
+  `.setHTML()`, likely wasn't on the vulnerable path regardless, but no reason to
+  leave a critical advisory in place once it mattered). Verified with the full e2e
+  suite, not just typecheck, since it's a major version bump.
+- **Found and fixed (test-file only)**: this session's own accumulated test riders
+  broke a pre-existing e2e spec's assumption that the seeded "Kei Bearer" rider is
+  always dropdown option index 1 (rider lists sort alphabetically by name). Fixed
+  `jobs.spec.ts` to select by finding the option robustly instead.
+- **Noted, not fixed**: `API.riders.locationsFor(riderId)` is a pre-existing
+  dangling contract route (declared, never implemented) — out of scope, nothing in
+  this stage needed per-rider location history.
+
+## Commands run and results (2026-09-10)
+
+| # | Command | Result |
+| --- | --- | --- |
+| 1 | `npm run typecheck --workspace @ronmacrae/api` | **PASS** — 0 errors |
+| 2 | `npm run test:unit --workspace @ronmacrae/api` | **PASS** — 45/45 |
+| 3 | `npm run typecheck --workspace @ronmacrae/web` | **PASS** — 0 errors |
+| 4 | `npm run test:unit --workspace @ronmacrae/web` | **PASS** — 3/3 |
+| 5 | `npm run build --workspace @ronmacrae/web` | **PASS** — main bundle back to ~282 kB, map code-split into its own chunk |
+| 6 | `cd e2e && CI=1 npx playwright test` | **PASS** — **17/17** |
+| 7 | `npm run lint` | same 8 pre-existing errors, unchanged |
+| 8 | `npm audit --omit=dev` | **5 vulnerabilities, 0 critical** (was 6/1-critical before the maplibre-gl upgrade) |
+
+## Still open (Stage 6 only)
+
+One final combined gate run across the whole stack, and writing real preview/demo
+instructions (credentials, commands, routes to visit) into this file. See
+`WORK_IN_PROGRESS.md` for the exact checklist.
+
+## Re-verify
+
+```bash
+npm run build --workspace @ronmacrae/contracts
+npm run typecheck --workspace @ronmacrae/api && npm run test:unit --workspace @ronmacrae/api
+npm run typecheck --workspace @ronmacrae/web && npm run test:unit --workspace @ronmacrae/web && npm run build --workspace @ronmacrae/web
+cd e2e && CI=1 npx playwright test   # expect 17/17
+npm audit --omit=dev                 # expect 0 critical
+```

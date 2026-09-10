@@ -1,4 +1,4 @@
-import type React from "react";
+import React, { Suspense } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import { AuthProvider, useAuth } from "./lib/auth.js";
@@ -13,6 +13,9 @@ import { Notifications } from "./pages/notifications.js";
 import { Track } from "./pages/track.js";
 import { Zones } from "./pages/zones.js";
 import { Spinner } from "./components/spinner.js";
+
+// Code-split: maplibre-gl is large (~1MB) and only staff visiting /map ever need it.
+const DispatchMap = React.lazy(() => import("./pages/map.js").then((m) => ({ default: m.DispatchMap })));
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: 1, staleTime: 30_000 } },
@@ -56,6 +59,16 @@ export default function App(): React.JSX.Element {
                 element={
                   <Protected>
                     <NewJob />
+                  </Protected>
+                }
+              />
+              <Route
+                path="/map"
+                element={
+                  <Protected>
+                    <Suspense fallback={<Spinner label="Loading map…" />}>
+                      <DispatchMap />
+                    </Suspense>
                   </Protected>
                 }
               />
