@@ -551,7 +551,7 @@ tracked here as Stages 8+ (Stages 1-7 above are the prior work, already shipped)
 | 11 | Remove extra test riders safely (backup first; keep Kei Bearer only) | DONE |
 | 12 | 5A — COD reconciliation ledger | DONE |
 | 13 | 5B — Rider route queue | DONE |
-| 14 | 5C — Dispatcher operations board | NOT STARTED |
+| 14 | 5C — Dispatcher operations board | DONE |
 | 15 | 5D — Customer status message templates + notification log | NOT STARTED |
 | 16 | 5E — Operating reports + CSV export | NOT STARTED |
 | 17 | 5F — Emergency/contact-dispatch button | NOT STARTED |
@@ -1072,3 +1072,81 @@ accessible without an extra dependency); no live realtime push when a queue
 changes (dispatcher's read-only view polls every 20s, same as other list
 views in this app) — reordering isn't as time-critical as an offer/
 assignment, so this was a deliberate scope cut, not an oversight.
+
+## Stage 14 — 5C: Dispatcher operations board (DONE)
+
+**One new backend endpoint**, `GET /api/ops-board` (admin/dispatcher/
+accountant/viewer), aggregates everything the spec asks for in one read-only
+response so the frontend doesn't have to race five separate fetches:
+- **Riders**: status, the rider's own "Available for jobs" toggle state,
+  active-job count, configured capacity and remaining capacity, whether
+  their websocket is *currently* connected to the realtime hub (new —
+  exposes `RealtimeHub.clientForRider()`, which already existed
+  server-side but was never surfaced to a client before), and their latest
+  location.
+- **Location honesty**: each rider's location carries `ageMs` and a `stale`
+  flag (age > 5 minutes — riders report roughly every 15-30s while active,
+  so 5 minutes of silence is a real warning, not a nitpick) computed
+  server-side from the same `at`/`trackingState` data `map.tsx` already
+  uses. A rider with no report at all gets `location: null` — **never** a
+  fabricated/last-known point presented as current; the frontend renders
+  "No report yet" for that case rather than inventing something to show.
+- **Waiting offers**: every open, unexpired `JobOffer` system-wide (there
+  was no such system-wide listing before — offers could only be viewed
+  per-job or per-rider).
+- **Urgent jobs**: active (non-terminal) jobs with `priority: urgent`.
+- **Overdue jobs**: active jobs whose `promisedAt` (falling back to
+  `scheduledAt`) has already passed, sorted most-overdue first.
+- **COD awaiting handover**: jobs with `codStatus: handed_in` (built in
+  Stage 12) — the accountant/owner queue that still needs approving.
+
+This endpoint only aggregates existing data for display — it introduces no
+new way to *change* anything, so it needed no new write-permission surface;
+all four monitoring roles get read access, same as the underlying
+riders/locations/jobs/cod endpoints it's built from.
+
+**Frontend**: new `/ops` page (`OpsBoard`, new "Ops board" staff-only nav
+tab) — a riders table (status/availability badge, active/capacity, a
+connection dot, last-location age with a stale warning, Call/Message links
+using the rider's own phone, and an inline "Route queue" toggle reusing the
+same read-only queue view from Stage 13) plus four list sections (waiting
+offers, urgent jobs, overdue jobs, COD awaiting handover). Extracted the
+Stage-13 per-rider queue-fetching logic into a shared
+`ReadOnlyRiderQueue` component in `route-queue.tsx` so the Jobs screen and
+this new board use one implementation instead of two copies.
+
+**Deliberately not built**: no in-place assign/broadcast controls on this
+screen — those already live on the Jobs screen and this board links out to
+it rather than duplicating them (the "quick actions" the spec asks for are
+Call/Message/Route-queue directly on the board, plus a link to Jobs for
+assign/broadcast, since jobs.tsx doesn't currently support deep-linking to a
+specific job — that would be the natural next small improvement if wanted).
+
+**Tests**:
+- `apps/api/test/ops-board.test.ts` (7 new) — active-job-count/capacity math,
+  a stale location correctly flagged, a fresh one correctly not, a rider
+  with no location report ever getting `null` (never a fabricated point), a
+  waiting offer listed and an expired one excluded, an overdue job flagged
+  with a not-yet-due one excluded, a job awaiting handover listed and one
+  merely "collected" excluded, and a rider role rejected outright (403).
+- `e2e/specs/ops-board.spec.ts` (new) — real browser flow: a rider with one
+  active job and no location report shows "1 / 2" and "No report yet"
+  (never a fabricated position), a waiting offer and an overdue job both
+  appear, and the inline route-queue toggle shows that job with no reorder
+  controls (matching Stage 13's read-only guarantee).
+
+**Verification run**: `npm run typecheck --workspaces` clean; `apps/api`
+vitest 91/91 (84 prior + 7 new); `apps/web` vitest 8/8; clean web build; full
+e2e suite (21 tests, incl. the new spec) 21/21 serially, on a freshly-reseeded
+`e2e-test.db`.
+
+**Housekeeping note, not a Stage 14 defect**: mid-verification, the full e2e
+suite briefly ran ~1.5 minutes (vs. its usual ~20-25s) with two unrelated
+specs timing out, traced to `e2e-test.db` having accumulated a large number
+of riders/jobs across many separate `npx playwright test` invocations this
+session (the webServer's `reuseExistingServer` setting keeps reusing the same
+db across runs; `npm run seed` only runs when that server first starts, not
+on every invocation). Deleted `apps/api/data/e2e-test.db` and re-ran clean —
+back to 21/21 in ~21s. Worth remembering for future sessions: if e2e specs
+start running unusually slowly, delete that file (it's disposable and
+gitignored) before assuming a real regression.

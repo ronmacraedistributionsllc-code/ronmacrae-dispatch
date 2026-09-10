@@ -1230,13 +1230,58 @@ npm run test --workspace @ronmacrae/web
 cd e2e && npx playwright test --workers=1
 ```
 
-## Next: Stage 14 (5C)
+---
 
-Dispatcher operations board — one screen: available/unavailable riders,
-active-job count, configured capacity + remaining, connection state
-(Live/Reconnecting/Offline), latest location + accuracy + freshness/stale
-warning, active jobs, waiting offers, urgent/overdue jobs, COD awaiting
-handover, quick actions (assign/broadcast/contact rider/inspect route
-queue — the last of which Stage 13 already built). See
-`WORK_IN_PROGRESS.md`'s Stage plan table for the full remaining Stage
-14–18 sequence.
+# Stage 14 — 5C: Dispatcher operations board (pre-production hardening, 2026-09-10)
+
+Full detail in `WORK_IN_PROGRESS.md` under "Stage 14 — 5C: Dispatcher
+operations board (DONE)". Summary for resuming agents:
+
+**Backend**: one new aggregation endpoint, `GET /api/ops-board` (admin/
+dispatcher/accountant/viewer) — riders (status/availability/active-count/
+capacity/remaining/`connected` via `RealtimeHub.clientForRider()`, newly
+surfaced/location with an honest `stale` flag — 5min threshold — and `null`
+rather than a fabricated point when there's no report at all), system-wide
+waiting offers (didn't exist before), urgent jobs, overdue jobs
+(`promisedAt`/`scheduledAt` passed, still active), COD awaiting handover
+(`codStatus: handed_in`, from Stage 12). Read-only aggregation — no new
+write-permission surface.
+
+**Frontend**: new `/ops` page + nav tab — riders table with Call/Message
+links and an inline read-only route-queue toggle, plus four list sections.
+Extracted `ReadOnlyRiderQueue` into `route-queue.tsx` as a shared component
+(Jobs screen + this board now use one implementation).
+
+## Commands run and results (Stage 14)
+
+| # | Command | Result |
+| --- | --- | --- |
+| 1 | `npm run typecheck --workspaces` (root) | **PASS** — 0 errors |
+| 2 | `npx vitest run` (apps/api) | **PASS** — 91/91 (84 prior + 7 new) |
+| 3 | `npx vitest run` / `npm run build` (apps/web) | **PASS** — 8/8, clean build |
+| 4 | Full e2e suite (21 tests, incl. new `ops-board.spec.ts`), serial, fresh `e2e-test.db` | **PASS** — 21/21 in ~21s |
+
+**Housekeeping note**: if e2e specs start running unusually slowly (minutes
+instead of ~20-25s), delete `apps/api/data/e2e-test.db` (disposable,
+gitignored) before assuming a real regression — it accumulates across many
+separate `npx playwright test` invocations in one session since the
+webServer's `reuseExistingServer` setting keeps reusing it and `npm run seed`
+only runs on that server's first start.
+
+## Re-verify (Stage 14)
+
+```bash
+npm run typecheck --workspaces
+npm run test --workspace @ronmacrae/api
+npm run test --workspace @ronmacrae/web
+rm -f apps/api/data/e2e-test.db && cd e2e && npx playwright test --workers=1
+```
+
+## Next: Stage 15 (5D)
+
+Customer status message templates + notification log + pluggable WhatsApp/
+SMS provider interface — 8 lifecycle events, tracking link included,
+configurable templates, Pending/Sent/Delivered/Failed/Skipped log, never
+claim sent/delivered without provider evidence, safe preview/test mode
+(no live credentials/billing). See `WORK_IN_PROGRESS.md`'s Stage plan table
+for the full remaining Stage 15–18 sequence.

@@ -54,6 +54,9 @@ export const API = {
     report: (riderId: string) => `/api/rider-locations/${riderId}/report`,
   },
 
+  /** dispatcher operations board — spec 5C */
+  opsBoard: "/api/ops-board",
+
   customers: {
     list: "/api/customers",
     create: "/api/customers",

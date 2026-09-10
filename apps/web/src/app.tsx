@@ -11,6 +11,7 @@ import { Jobs } from "./pages/jobs.js";
 import { Login } from "./pages/login.js";
 import { NewJob } from "./pages/new-job.js";
 import { Notifications } from "./pages/notifications.js";
+import { OpsBoard } from "./pages/ops-board.js";
 import { Track } from "./pages/track.js";
 import { Zones } from "./pages/zones.js";
 import { Spinner } from "./components/spinner.js";
@@ -94,6 +95,14 @@ export default function App(): React.JSX.Element {
                 element={
                   <Protected>
                     <CodReconciliation />
+                  </Protected>
+                }
+              />
+              <Route
+                path="/ops"
+                element={
+                  <Protected>
+                    <OpsBoard />
                   </Protected>
                 }
               />

@@ -1,11 +1,11 @@
 import React, { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ACTIVE_JOB_STATUSES, JOB_SOURCES, JOB_STATUSES, RIDER_STAGE_LABELS, allowedTransitions } from "@ronmacrae/contracts";
+import { JOB_SOURCES, JOB_STATUSES, RIDER_STAGE_LABELS, allowedTransitions } from "@ronmacrae/contracts";
 import type { JobSource, JobStatus, JobSummaryDto, RiderDto } from "@ronmacrae/contracts";
 import { ApiError, apiFetch, formatMoney } from "../lib/api.js";
 import { useAuth } from "../lib/auth.js";
 import { JobOffersPanel } from "../components/job-offers-panel.js";
-import { RouteQueue } from "../components/route-queue.js";
+import { ReadOnlyRiderQueue } from "../components/route-queue.js";
 
 const STATUS_BADGE: Record<JobStatus, string> = {
   new: "bg-zinc-800 text-zinc-300",
@@ -166,25 +166,6 @@ function JobRow({ job, riders, canWrite, busy, offersOpen, queueOpen, onAssign, 
   );
 }
 
-/** Dispatcher/owner read-only view of one rider's active-job queue — spec 5B
- *  ("dispatchers can view a rider's queue"). No reorder controls here; only
- *  the rider reorders their own queue (see rider-dashboard.tsx). */
-function RiderQueuePanel({ riderId }: { riderId: string }): React.JSX.Element {
-  const active = useQuery({
-    queryKey: ["rider-queue", riderId],
-    queryFn: () =>
-      apiFetch<{ jobs: JobSummaryDto[] }>(
-        `/jobs?riderId=${riderId}&status=${ACTIVE_JOB_STATUSES.join(",")}&take=100`,
-      ),
-    refetchInterval: 20_000,
-  });
-  return (
-    <div className="rounded-lg border border-zinc-700 bg-zinc-900/40 p-3">
-      {active.isLoading ? <p className="text-sm text-zinc-500">Loading queue…</p> : null}
-      {active.data ? <RouteQueue jobs={active.data.jobs} /> : null}
-    </div>
-  );
-}
 
 export function Jobs(): React.JSX.Element {
   const { user } = useAuth();
@@ -356,7 +337,7 @@ export function Jobs(): React.JSX.Element {
                   {job.riderId && queueJobId === job.id ? (
                     <tr className="border-t border-zinc-800" data-testid={`queue-panel-${job.riderId}`}>
                       <td colSpan={canWrite ? 8 : 7} className="py-2">
-                        <RiderQueuePanel riderId={job.riderId} />
+                        <ReadOnlyRiderQueue riderId={job.riderId} />
                       </td>
                     </tr>
                   ) : null}

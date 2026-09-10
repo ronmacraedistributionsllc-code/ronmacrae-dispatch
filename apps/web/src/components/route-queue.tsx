@@ -1,7 +1,9 @@
 import React from "react";
-import type { JobStatus } from "@ronmacrae/contracts";
+import { useQuery } from "@tanstack/react-query";
+import type { JobStatus, JobSummaryDto } from "@ronmacrae/contracts";
+import { ACTIVE_JOB_STATUSES } from "@ronmacrae/contracts";
 import type { Money } from "@ronmacrae/money";
-import { formatMoney } from "../lib/api.js";
+import { apiFetch, formatMoney } from "../lib/api.js";
 
 /** Statuses where the rider hasn't picked the package up yet — the queue's
  *  "next stop" for these is the pickup point; everything after is the
@@ -144,5 +146,25 @@ export function RouteQueue({ jobs, onReorder, reordering }: RouteQueueProps): Re
         );
       })}
     </ol>
+  );
+}
+
+/**
+ * Fetches and renders one rider's active-job queue, read-only — shared by
+ * the dispatcher's Jobs screen and the operations board so both stay in sync
+ * with a single implementation rather than two copies. Never shows reorder
+ * controls: only the rider reorders their own queue.
+ */
+export function ReadOnlyRiderQueue({ riderId }: { riderId: string }): React.JSX.Element {
+  const active = useQuery({
+    queryKey: ["rider-queue", riderId],
+    queryFn: () => apiFetch<{ jobs: JobSummaryDto[] }>(`/jobs?riderId=${riderId}&status=${ACTIVE_JOB_STATUSES.join(",")}&take=100`),
+    refetchInterval: 20_000,
+  });
+  return (
+    <div className="rounded-lg border border-zinc-700 bg-zinc-900/40 p-3">
+      {active.isLoading ? <p className="text-sm text-zinc-500">Loading queue…</p> : null}
+      {active.data ? <RouteQueue jobs={active.data.jobs} /> : null}
+    </div>
   );
 }

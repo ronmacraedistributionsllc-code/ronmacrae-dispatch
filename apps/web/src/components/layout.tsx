@@ -6,6 +6,7 @@ import { AlertsToaster } from "./alerts-toaster.js";
 
 const TABS = [
   { to: "/", label: "Dashboard", end: true },
+  { to: "/ops", label: "Ops board" },
   { to: "/jobs", label: "Jobs", end: true },
   { to: "/jobs/new", label: "New Order" },
   { to: "/map", label: "Map" },
@@ -13,7 +14,7 @@ const TABS = [
   { to: "/cod", label: "COD" },
   { to: "/notifications", label: "Notifications" },
 ];
-const STAFF_ONLY_TABS = new Set(["/jobs", "/jobs/new", "/map", "/cod"]);
+const STAFF_ONLY_TABS = new Set(["/ops", "/jobs", "/jobs/new", "/map", "/cod"]);
 
 const CONNECTION_LABEL: Record<ConnectionStatus, string> = {
   live: "Live",

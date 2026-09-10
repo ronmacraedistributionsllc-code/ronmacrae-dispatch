@@ -72,6 +72,65 @@ export interface RiderDto {
   createdAt: string;
 }
 
+/** One rider row on the dispatcher operations board (spec 5C) — everything a
+ *  dispatcher needs to judge a rider's current load and reachability without
+ *  opening several screens. Respects the same staff-only access as the
+ *  underlying rider/location endpoints it's assembled from. */
+export interface OpsBoardRiderDto {
+  id: string;
+  name: string;
+  phone: string;
+  status: RiderStatus;
+  /** the rider's own "Available for jobs" toggle state */
+  availableForJobs: boolean;
+  activeJobCount: number;
+  capacity: number;
+  capacityRemaining: number;
+  /** true only while this rider's own websocket is currently connected to the hub */
+  connected: boolean;
+  location: {
+    point: GeoPoint;
+    trackingState: TrackingState;
+    at: string;
+    ageMs: number;
+    /** honest staleness signal — never treat a stale point as the rider's
+     *  current position; this is exactly the flag that says so. */
+    stale: boolean;
+  } | null;
+}
+
+export interface OpsBoardOfferDto {
+  id: string;
+  jobId: string;
+  jobNumber: string | null;
+  riderId: string;
+  riderName: string;
+  urgent: boolean;
+  expiresAt: string;
+  createdAt: string;
+}
+
+/** A job flagged as overdue on the board — its own promised/scheduled time
+ *  has already passed while it's still in an active (non-terminal) status. */
+export interface OpsBoardOverdueJobDto {
+  id: string;
+  jobNumber: string | null;
+  status: JobStatus;
+  priority: Priority;
+  riderName: string | null;
+  dueAt: string;
+  overdueByMs: number;
+}
+
+export interface OpsBoardDto {
+  riders: OpsBoardRiderDto[];
+  waitingOffers: OpsBoardOfferDto[];
+  urgentJobs: JobSummaryDto[];
+  overdueJobs: OpsBoardOverdueJobDto[];
+  codAwaitingHandover: JobSummaryDto[];
+  generatedAt: string;
+}
+
 export interface CustomerDto {
   id: string;
   name: string;
