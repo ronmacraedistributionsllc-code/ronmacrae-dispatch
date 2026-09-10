@@ -41,6 +41,20 @@ model User {
   audits    AuditLog[]
   payouts   Payout[]           @relation("payoutApprover")
   recon     ReconDaily[]       @relation("reconResolver")
+  pushSubscriptions PushSubscription[]
+}
+
+/** One browser/device's opt-in Web Push subscription. A user may have several (multiple devices/browsers). */
+model PushSubscription {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  endpoint  String   @unique
+  p256dh    String
+  auth      String
+  createdAt DateTime @default(now())
+
+  @@index([userId])
 }
 
 model Session {

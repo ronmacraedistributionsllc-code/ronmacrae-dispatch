@@ -1,8 +1,9 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { API } from "@ronmacrae/contracts";
 import type { JobOfferDto, JobStatus } from "@ronmacrae/contracts";
 import { ApiError, apiFetch } from "../lib/api.js";
+import { useRealtime } from "../lib/realtime.js";
 
 const OFFER_BADGE: Record<JobOfferDto["status"], string> = {
   open: "bg-sky-900/50 text-sky-300",
@@ -26,13 +27,26 @@ export function JobOffersPanel({ jobId, jobStatus, canWrite }: { jobId: string; 
   const offers = useQuery({
     queryKey: ["job-offers", jobId],
     queryFn: () => apiFetch<{ offers: JobOfferDto[] }>(API.offers.list(jobId)),
-    refetchInterval: 10_000,
+    // Realtime (below) delivers new offers and the accept outcome immediately;
+    // this interval is just the fallback for anything realtime misses (a dropped
+    // connection, a decline/expiry, which aren't pushed yet).
+    refetchInterval: 20_000,
   });
 
   const invalidate = () => {
     void qc.invalidateQueries({ queryKey: ["job-offers", jobId] });
     void qc.invalidateQueries({ queryKey: ["jobs"] });
   };
+
+  const { subscribe } = useRealtime();
+  useEffect(
+    () =>
+      subscribe(["offer", "job.assigned"], (msg) => {
+        if (msg.type === "offer" && msg.payload.jobId === jobId) invalidate();
+        else if (msg.type === "job.assigned" && msg.payload.job.id === jobId) invalidate();
+      }),
+    [subscribe, jobId],
+  );
 
   const broadcast = useMutation({
     mutationFn: () => apiFetch(API.offers.broadcast(jobId), { method: "POST", body: JSON.stringify({ expiresInMinutes }) }),

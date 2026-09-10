@@ -3,6 +3,8 @@ import { loadConfig, effectiveDatabaseUrl } from "../src/config.js";
 
 const base: Record<string, string> = {
   SESSION_SECRET: "0123456789abcdef0123456789abcdef",
+  VAPID_PUBLIC_KEY: "test-public-key",
+  VAPID_PRIVATE_KEY: "test-private-key",
 };
 
 describe("loadConfig", () => {
@@ -14,6 +16,16 @@ describe("loadConfig", () => {
 
   it("requires SESSION_SECRET when DEV_DB is off", () => {
     expect(() => loadConfig({ DEV_DB: "0" })).toThrow(/SESSION_SECRET/);
+  });
+
+  it("falls back to dev VAPID keys when DEV_DB is on and none is provided", () => {
+    const cfg = loadConfig({});
+    expect(cfg.VAPID_PUBLIC_KEY).not.toBe("");
+    expect(cfg.VAPID_PRIVATE_KEY).not.toBe("");
+  });
+
+  it("requires VAPID keys when DEV_DB is off", () => {
+    expect(() => loadConfig({ SESSION_SECRET: base.SESSION_SECRET, DATABASE_URL: "postgresql://u:p@db:5432/rmd", DEV_DB: "0" })).toThrow(/VAPID/);
   });
 
   it("rejects a too-short SESSION_SECRET", () => {

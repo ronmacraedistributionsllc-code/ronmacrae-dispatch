@@ -36,6 +36,14 @@ function loadRootEnv(): Record<string, string> {
 /** Well-known dev-only secret so the zero-service preview needs no credentials. */
 const DEV_SESSION_SECRET = "dev-insecure-session-secret-0123456789";
 
+/**
+ * Well-known dev-only Web Push (VAPID) key pair, same rationale as
+ * DEV_SESSION_SECRET: the zero-service local preview needs no credentials setup.
+ * A real deployment must set VAPID_PUBLIC_KEY/VAPID_PRIVATE_KEY itself — see below.
+ */
+const DEV_VAPID_PUBLIC_KEY = "BM_4rERFDNAdJ9zRVhImBXUT4tR2IGTBYnIBjlTSsapbDAGmTVCubSaj_DRaBn5Ofnqb2qe8StE3DKj_tfDmjVU";
+const DEV_VAPID_PRIVATE_KEY = "dzlPYNLkxFNJr5fJD6Vs13Ms3PqTlVRs5u5zs3ftG4g";
+
 const EnvSchema = z.object({
   APP_ORIGIN: z.string().default("http://localhost:5173"),
   SESSION_SECRET: z.string().min(16, "SESSION_SECRET must be at least 16 chars").optional().default(""),
@@ -80,6 +88,11 @@ const EnvSchema = z.object({
 
   WEB_DIST: z.string().default(""),
   MAX_UPLOAD_BYTES: z.coerce.number().int().positive().default(8_388_608),
+
+  /** Web Push (VAPID). Dev default below when DEV_DB=1; required otherwise. */
+  VAPID_PUBLIC_KEY: z.string().default(""),
+  VAPID_PRIVATE_KEY: z.string().default(""),
+  VAPID_SUBJECT: z.string().default("mailto:ops@ronmacraedistributions.com"),
 });
 
 export type AppConfig = z.infer<typeof EnvSchema>;
@@ -106,6 +119,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = { ...loadRootEnv(), ...proce
     }
     // resolve a default local sqlite file
     cfg.DATABASE_URL = "";
+  }
+  if (!cfg.VAPID_PUBLIC_KEY || !cfg.VAPID_PRIVATE_KEY) {
+    if (cfg.DEV_DB) {
+      cfg.VAPID_PUBLIC_KEY = DEV_VAPID_PUBLIC_KEY;
+      cfg.VAPID_PRIVATE_KEY = DEV_VAPID_PRIVATE_KEY;
+    } else {
+      throw new Error("Invalid configuration:\n  VAPID_PUBLIC_KEY/VAPID_PRIVATE_KEY: must be set when DEV_DB is not enabled (opt-in browser push)");
+    }
   }
   return cfg;
 }

@@ -529,3 +529,77 @@ npm run typecheck --workspace @ronmacrae/api && npm run test:unit --workspace @r
 npm run typecheck --workspace @ronmacrae/web && npm run test:unit --workspace @ronmacrae/web && npm run build --workspace @ronmacrae/web
 cd e2e && CI=1 npx playwright test   # expect 12/12
 ```
+
+---
+
+# Delivery-offers Stage 4 — realtime in-app alerts + opt-in browser push (Claude Code, 2026-09-10)
+
+**Status: PASS.** Full detail in `WORK_IN_PROGRESS.md`. Short version here.
+
+## What was built
+
+- **Realtime client** (new `apps/web/src/lib/realtime.tsx`, mounted in `app.tsx`):
+  the web app had no websocket client before this. Connects to the existing hub
+  (`apps/api/src/rt/hub.ts`), reconnects with backoff, refreshes the access token
+  on a stale-token close. `packages/contracts/src/realtime.ts` gained `"offer"` in
+  the formal `RealtimeMessage` union (already sent at runtime, wasn't typed).
+- **In-app alerts** (new `apps/web/src/components/alerts-toaster.tsx`): a global
+  toast stack — new-offer toasts for riders, assignment/SOS toasts for staff.
+- Wired into the Stage 3 UI: the dispatcher offers panel and rider dashboard both
+  subscribe to realtime messages and invalidate immediately, with polling relaxed
+  to a 20s fallback (was 8-10s). `offers.ts` now also broadcasts new offers to the
+  dispatch room (staff-shaped dto) so the dispatcher panel can go live too.
+- **Opt-in Web Push (VAPID)**: new `PushSubscription` Prisma model (additive
+  migration, `dev.db` backed up first — see `WORK_IN_PROGRESS.md` for the
+  before/after table diff proof), new `apps/api/src/modules/push.ts`
+  (subscribe/unsubscribe/public-key routes + best-effort send, wired into offer
+  broadcast so every offered rider gets a push even if the app is backgrounded),
+  `VAPID_PUBLIC_KEY`/`VAPID_PRIVATE_KEY` config with the same dev-fallback pattern
+  as `SESSION_SECRET`. Frontend: hand-written `apps/web/src/sw.ts` service worker
+  (push + notificationclick handlers) required switching `vite-plugin-pwa` to
+  `injectManifest` mode, and an explicit opt-in toggle
+  (`apps/web/src/components/push-opt-in.tsx`) on the rider dashboard (push is
+  rider-only for now — offer broadcast is the only send trigger, so a dispatcher
+  toggle would opt in to nothing).
+
+## Honest test-coverage boundary
+
+Automated tests cover everything this app is responsible for: the API routes
+(auth, validation, and that unsubscribe is scoped per-user — `apps/api/test/push.test.ts`,
+8 tests), and the opt-in UI's real round-trip to that API
+(`e2e/specs/push-optin.spec.ts`) — with the *browser vendor's* push service (Chrome's
+FCM etc.) stubbed, since that's third-party infrastructure outside this app's code
+and isn't reachable/deterministic in this sandboxed environment. Actual OS-level
+push delivery is **not** claimed as tested; see `WORK_IN_PROGRESS.md` for the manual
+verification steps. The realtime path itself (not push) has real proof:
+`e2e/specs/realtime.spec.ts` asserts a live update lands within 5s, far under the
+20s poll fallback, on an already-open page — a passing run isn't poll-timing luck.
+
+## Commands run and results (2026-09-10)
+
+| # | Command | Result |
+| --- | --- | --- |
+| 1 | `npm run build --workspace @ronmacrae/contracts` | **PASS** |
+| 2 | `npm run typecheck --workspace @ronmacrae/api` | **PASS** — 0 errors |
+| 3 | `npm run test:unit --workspace @ronmacrae/api` | **PASS** — 7 files, **45/45** |
+| 4 | `npm run typecheck --workspace @ronmacrae/web` | **PASS** — 0 errors (app + standalone `sw.ts` tsconfig) |
+| 5 | `npm run test:unit --workspace @ronmacrae/web` | **PASS** — 3/3 |
+| 6 | `npm run build --workspace @ronmacrae/web` | **PASS** — `injectManifest` PWA, 10 precache entries, `dist/sw.js` confirmed to contain `push`/`notificationclick` |
+| 7 | `cd e2e && CI=1 npx playwright test` | **PASS** — **15/15** (12 pre-existing + 3 new) |
+| 8 | `npm run lint` (repo root) | same 8 pre-existing errors, untouched files, not a regression |
+| 9 | `npm audit --omit=dev` (repo root) | same 3 pre-existing production advisories as before `web-push` was added — no new one |
+
+## Still open (Stages 5-6)
+
+Foreground GPS, dispatcher map (`maplibre-gl` already a dependency, unused so far),
+secure customer tracking hardening, then the final full-workflow gate pass and
+preview/demo instructions. See `WORK_IN_PROGRESS.md` for the concrete next steps.
+
+## Re-verify
+
+```bash
+npm run build --workspace @ronmacrae/contracts
+npm run typecheck --workspace @ronmacrae/api && npm run test:unit --workspace @ronmacrae/api
+npm run typecheck --workspace @ronmacrae/web && npm run test:unit --workspace @ronmacrae/web && npm run build --workspace @ronmacrae/web
+cd e2e && CI=1 npx playwright test   # expect 15/15
+```

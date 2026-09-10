@@ -4,6 +4,8 @@ import type { JobDto, JobOfferDto, JobStatus, RiderStatus } from "@ronmacrae/con
 import { API } from "@ronmacrae/contracts";
 import { ApiError, apiFetch, formatMoney } from "../lib/api.js";
 import { useAuth } from "../lib/auth.js";
+import { useRealtime } from "../lib/realtime.js";
+import { PushOptIn } from "../components/push-opt-in.js";
 
 type Action = { label: string; to?: JobStatus; stage?: "heading_to_pickup" | "at_pickup"; needsPin?: boolean; location?: boolean; failed?: boolean };
 
@@ -31,7 +33,13 @@ export function RiderDashboard(): React.JSX.Element {
   const [availability, setAvailability] = useState<RiderStatus | null>(rider?.status ?? null);
   useEffect(() => setAvailability(rider?.status ?? null), [rider?.status]);
   const jobs = useQuery({ queryKey: ["bearer-jobs"], queryFn: () => apiFetch<{ jobs: JobDto[] }>(API.bearer.jobs), refetchInterval: 15_000 });
-  const offers = useQuery({ queryKey: ["bearer-offers"], queryFn: () => apiFetch<{ offers: JobOfferDto[] }>(API.bearer.offers), refetchInterval: 8_000 });
+  const offers = useQuery({
+    queryKey: ["bearer-offers"],
+    queryFn: () => apiFetch<{ offers: JobOfferDto[] }>(API.bearer.offers),
+    // Realtime (below) pushes new offers immediately; this interval is the fallback
+    // for a dropped connection and for sweeping expired offers off the list.
+    refetchInterval: 20_000,
+  });
   const availabilityChange = useMutation({
     mutationFn: (status: "available" | "offline") => apiFetch<{ rider: { status: RiderStatus } }>(API.riders.status(rider!.id), { method: "PATCH", body: JSON.stringify({ status }) }),
     onSuccess: ({ rider: updated }) => setAvailability(updated.status),
@@ -41,13 +49,19 @@ export function RiderDashboard(): React.JSX.Element {
     void qc.invalidateQueries({ queryKey: ["bearer-jobs"] });
   };
 
+  const { subscribe } = useRealtime();
+  useEffect(() => subscribe(["offer"], () => refreshOffersAndJobs()), [subscribe]);
+
   if (!rider) return <p className="text-sm text-zinc-400">Loading rider profile…</p>;
   return <div className="space-y-4">
     <header className="flex flex-wrap items-center justify-between gap-3">
       <div><h1 className="text-xl font-bold">My deliveries</h1><p className="text-sm text-zinc-400">Only jobs assigned to you are shown.</p></div>
-      <button className="btn" disabled={availabilityChange.isPending || availability === "on_job"} onClick={() => void availabilityChange.mutate(availability === "available" ? "offline" : "available")}>
-        {availability === "available" ? "Go offline" : availability === "on_job" ? "On a job" : "Go online"}
-      </button>
+      <div className="flex flex-wrap items-center gap-2">
+        <PushOptIn />
+        <button className="btn" disabled={availabilityChange.isPending || availability === "on_job"} onClick={() => void availabilityChange.mutate(availability === "available" ? "offline" : "available")}>
+          {availability === "available" ? "Go offline" : availability === "on_job" ? "On a job" : "Go online"}
+        </button>
+      </div>
     </header>
     {availabilityChange.error ? <p className="text-sm text-red-400">{availabilityChange.error instanceof ApiError ? availabilityChange.error.message : "Could not update availability"}</p> : null}
     {offers.data && offers.data.offers.length > 0 ? (

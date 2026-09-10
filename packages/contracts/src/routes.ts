@@ -164,6 +164,13 @@ export const API = {
     withdraw: (id: string) => `/api/offers/${id}/withdraw`,
     rebroadcast: (jobId: string) => `/api/jobs/${jobId}/offers/rebroadcast`,
   },
+
+  /** Opt-in browser push (Web Push / VAPID). */
+  push: {
+    publicKey: "/api/push/public-key",
+    subscribe: "/api/push/subscribe",
+    unsubscribe: "/api/push/unsubscribe",
+  },
 } as const;
 
 /** WebSocket endpoint (token passed as query param for simplicity + refresh handled client-side). */

@@ -20,6 +20,7 @@ import { customerRoutes } from "./modules/customers.js";
 import { riderRoutes } from "./modules/riders.js";
 import { bearerRoutes } from "./modules/bearer.js";
 import { offerRoutes } from "./modules/offers.js";
+import { pushRoutes } from "./modules/push.js";
 import { jobRoutes } from "./modules/jobs/index.js";
 import { deliveryRequestRoutes } from "./modules/delivery.js";
 import { trackingRoutes } from "./modules/tracking.js";
@@ -87,6 +88,7 @@ export async function createApp(ctx: AppCtx): Promise<FastifyInstance> {
   await riderRoutes(app, ctx);
   await bearerRoutes(app, ctx);
   await offerRoutes(app, ctx);
+  await pushRoutes(app, ctx);
   await jobRoutes(app, ctx);
   await deliveryRequestRoutes(app, ctx);
   await trackingRoutes(app, ctx);

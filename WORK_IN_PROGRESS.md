@@ -36,9 +36,9 @@ status plus the concrete next action.
 | 1 | Atomic offer acceptance/assignment, eligibility, expiration, withdrawal, closing competing offers | **DONE** — see below |
 | 2 | Concurrency + authorization tests | **DONE** — `apps/api/test/offers.test.ts`, 8/8 passing |
 | 3 | Dispatcher broadcast/assign UI + rider Accept/Decline cards | **DONE** — see below |
-| 4 | Live in-app alerts + opt-in browser push | **NOT STARTED** |
+| 4 | Live in-app alerts + opt-in browser push | **DONE** — see below |
 | 5 | Foreground GPS, dispatcher maps, secure customer tracking | **NOT STARTED** |
-| 6 | Full workflow tests, typecheck, build, preview instructions | **PARTIAL** — backend + Stage 3 UI gates green (see below); Stage 6 still needs Stages 4-5 done first |
+| 6 | Full workflow tests, typecheck, build, preview instructions | **PARTIAL** — backend + Stage 3/4 gates green (see below); Stage 6 still needs Stage 5 done first |
 
 ## Stage 1 — done (this session)
 
@@ -127,18 +127,102 @@ no production code changes were needed for them):
   (`offers-panel-<jobId>`, `offer-rider-<riderId>`) and scoping locators by id instead
   of display text.
 
+## Stage 4 — done (this session)
+
+**Realtime client** (new `apps/web/src/lib/realtime.tsx`): the web app had zero
+websocket client before this — `RealtimeProvider` connects to the existing hub
+(`apps/api/src/rt/hub.ts`, `GET /ws?token=`), reconnects with exponential backoff
+(capped 30s) on drop, and refreshes the access token via `POST /auth/refresh` on a
+`4401` (stale-token) close before reconnecting. Mounted once in `app.tsx` inside
+`AuthProvider`. `useRealtime().subscribe(types, handler)` lets any component listen
+for specific message types. Polling is kept everywhere as a fallback (interval
+relaxed from 8-10s to 20s now that realtime covers the common case) — a dropped
+websocket connection degrades to "20s-stale" rather than "silently stuck forever".
+
+**Contracts**: added `"offer"` to the formal `RealtimeMessage` union (it existed at
+runtime already via the hub's looser `AnyRtMessage` type but wasn't in the typed
+contract). Rebuilt.
+
+**In-app alerts** (new `apps/web/src/components/alerts-toaster.tsx`, mounted in
+`layout.tsx` so it's global): a toast stack — riders see "New delivery offer…" on
+`offer` messages, staff see "`<job>` assigned to `<rider>`" on `job.assigned` and a
+red SOS toast on `sos`. Auto-dismisses after 7s.
+
+**Live-wired UI**: `apps/web/src/components/job-offers-panel.tsx` (dispatcher) now
+also broadcasts newly-created offers to the dispatch room
+(`apps/api/src/modules/offers.ts`'s `createOffers`, staff-shaped dto with
+`riderId`/`riderName`) and subscribes to `offer`/`job.assigned` for its own job id to
+invalidate immediately; `rider-dashboard.tsx` subscribes to `offer` to invalidate the
+offers list immediately. **Not yet wired**: decline/withdraw don't push a dispatch
+update (poll-only for now — a real but small gap, noted rather than hidden).
+
+**Opt-in browser push** (Web Push / VAPID):
+- Schema: new `PushSubscription` model (`apps/api/prisma/schema.prisma`) — backed up
+  `dev.db` first (`apps/api/data/dev.db.bak-push-<timestamp>`), pushed additively
+  (24 → 25 tables, confirmed via table-name diff, no data-loss warning).
+- Config (`apps/api/src/config.ts`): `VAPID_PUBLIC_KEY`/`VAPID_PRIVATE_KEY`/`VAPID_SUBJECT`,
+  same dev-fallback pattern as `SESSION_SECRET` — a well-known dev-only key pair when
+  `DEV_DB=1`, required (no default) otherwise. Documented in `.env.example`.
+- New `apps/api/src/modules/push.ts` (`PushService` + `pushRoutes`): `GET
+  /api/push/public-key`, `POST /api/push/subscribe`, `POST /api/push/unsubscribe` (all
+  `requireAuth`; unsubscribe is scoped to the caller's own `userId`, not just the
+  endpoint — tested). `sendToUser`/`sendToRider` are best-effort (never throw into the
+  caller; a `404`/`410` from the push service prunes the stale subscription row) and
+  wired into `offers.ts`'s `createOffers`, so every rider offered a job also gets a
+  push (title/body/tag/url) even if the app is backgrounded or closed.
+- `web-push` + `@types/web-push` added to `apps/api`. No new production vulnerability
+  (`npm audit --omit=dev` before/after: same 3 pre-existing, unrelated advisories —
+  `deepmerge-ts`/prisma, `maplibre-gl`, `react-router`).
+- Frontend: `apps/web/src/sw.ts` (new, hand-written service worker with `push` and
+  `notificationclick` handlers) required switching `vite-plugin-pwa` from
+  `generateSW` to `strategies: "injectManifest"` (`vite.config.ts`) — verified the
+  build still precaches everything (10 entries now vs. 7 before; the count changed
+  because `injectManifest`'s glob enumerates differently, not because anything is
+  missing) and typechecks in its own `tsconfig.sw.json` (DOM and WebWorker lib types
+  conflict, so it's excluded from the main `tsconfig.json` and typechecked
+  separately — wired into `npm run typecheck`).
+- `apps/web/src/components/push-opt-in.tsx`: explicit opt-in toggle (never
+  auto-subscribes), reflects the browser's actual subscription state on mount (not
+  just local state). Wired into the rider dashboard only — push is currently
+  rider-only (the only send trigger is offer broadcast), so a dispatcher-facing
+  toggle would opt in to nothing; noted rather than added as a dead end.
+
+**New tests**:
+- `apps/api/test/push.test.ts` (8 tests): auth required on all three routes,
+  validation, subscribe-is-an-upsert, and — the one that actually matters for
+  security — unsubscribe is scoped by `userId`, so one user's request can't delete
+  another user's subscription even knowing its `endpoint`.
+- `e2e/specs/realtime.spec.ts` (2 tests): a rider's **already-open** dashboard (opened
+  before the offer exists) shows a new offer within a 5s assertion timeout — well
+  under the 20s poll interval, so a passing run is real evidence of the websocket
+  path, not poll-timing luck. Same proof for the dispatcher's offers panel updating
+  live on accept.
+- `e2e/specs/push-optin.spec.ts` (1 test): covers everything this app is responsible
+  for — permission flow, and that `/api/push/subscribe`/`unsubscribe` really
+  round-trip (asserted on the actual network responses, not just resulting button
+  text) — while stubbing `navigator.serviceWorker.ready`'s `pushManager` so the test
+  doesn't depend on a real browser-vendor push service (out of scope: that's
+  Chrome's/Firefox's infrastructure, not this app's).
+- **Deliberately not claimed**: actual push delivery to a real device is not, and
+  cannot reasonably be, proven by an automated test here — this app's opt-in
+  mechanics and its own API surface are what's tested; the third-party push service
+  is stubbed, not exercised for real. Manual verification: run the preview build,
+  click "Enable push notifications" as a real rider in a real browser, have a
+  dispatcher broadcast an offer, confirm the OS notification appears.
+
 ## Verified gates (this session, actual output, not assumed)
 
 | Command (working dir) | Result |
 | --- | --- |
 | `npm run typecheck --workspace @ronmacrae/api` | PASS — 0 errors |
-| `npm run test:unit --workspace @ronmacrae/api` | PASS — 6 files, **35/35** (27 pre-existing + 8 offers tests) |
-| `npm run typecheck --workspace @ronmacrae/web` | PASS — 0 errors |
+| `npm run test:unit --workspace @ronmacrae/api` | PASS — 7 files, **45/45** (27 original + 8 offers + 8 push + 2 new config tests) |
+| `npm run typecheck --workspace @ronmacrae/web` | PASS — 0 errors (app tsconfig + standalone `sw.ts` tsconfig) |
 | `npm run test:unit --workspace @ronmacrae/web` | PASS — 1 file, 3/3 |
-| `npm run build --workspace @ronmacrae/web` | PASS — 271.28 kB JS (gzip 80.84 kB), PWA generated |
+| `npm run build --workspace @ronmacrae/web` | PASS — 278.24 kB JS (gzip 82.97 kB), `injectManifest` PWA, 10 precache entries, `dist/sw.js` confirmed to contain `push`/`notificationclick` handlers |
 | `npm run build --workspace @ronmacrae/contracts` | PASS |
-| `cd e2e && CI=1 npx playwright test` | PASS — **12/12** (10 pre-existing + 2 new offers specs) |
-| `npm run lint` (repo root) | **8 pre-existing errors**, all in files this session never touched (`apps/api/src/modules/jobs/proofs.ts`, `repository.ts`, `transition.ts`, `settings.ts`, `tracking.ts` — unused imports). Not a regression; lint was not part of any previously-passing checkpoint gate. Worth cleaning up separately. |
+| `cd e2e && CI=1 npx playwright test` | PASS — **15/15** (12 pre-existing + 3 new: 2 realtime, 1 push opt-in) |
+| `npm run lint` (repo root) | Same **8 pre-existing errors**, all in files this session never touched — unchanged from Stage 3, not a regression |
+| `npm audit --omit=dev` (repo root) | Same 3 pre-existing production advisories as before `web-push` was added (deepmerge-ts/prisma, maplibre-gl, react-router) — no new one |
 
 ## A latent bug found (documented, deliberately NOT fixed — out of scope)
 
@@ -156,29 +240,36 @@ patching unrelated config code mid-task. Worth a 2-line fix later:
 in both places — the `if (rel.startsWith("/")) return cfg.DATABASE_URL` line then
 works correctly for absolute paths.
 
-## Exact next steps (Stage 4 next)
+## Exact next steps (Stage 5 next)
 
-1. **Realtime client**: the web app has zero websocket client today — `ctx.hub`
-   (`apps/api/src/rt/hub.ts`) already broadcasts `type: "offer"`, `"job.assigned"`,
-   and `"job.state"` messages over `WS_PATH` (`/ws`, token as a query param — see
-   `packages/contracts/src/routes.ts`), but nothing on the frontend connects to it.
-   Stage 3's offer UI works today via polling (8-10s intervals) as an interim, so
-   Stage 4's real job is building a `useRealtimeHub`-style hook (connect, auth,
-   reconnect/backoff, dispatch typed messages to subscribers) and wiring the offers
-   panel/cards to it instead of polling — plus a toast/badge for new offers and other
-   dispatcher-relevant events.
-2. **Opt-in browser push**: needs a service worker push handler (the PWA already has
-   `vite-plugin-pwa` generating `sw.js` — check whether its `generateSW` mode allows
-   a custom push listener or whether this needs `injectManifest` mode instead), a
-   subscription-storage table (new Prisma model), a `web-push`-style VAPID key pair
-   (self-generated, no paid service — do **not** set up Firebase/OneSignal/etc.
-   without asking first, per the no-new-billing constraint), and an explicit
-   opt-in control in the UI (never auto-subscribe).
-3. Typecheck + build + an e2e spec proving the realtime path (e.g. two browser
-   contexts, one broadcasts, the other sees the offer appear without a manual
-   reload/refetch) before calling Stage 4 done.
-4. Then Stage 5 (GPS/maps/tracking), Stage 6 (final full-suite gates + preview
-   instructions).
+1. **Foreground GPS**: the rider dashboard has no location capture at all yet. Add
+   opt-in foreground geolocation (`navigator.geolocation.watchPosition`, only while
+   the tab is open/visible — explicitly do **not** claim reliable background
+   tracking from a PWA, per the constraint) that posts to the existing
+   `POST /api/rider-locations/:id/report` route (`apps/api/src/modules/riders.ts:299`)
+   already registered and already storing `RiderLocation` rows. Show the rider
+   plainly when their last report was sent (staleness is honest UI, not hidden).
+2. **Dispatcher map**: `maplibre-gl` is already a web dependency (added by an earlier
+   session, unused so far — check whether a tile source needs picking: a keyless
+   provider like OSM raster tiles, or reuse whatever `@ronmacrae/geo`'s existing
+   `GOOGLE_MAPS_API_KEY`-optional fallback already resolves to for consistency).
+   Live rider markers should come from the realtime hub's `rider.location` message
+   type (already in the `RealtimeMessage` union, already broadcast somewhere in
+   `rt/location-sim.ts` presumably — check it before assuming), wired through
+   `useRealtime()` (Stage 4's client) rather than a new polling loop.
+3. **Secure customer tracking**: check `apps/api/src/modules/tracking.ts` and
+   `apps/web/src/pages/track.tsx` (or wherever `/track/:token` renders) for what
+   exists today before adding anything — the checkpoint history mentions tracking
+   links already work for the booking flow; Stage 5's job is adding live position to
+   that page (if not already present) without ever exposing more than an
+   approximate/last-known point, and showing staleness honestly (no fake "live"
+   badge on a location that's minutes old).
+4. Typecheck + build + an e2e spec for whichever of the above is added, before
+   calling Stage 5 done — same standard as every stage so far.
+5. Then Stage 6: run every gate (api, web, e2e, lint, audit) together one final
+   time, and write the actual preview/demo instructions (`npm run dev`, seeded
+   creds, `WEB_DIST` preview mode) into the checkpoint doc.
 
 No map provider, credentials, billing action, deploy, or notification/location
-behavior was added or claimed as delivered in this session.
+behavior beyond what's listed above as done was added or claimed as delivered in
+this session.

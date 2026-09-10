@@ -9,6 +9,7 @@ import type { NotificationProvider } from "@ronmacrae/notifications";
 import type { Logger } from "./lib/log.js";
 import { AuditService } from "./modules/audit.js";
 import { NotifyService } from "./modules/notify.js";
+import { PushService } from "./modules/push.js";
 import { LocationSimulator } from "./rt/location-sim.js";
 import { makeRequireRider, makeRequireStaff, makeRequireAnyUser } from "./modules/guards.js";
 import type { StaffRole } from "@ronmacrae/contracts";
@@ -23,6 +24,8 @@ export interface AppCtx {
   notifier: NotificationProvider;
   audit: AuditService;
   notify: NotifyService;
+  /** opt-in Web Push (VAPID); see modules/push.ts */
+  push: PushService;
   /** simulated rider location (preview); see rt/location-sim.ts */
   sim: LocationSimulator;
   log: Logger;
@@ -53,6 +56,7 @@ export function buildCtx(
 ): AppCtx {
   const audit = new AuditService(prisma, log);
   const notify = new NotifyService(prisma, notifier, queue, hub, config, log, audit);
+  const push = new PushService(prisma, config, log);
   const sim = new LocationSimulator(prisma, hub, log);
   return {
     prisma,
@@ -64,6 +68,7 @@ export function buildCtx(
     notifier,
     audit,
     notify,
+    push,
     sim,
     log,
     requireStaff: (...roles: StaffRole[]) => makeRequireStaff(...roles),

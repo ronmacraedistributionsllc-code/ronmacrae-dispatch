@@ -1,6 +1,7 @@
 import type {
   JobDto,
   JobEventDto,
+  JobOfferDto,
   RouteDto,
   RiderLocationDto,
   SosAlertDto,
@@ -21,7 +22,13 @@ export type RealtimeMessage =
   | { type: "job.eta"; payload: { jobId: string; riderId: string; etaAt: string | null } }
   | { type: "bearer.tracking"; payload: { bearerId: string; state: TrackingState; reason: string | null } }
   | { type: "sos"; payload: SosAlertDto }
-  | { type: "notification"; payload: OutboundNotificationEvent };
+  | { type: "notification"; payload: OutboundNotificationEvent }
+  | { type: "offer"; payload: JobOfferDto };
+
+/** Server connection-management messages, outside the application message union above. */
+export type RealtimeSystemMessage =
+  | { type: "hello"; payload: { user: { id: string; name: string; role: string; riderId: string | null }; rooms: string[]; origin: string } }
+  | { type: "joined"; rooms: string[] };
 
 export interface OutboundNotificationEvent {
   id: string;

@@ -51,6 +51,11 @@ export function onSessionExpires(fn: (() => void) | null): void {
   onSessionExpired = fn;
 }
 
+/** Force a refresh of the access token (e.g. before reconnecting a websocket whose auth expired). */
+export function refreshAccessToken(): Promise<boolean> {
+  return doRefresh();
+}
+
 export function apiFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
   // Older web calls are relative to API_BASE ("/jobs"); shared contracts are
   // absolute API paths ("/api/jobs"). Support both without producing /api/api.

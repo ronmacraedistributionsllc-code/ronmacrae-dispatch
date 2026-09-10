@@ -9,6 +9,16 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: "autoUpdate",
+      // injectManifest (not the default generateSW) so src/sw.ts can add a custom
+      // `push`/`notificationclick` handler for opt-in Web Push, while still getting
+      // the production asset list precached the same way generateSW did.
+      strategies: "injectManifest",
+      srcDir: "src",
+      filename: "sw.ts",
+      injectManifest: {
+        // the API + realtime websocket must never be served from cache
+        globPatterns: ["**/*.{js,css,html,svg,png,ico,webmanifest}"],
+      },
       manifest: {
         name: "Ronmacrae Dispatch",
         short_name: "Dispatch",

@@ -1,6 +1,7 @@
 import type React from "react";
 import { NavLink } from "react-router-dom";
 import { useAuth } from "../lib/auth.js";
+import { AlertsToaster } from "./alerts-toaster.js";
 
 const TABS = [
   { to: "/", label: "Dashboard", end: true },
@@ -15,6 +16,7 @@ export function Layout({ children }: { children: React.ReactNode }): React.JSX.E
   const tabs = user?.role === "rider" ? TABS.filter((t) => t.to !== "/jobs" && t.to !== "/jobs/new") : TABS;
   return (
     <div className="flex h-full min-h-dvh flex-col md:flex-row">
+      <AlertsToaster />
       <aside className="flex shrink-0 flex-col gap-1 border-b border-zinc-800 bg-zinc-900/60 p-4 md:w-56 md:border-b-0 md:border-r">
         <div className="mb-4">
           <div className="text-base font-bold text-brand-accent">Ronmacrae</div>

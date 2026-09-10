@@ -87,7 +87,24 @@ async function createOffers(ctx: AppCtx, jobId: string, riders: { id: string }[]
       ),
     ),
   );
-  for (const offer of offers) ctx.hub.broadcast(roomForRider(offer.riderId), { type: "offer", payload: dto(offer) });
+  for (const offer of offers) {
+    // The rider's own room gets the un-scoped dto (no riderId/riderName — the rider
+    // already knows who they are); dispatch gets the staff-shaped dto so a live
+    // offers panel can identify which rider it's for.
+    ctx.hub.broadcast(roomForRider(offer.riderId), { type: "offer", payload: dto(offer) });
+    ctx.hub.broadcast(ROOM_DISPATCH, { type: "offer", payload: dto(offer, { includeRider: true }) });
+    // Best-effort: reaches a rider even if the app is backgrounded/closed. Never blocks
+    // or fails the broadcast/rebroadcast response — PushService already swallows
+    // per-subscription send errors internally.
+    void ctx.push
+      .sendToRider(offer.riderId, {
+        title: "New delivery offer",
+        body: [offer.job.pickupAddressText, offer.job.zone?.name ?? offer.job.addressText].filter(Boolean).join(" → ") || "Open the app to view details",
+        tag: `offer-${offer.id}`,
+        url: "/",
+      })
+      .catch((err) => ctx.log.error({ err: String(err), offerId: offer.id }, "offer push notification failed"));
+  }
   return offers;
 }
 
