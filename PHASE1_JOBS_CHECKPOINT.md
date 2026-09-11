@@ -1687,7 +1687,61 @@ npm run build --workspace @ronmacrae/web
 rm -f apps/api/data/e2e-test.db && cd e2e && npx playwright test --workers=1
 ```
 
-## Next: Stage 22 — customer package dashboard + restricted rider-location display (section 4)
+## Stage 22 (section 4) — customer package dashboard + restricted
+rider-location display
 
-Now proceeding on top of Stage 20's multi-tenancy foundation and Stage
-21's UI refresh. No open questions blocking it.
+Phone-verified (OTP-style, no account/password), cross-business "my
+packages" dashboard at `/my-packages`, linked from the per-job tracking
+page. Uses a small, explicitly provisional phone normalizer
+(`lib/phone.ts`, Jamaica-default, exact-match) — real normalization
+(libphonenumber) and any identity merging stay Stage 23's job; a
+normalization miss here just hides a package rather than risking a wrong
+match. Session is a distinct-`type` JWT (`customer_dashboard`, `lib/
+jwt.ts`), never the staff/rider `access` type.
+
+**Two real bugs found and fixed**: (1) `GET /api/notifications` had no
+business filter at all — any staff at any business could list/retry
+every business's outbound customer notifications. Fixed:
+`OutboxMessage.businessId` (nullable — platform-level messages like this
+stage's own OTP code have no single business), backfilled via
+`scripts/backfill-outbox-business.mjs` (dry-run by default), `list()`/
+`retry()` now require and enforce it. (2) The single-job tracking page
+showed a rider's live location unconditionally once `riderId` was set and
+any location row existed — before pickup, and forever after delivery/
+cancellation. Fixed: gated to `picked_up`/`in_transit`/`delivering`
+(`LOCATION_VISIBLE_STATUSES`, exported from tracking.ts so the new
+dashboard shares the identical rule). Neither had direct test coverage
+before this stage.
+
+## Commands run and results (Stage 22)
+
+| # | Command | Result |
+| --- | --- | --- |
+| 1 | `npm run typecheck --workspaces` (root) | **PASS** — 0 errors |
+| 2 | `npx vitest run` (apps/api) | **PASS** — 143/143 (133 prior + 10 new: customer-dashboard.test.ts, tracking.test.ts) |
+| 3 | `npx vitest run` / `npm run build` (apps/web) | **PASS** — 8/8, clean build |
+| 4 | Full e2e suite (32 specs, 29 prior + 3 new), serial, fresh `e2e-test.db` | **PASS** — 32/32 |
+| 5 | `dev.db` schema push + outbox-businessId backfill | **PASS** — 76 customers/66 jobs/22 outbox rows preserved, 0 orphaned |
+
+## Re-verify (Stage 22)
+
+```bash
+npm run typecheck --workspaces
+npm run test --workspace @ronmacrae/api
+npm run test --workspace @ronmacrae/web
+npm run build --workspace @ronmacrae/web
+rm -f apps/api/data/e2e-test.db && cd e2e && npx playwright test --workers=1
+```
+
+To re-run the outbox-businessId backfill on a different database:
+```bash
+cd apps/api
+DATABASE_URL="file:$(pwd)/data/dev.db" node scripts/backfill-outbox-business.mjs         # dry run
+DATABASE_URL="file:$(pwd)/data/dev.db" node scripts/backfill-outbox-business.mjs --yes   # execute
+```
+
+## Next: Stage 23 — global customer identity (section 6)
+
+Now proceeding on top of Stage 20's multi-tenancy foundation, Stage 21's
+UI refresh, and Stage 22's dashboard (whose provisional phone matching
+Stage 23 replaces with the real thing). No open questions blocking it.

@@ -1721,7 +1721,7 @@ everything from Stage 20 on, not just as a footnote:
 | 19 | Three-step rider flow + rider dashboard (Offers / To pick up / In my possession / History) | 1, 2 | DONE |
 | 20 | Multi-tenancy foundation: Business model, global User/Rider identity with per-business/platform memberships, isolation across orders/offers/messages/GPS/cash-ledgers/reports/realtime, verified with two businesses sharing one rider | (foundational — enables 4, 6, 7, 9) | DONE |
 | 21 | UI/UX refresh pass (typography, contrast, empty/loading/error states, mobile bottom nav) across rider/customer/dispatcher screens + verified screenshots | 3 | DONE |
-| 22 | Customer package dashboard + restricted rider-location display post-collection, across participating businesses | 4 | NOT STARTED |
+| 22 | Customer package dashboard + restricted rider-location display post-collection, across participating businesses | 4 | DONE |
 | 23 | Global customer identity: phone normalization (libphonenumber, JM default), safe email normalization, verified-vs-provisional records, duplicate-resolution audit trail, rate limiting, per-business customer relationships on top of Stage 20's Business model | 6 | NOT STARTED |
 | 24 | Messaging redesign: split the one shared thread into the three real pairwise conversations, add delivered/read receipts, retry-without-duplicate, reassignment access revocation | 5 | NOT STARTED (needs the thread-model redesign above) |
 | 25 | Sign-in/account linking: email verification, password reset, account-claim flow, expiring/single-use codes; Instagram login feasibility investigation (implement only if genuinely supported for this use case; otherwise document why it's disabled) | 7 | NOT STARTED |
@@ -2145,3 +2145,119 @@ reconnecting-state UI beyond the existing connection-status dot+label,
 and a full contrast audit (beyond spot-checks made while touching these
 specific files) are not separately itemized — no further gaps were found
 against the checklist in the screens touched.
+
+## Stage 22 — Section 4: customer package dashboard + restricted
+rider-location display (DONE)
+
+A phone-verified, cross-business "my packages" dashboard — a customer who
+has ordered from more than one business on the platform sees all of it in
+one place, without an account or password. Deliberately built as a real,
+bounded feature on top of Stage 20's multi-tenancy foundation rather than
+waiting on Stage 23's full customer-identity system: it uses a small,
+explicitly provisional phone normalizer (`lib/phone.ts`'s
+`normalizePhoneJM`, Jamaica-default, exact-match only) instead of the
+proper libphonenumber-based one Stage 23 will bring in, and it groups
+packages by phone match, never merging or deduping customer identities —
+that judgment call is exactly what Stage 23 is for. A normalization miss
+just means a package doesn't show up (a safe failure), never a wrong
+match.
+
+**Access model**: no login. A customer enters their phone number at
+`/my-packages` (also linked from the header of the existing per-job
+tracking page); the API sends a 6-digit, 10-minute, single-use code over
+the existing notification outbox (`customer_dashboard_code` template);
+entering it correctly returns a short-lived (24h) signed token — a
+distinct JWT `type` (`customer_dashboard`, see `lib/jwt.ts`'s new
+`CustomerDashboardTokenPayload`), never the staff/rider `access` type, so
+it is structurally impossible for it to slip past `requireStaff`/
+`requireRider` no matter what a guard forgets to check. A cooldown (30s
+between requests) and an attempt cap (5 tries per code) bound abuse; the
+global per-IP rate limiter (Stage 21) still applies underneath both.
+
+**Two real bugs found and fixed while building this** (both are
+consequences of the exact isolation problem Stage 20 set out to close,
+just in a corner Stage 20's own verification pass didn't reach):
+
+- **`GET /api/notifications` had no business filter at all.** Any staff
+  member at any business could list — and `POST .../retry` could resend —
+  *every* business's outbound customer notifications: full message text,
+  phone numbers, and tracking-link tokens included. Found because this
+  stage's own OTP code rides the same outbox and had to not leak the same
+  way. Fixed properly: `OutboxMessage` gained a nullable `businessId`
+  (derived from the linked job at enqueue time; nullable because a
+  platform-level message like this one's own OTP code has no single owning
+  business), backfilled onto the 22 existing rows via
+  `scripts/backfill-outbox-business.mjs` (dry-run by default, same
+  convention as Stage 20's migration script), and `list()`/`retry()` now
+  require and enforce it — `retry()` 404s on a businessId mismatch or a
+  null-businessId row, same "a business must never learn a foreign
+  resource exists" rule used everywhere else in this codebase. A dedicated
+  test now asserts the dashboard's own OTP message is invisible to every
+  business's notification list, on top of the isolation fix itself.
+- **The single-job tracking page showed a rider's live location
+  unconditionally** once `job.riderId` was set and any location row
+  existed — before pickup, and forever after delivery/cancellation/return,
+  regardless of the job's actual status. This endpoint had no direct test
+  coverage before this stage (only indirect coverage via delivery-messages
+  and the gps-map e2e spec, neither of which exercised this path). Fixed:
+  location is now shown only while the job is actively out with the rider
+  (`picked_up`/`in_transit`/`delivering` — the same restriction the PIN
+  already had, now named `LOCATION_VISIBLE_STATUSES` and exported from
+  tracking.ts so the new dashboard applies the identical rule rather than
+  a second, possibly-drifting copy). `apps/api/test/tracking.test.ts` (new
+  — this file didn't exist before) covers all four states: before pickup,
+  actively out, delivered, and cancelled.
+
+**What the dashboard shows**: active (not yet delivered/failed/returned/
+cancelled) vs. history, split like the rider dashboard's own offers/
+in-progress/completed convention. Each card: business name, item summary,
+customer-facing status, amount, courier name, the PIN (only while en
+route, same rule as the single-job page), and — only when
+`LOCATION_VISIBLE_STATUSES` allows it — a "live location available"
+indicator linking through to the full single-job tracking page (which has
+the actual map) rather than embedding N inline mini-maps per card, a
+deliberate scope cut to keep this bounded. That link only ever points at
+an *already-existing*, unexpired, unrevoked tracking link — this public
+route never creates one itself, since creating tracking links stays a
+staff-only action everywhere else in the system.
+
+**Tests**: `apps/api/test/customer-dashboard.test.ts` (new) — wrong-code
+handling without consuming a correct one, the resend cooldown, a consumed
+code failing on reuse, the OTP message's invisibility to staff, a 401 on
+a missing/invalid session token, and the real cross-business scenario:
+one phone with an active job at Business A, a *delivered* job at Business
+A with a rider and a fresh location row on file (asserting no location
+leaks through despite that), and a picked-up job at Business B (asserting
+its location and PIN *do* show) — genuinely exercising two businesses
+sharing data through nothing but a matching phone number, the same spirit
+as Stage 20's own two-businesses-one-rider test. `apps/api/test/
+tracking.test.ts` (new) covers the single-job restriction directly.
+`e2e/specs/my-packages.spec.ts` (new, 3 specs) covers the real-browser
+request-code flow, an invalid-phone inline error, and the tracking-page
+link-through — deliberately stopping short of completing verification in
+the browser, since the 6-digit code is delivered by SMS (the memory
+provider just logs it in dev/e2e) and — by design — is never exposed to
+any staff view or API response, so there is no legitimate way for a
+black-box browser test (or a real visitor without their phone) to read
+it. The full request → verify → dashboard round trip is instead covered
+at the API-integration level, which has real Prisma access to read the
+code the way a delivered SMS would have carried it.
+
+**Verification**: `npm run typecheck --workspaces` clean; `apps/api`
+vitest 143/143 (133 prior + 10 new); `apps/web` vitest 8/8 + clean build;
+full e2e suite, fresh `e2e-test.db`, 32/32 (29 prior + 3 new). `dev.db`
+backed up before the schema change (`data/dev.db.bak-*`); the additive
+schema push and the outbox-businessId backfill were both verified against
+the real `dev.db` with before/after row counts (all 76 customers, 66
+jobs, and 22 outbox messages preserved; 0 orphaned rows in the backfill).
+
+**Not done in this stage** (deliberately deferred to Stage 23, section 6):
+real phone normalization (libphonenumber), verified-vs-provisional
+records, a duplicate-resolution audit trail, and any actual merging of
+customer identities across businesses — this stage only groups by an
+exact, provisional phone match. Also not done: embedding a live map per
+card on the dashboard itself (link-through only, see above), and any
+account/persistence beyond the 24h session token — that's Stage 25
+(sign-in/account linking), a deliberately separate, heavier flow (email
+verification, password reset, account claim) this stage doesn't attempt
+to front-run.

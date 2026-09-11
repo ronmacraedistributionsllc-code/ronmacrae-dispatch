@@ -761,6 +761,15 @@ model OutboxMessage {
   template    String
   params      Json
   jobId       String?
+  /** The business a job-linked message belongs to (derived from the job at
+   *  enqueue time) — required for staff to ever see it in their notification
+   *  list (see notify.ts's list()/retry(), which filter on this). Null for
+   *  platform-level messages tied to no single business, such as the
+   *  cross-business customer-dashboard access code (Stage 22) — those are
+   *  never shown to any business's staff. Nullable rather than backfilled to
+   *  a placeholder, since "no business" is a real, distinct case, not a gap
+   *  in migrated data. */
+  businessId  String?
   status      NotificationStatus  @default(queued)
   provider    String
   providerRef String?
@@ -773,6 +782,25 @@ model OutboxMessage {
   createdAt   DateTime            @default(now())
 
   @@index([status, scheduledAt])
+  @@index([businessId, createdAt])
+}
+
+/** A short-lived, single-use code proving ownership of a phone number, for
+ *  the cross-business customer package dashboard (Stage 22, spec 4) — not a
+ *  password or an account, just phone verification for a read-only session.
+ *  `phone` is normalized by the provisional lib/phone.ts helper (Jamaica-
+ *  default); Stage 23 replaces that normalizer with a proper library without
+ *  changing this model. */
+model CustomerAccessCode {
+  id         String    @id @default(cuid())
+  phone      String
+  codeHash   String
+  expiresAt  DateTime
+  consumedAt DateTime?
+  attempts   Int       @default(0)
+  createdAt  DateTime  @default(now())
+
+  @@index([phone, createdAt])
 }
 
 // ---------- Money: reconciliation & payouts ----------

@@ -557,6 +557,43 @@ export interface TrackingPublicDto {
   generatedAt: string;
 }
 
+/** One order on the cross-business customer package dashboard (spec 4) — a
+ *  summary card, not the full single-job tracking page (that stays a
+ *  click-through via `trackingUrl`, when one already exists). */
+export interface CustomerPackageDto {
+  jobId: string;
+  businessName: string;
+  jobNumber: string | null;
+  itemSummary: string | null;
+  customerStatus: string;
+  scheduledAt: string | null;
+  promisedAt: string | null;
+  completedAt: string | null;
+  amountExpected: Money | null;
+  paymentMethod: string;
+  /** Same restriction as TrackingPublicDto.job.pin: only while en route. */
+  pin: string | null;
+  riderName: string | null;
+  /** Restricted the same way as the single-job tracking page (see
+   *  tracking.ts's LOCATION_VISIBLE_STATUSES) — null whenever the job isn't
+   *  actively out with the rider right now, regardless of whether a rider
+   *  is assigned or has ever reported a position. */
+  location: { point: GeoPoint | null; trackingState: TrackingState; etaAt: string | null; updatedAt: string | null } | null;
+  /** Only set when an active (non-revoked, non-expired) tracking link
+   *  already exists for this job — this endpoint never creates one, since
+   *  that's a staff-only action elsewhere. */
+  trackingUrl: string | null;
+}
+
+/** GET /api/customer-dashboard — everything this phone number has ordered
+ *  across every business on the platform. `active`/`history` split mirrors
+ *  the rider dashboard's own in-progress/completed convention. */
+export interface CustomerPackagesDto {
+  active: CustomerPackageDto[];
+  history: CustomerPackageDto[];
+  generatedAt: string;
+}
+
 /** One delivery-chat message (spec 5G). Never carries a phone number or the
  *  delivery PIN — `senderName` is a role-appropriate label ("You"/
  *  "Dispatch"/"Rider"/"Customer"), not a phone number, and is the only

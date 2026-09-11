@@ -38,9 +38,14 @@ export function Track(): React.JSX.Element {
           <div className="text-base font-bold text-brand-accent">Ronmacrae</div>
           <div className="text-xs uppercase tracking-widest text-zinc-400">Delivery tracking</div>
         </div>
-        <a href="/book" className="text-xs text-zinc-500 underline hover:text-zinc-300">
-          Book a delivery
-        </a>
+        <div className="flex items-center gap-3">
+          <a href="/my-packages" className="text-xs text-zinc-500 underline hover:text-zinc-300">
+            See all my packages
+          </a>
+          <a href="/book" className="text-xs text-zinc-500 underline hover:text-zinc-300">
+            Book a delivery
+          </a>
+        </div>
       </header>
 
       {expired ? (

@@ -9,6 +9,7 @@ import { CodReconciliation } from "./pages/cod.js";
 import { Dashboard } from "./pages/dashboard.js";
 import { Jobs } from "./pages/jobs.js";
 import { Login } from "./pages/login.js";
+import { MyPackages } from "./pages/my-packages.js";
 import { NewJob } from "./pages/new-job.js";
 import { Notifications } from "./pages/notifications.js";
 import { OpsBoard } from "./pages/ops-board.js";
@@ -41,6 +42,7 @@ export default function App(): React.JSX.Element {
               <Route path="/login" element={<Login />} />
               <Route path="/book" element={<Book />} />
               <Route path="/track/:token" element={<Track />} />
+              <Route path="/my-packages" element={<MyPackages />} />
               <Route
                 path="/"
                 element={

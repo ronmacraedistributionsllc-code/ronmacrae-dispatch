@@ -14,8 +14,20 @@ import {
 } from "./jobs/index.js";
 import { getBusinessSettings } from "./settings.js";
 
-/** Customer may see the delivery PIN only while the rider is en route. */
-const PIN_VISIBLE_STATUSES = ["picked_up", "in_transit", "delivering"] as const;
+/** Customer may see the delivery PIN only while the rider is en route.
+ *  Exported so the cross-business customer-dashboard route (Stage 22,
+ *  customer-dashboard.ts) applies the exact same rule to every job it
+ *  lists, rather than a second, possibly-drifting copy of this list. */
+export const PIN_VISIBLE_STATUSES = ["picked_up", "in_transit", "delivering"] as const;
+
+/** Live rider location is restricted the same way: shown only while a
+ *  job is actively out with the rider, never before assignment (nothing to
+ *  see) and never after the job reaches a terminal state (delivered,
+ *  failed, returned, cancelled) — a rider's position after they've moved on
+ *  to other work is not this customer's business, and it was a real bug
+ *  (found in Stage 22) that the location kept showing as long as `riderId`
+ *  was set and *any* location row existed, with no regard to job status. */
+export const LOCATION_VISIBLE_STATUSES = ["picked_up", "in_transit", "delivering"] as const;
 
 /**
  * Public delivery tracking (no auth - the customer opens the link).
@@ -79,17 +91,20 @@ export async function trackingRoutes(app: FastifyInstance, ctx: AppCtx): Promise
     let locationUpdatedAt: string | null = null;
     let riderName: string | null = null;
 
+    const locationVisible = LOCATION_VISIBLE_STATUSES.includes(status as (typeof LOCATION_VISIBLE_STATUSES)[number]);
     if (job.riderId) {
       const rider = await ctx.prisma.rider.findUnique({ where: { id: job.riderId } });
       riderName = rider?.name ?? null;
-      const last = await ctx.prisma.riderLocation.findFirst({
-        where: { riderId: job.riderId },
-        orderBy: { at: "desc" },
-      });
-      if (last) {
-        locationPoint = pointFromJson(last.point);
-        trackingState = last.trackingState as TrackingPublicDto["location"]["trackingState"];
-        locationUpdatedAt = last.at.toISOString();
+      if (locationVisible) {
+        const last = await ctx.prisma.riderLocation.findFirst({
+          where: { riderId: job.riderId },
+          orderBy: { at: "desc" },
+        });
+        if (last) {
+          locationPoint = pointFromJson(last.point);
+          trackingState = last.trackingState as TrackingPublicDto["location"]["trackingState"];
+          locationUpdatedAt = last.at.toISOString();
+        }
       }
     }
 

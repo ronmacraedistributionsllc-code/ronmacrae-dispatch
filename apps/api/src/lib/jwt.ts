@@ -27,8 +27,20 @@ export interface RefreshTokenPayload {
   type: "refresh";
 }
 
+/** A phone-verified, read-only session for the cross-business customer
+ *  package dashboard (Stage 22) — deliberately its own token `type` (not
+ *  "access"), so it is structurally impossible for it to satisfy
+ *  verifyAccess()/requireStaff()/requireRider() no matter what a guard
+ *  forgets to check. Carries no user id, role or businessId — only the
+ *  phone number it was issued for. */
+export interface CustomerDashboardTokenPayload {
+  phone: string; // normalized, see lib/phone.ts
+  type: "customer_dashboard";
+}
+
 const ACCESS_TTL_S = 15 * 60;
 const REFRESH_TTL_DAYS = 30;
+export const CUSTOMER_DASHBOARD_TTL_S = 24 * 3600;
 
 export class JwtIssuer {
   private secret: Uint8Array;
@@ -81,6 +93,24 @@ export class JwtIssuer {
       const { payload } = await jwtVerify(token, this.secret);
       if (payload.type !== "refresh" || !payload.jti) return null;
       return payload as unknown as RefreshTokenPayload;
+    } catch {
+      return null;
+    }
+  }
+
+  async issueCustomerDashboard(phone: string): Promise<string> {
+    return new SignJWT({ phone, type: "customer_dashboard" } as JWTPayload)
+      .setProtectedHeader({ alg: "HS256" })
+      .setIssuedAt()
+      .setExpirationTime(`${CUSTOMER_DASHBOARD_TTL_S}s`)
+      .sign(this.secret);
+  }
+
+  async verifyCustomerDashboard(token: string): Promise<CustomerDashboardTokenPayload | null> {
+    try {
+      const { payload } = await jwtVerify(token, this.secret);
+      if (payload.type !== "customer_dashboard" || typeof payload.phone !== "string") return null;
+      return payload as unknown as CustomerDashboardTokenPayload;
     } catch {
       return null;
     }

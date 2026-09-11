@@ -1,0 +1,211 @@
+import type { FastifyInstance, FastifyRequest } from "fastify";
+import { createHash, randomInt } from "node:crypto";
+import { z } from "zod";
+import { httpErrors } from "@fastify/sensible";
+import type { AppCtx } from "../ctx.js";
+import type { CustomerPackageDto, CustomerPackagesDto, JobStatus, TrackingState } from "@ronmacrae/contracts";
+import { toCustomerStatus } from "@ronmacrae/contracts";
+import { normalizePhoneJM, toNotifyAddress } from "../lib/phone.js";
+import { pointFromJson, moneyField } from "../geo-mappers.js";
+import { PIN_VISIBLE_STATUSES, LOCATION_VISIBLE_STATUSES } from "./tracking.js";
+import { CUSTOMER_DASHBOARD_TTL_S } from "../lib/jwt.js";
+
+const CODE_TTL_MS = 10 * 60_000;
+const REQUEST_COOLDOWN_MS = 30_000;
+const MAX_VERIFY_ATTEMPTS = 5;
+
+const TERMINAL_CUSTOMER_STATUSES = new Set(["delivered", "failed", "returned", "cancelled"]);
+
+function hashCode(phone: string, code: string): string {
+  return createHash("sha256").update(`${phone}:${code}`).digest("hex");
+}
+
+function generateCode(): string {
+  return String(randomInt(0, 1_000_000)).padStart(6, "0");
+}
+
+const RequestCodeBody = z.object({ phone: z.string().min(4).max(30) });
+const VerifyBody = z.object({ phone: z.string().min(4).max(30), code: z.string().min(4).max(10) });
+
+/**
+ * Cross-business customer package dashboard (spec 4). Public, no staff/rider
+ * login — phone-ownership verified by a short-lived, single-use code (like
+ * an OTP), never a password or a persistent account. See lib/jwt.ts's
+ * CustomerDashboardTokenPayload and lib/phone.ts's normalizePhoneJM for the
+ * two pieces this leans on, and Stage 22's write-up in WORK_IN_PROGRESS.md
+ * for the fuller reasoning (including the two real bugs found while
+ * building it: the notification-outbox cross-business leak, and the
+ * unrestricted rider-location display).
+ */
+export async function customerDashboardRoutes(app: FastifyInstance, ctx: AppCtx): Promise<void> {
+  app.post("/api/customer-dashboard/request-code", async (req) => {
+    const body = RequestCodeBody.parse(req.body);
+    const phone = normalizePhoneJM(body.phone);
+    if (!phone) throw httpErrors.createError(400, "Enter a valid phone number.");
+
+    const recent = await ctx.prisma.customerAccessCode.findFirst({
+      where: { phone },
+      orderBy: { createdAt: "desc" },
+    });
+    if (recent && Date.now() - recent.createdAt.getTime() < REQUEST_COOLDOWN_MS) {
+      throw httpErrors.createError(429, "Please wait a moment before requesting another code.");
+    }
+
+    const code = generateCode();
+    const expiresAt = new Date(Date.now() + CODE_TTL_MS);
+    await ctx.prisma.customerAccessCode.create({
+      data: { phone, codeHash: hashCode(phone, code), expiresAt },
+    });
+    // No businessId: this code isn't from any one business, and must never
+    // show up in any business's staff notification list (see notify.ts).
+    await ctx.notify.enqueue({
+      channel: "sms",
+      to: toNotifyAddress(phone),
+      template: "customer_dashboard_code",
+      params: { code },
+    });
+    return { ok: true };
+  });
+
+  app.post("/api/customer-dashboard/verify", async (req) => {
+    const body = VerifyBody.parse(req.body);
+    const phone = normalizePhoneJM(body.phone);
+    if (!phone) throw httpErrors.createError(400, "Enter a valid phone number.");
+
+    const row = await ctx.prisma.customerAccessCode.findFirst({
+      where: { phone, consumedAt: null, expiresAt: { gt: new Date() } },
+      orderBy: { createdAt: "desc" },
+    });
+    if (!row) throw httpErrors.createError(400, "That code has expired or wasn't found — request a new one.");
+    if (row.attempts >= MAX_VERIFY_ATTEMPTS) {
+      await ctx.prisma.customerAccessCode.update({ where: { id: row.id }, data: { consumedAt: new Date() } });
+      throw httpErrors.createError(400, "Too many attempts — request a new code.");
+    }
+    if (row.codeHash !== hashCode(phone, body.code.trim())) {
+      await ctx.prisma.customerAccessCode.update({ where: { id: row.id }, data: { attempts: row.attempts + 1 } });
+      throw httpErrors.createError(400, "Incorrect code.");
+    }
+    await ctx.prisma.customerAccessCode.update({ where: { id: row.id }, data: { consumedAt: new Date() } });
+    const token = await ctx.jwt.issueCustomerDashboard(phone);
+    return { token, expiresInSeconds: CUSTOMER_DASHBOARD_TTL_S };
+  });
+
+  app.get("/api/customer-dashboard", async (req) => {
+    const phone = await requireCustomerDashboardPhone(ctx, req);
+    return buildDashboard(ctx, phone);
+  });
+}
+
+async function requireCustomerDashboardPhone(ctx: AppCtx, req: FastifyRequest): Promise<string> {
+  const header = req.headers.authorization ?? "";
+  const token = header.startsWith("Bearer ") ? header.slice(7) : "";
+  if (!token) throw httpErrors.createError(401, "Enter your phone number to see your packages.");
+  const payload = await ctx.jwt.verifyCustomerDashboard(token);
+  if (!payload) throw httpErrors.createError(401, "Your session has expired — enter your phone number again.");
+  return payload.phone;
+}
+
+/**
+ * Finds every business's Customer row for this phone and aggregates their
+ * jobs. Deliberately a broad, honest, exact-match lookup — not the real
+ * cross-business identity system Stage 23 builds — so a `contains` prefilter
+ * on the phone's last 7 digits (cheap even unindexed at this scale) narrows
+ * the scan before an exact normalized comparison in application code, which
+ * is what actually decides a match (never the raw stored string, whose
+ * formatting isn't guaranteed consistent).
+ */
+async function buildDashboard(ctx: AppCtx, phone: string): Promise<CustomerPackagesDto> {
+  const last7 = phone.slice(-7);
+  const candidates = await ctx.prisma.customer.findMany({
+    where: { phone: { contains: last7 } },
+    select: { id: true, phone: true },
+  });
+  const customerIds = candidates.filter((c) => normalizePhoneJM(c.phone) === phone).map((c) => c.id);
+  if (customerIds.length === 0) {
+    return { active: [], history: [], generatedAt: new Date().toISOString() };
+  }
+
+  const jobs = await ctx.prisma.job.findMany({
+    where: { customerId: { in: customerIds } },
+    orderBy: { createdAt: "desc" },
+  });
+  if (jobs.length === 0) {
+    return { active: [], history: [], generatedAt: new Date().toISOString() };
+  }
+
+  const businessIds = [...new Set(jobs.map((j) => j.businessId))];
+  const riderIds = [...new Set(jobs.map((j) => j.riderId).filter((id): id is string => Boolean(id)))];
+  const jobIds = jobs.map((j) => j.id);
+
+  const [businesses, riders, links] = await Promise.all([
+    ctx.prisma.business.findMany({ where: { id: { in: businessIds } }, select: { id: true, name: true } }),
+    riderIds.length
+      ? ctx.prisma.rider.findMany({ where: { id: { in: riderIds } }, select: { id: true, name: true } })
+      : Promise.resolve([]),
+    ctx.prisma.trackingLink.findMany({
+      where: { jobId: { in: jobIds }, revoked: false, expiresAt: { gt: new Date() } },
+      orderBy: { createdAt: "desc" },
+    }),
+  ]);
+  const businessNameById = new Map(businesses.map((b) => [b.id, b.name]));
+  const riderNameById = new Map(riders.map((r) => [r.id, r.name]));
+  const linkByJobId = new Map<string, (typeof links)[number]>();
+  for (const link of links) if (!linkByJobId.has(link.jobId)) linkByJobId.set(link.jobId, link);
+
+  // Latest location per rider, but only for riders on a job currently
+  // actively out (see LOCATION_VISIBLE_STATUSES) — never fetched otherwise.
+  const ridersNeedingLocation = [
+    ...new Set(
+      jobs
+        .filter((j) => j.riderId && LOCATION_VISIBLE_STATUSES.includes(j.status as (typeof LOCATION_VISIBLE_STATUSES)[number]))
+        .map((j) => j.riderId as string),
+    ),
+  ];
+  const locations = ridersNeedingLocation.length
+    ? await ctx.prisma.riderLocation.findMany({
+        where: { riderId: { in: ridersNeedingLocation } },
+        orderBy: { at: "desc" },
+      })
+    : [];
+  const latestLocationByRiderId = new Map<string, (typeof locations)[number]>();
+  for (const loc of locations) if (!latestLocationByRiderId.has(loc.riderId)) latestLocationByRiderId.set(loc.riderId, loc);
+
+  const active: CustomerPackageDto[] = [];
+  const history: CustomerPackageDto[] = [];
+  for (const job of jobs) {
+    const customerStatus = toCustomerStatus(job.status as JobStatus);
+    const pinVisible = PIN_VISIBLE_STATUSES.includes(job.status as (typeof PIN_VISIBLE_STATUSES)[number]);
+    const locationVisible = job.riderId && LOCATION_VISIBLE_STATUSES.includes(job.status as (typeof LOCATION_VISIBLE_STATUSES)[number]);
+    const loc = locationVisible ? latestLocationByRiderId.get(job.riderId as string) : undefined;
+    const link = linkByJobId.get(job.id);
+
+    const dto: CustomerPackageDto = {
+      jobId: job.id,
+      businessName: businessNameById.get(job.businessId) ?? "Business",
+      jobNumber: job.jobNumber,
+      itemSummary: job.itemSummary,
+      customerStatus,
+      scheduledAt: job.scheduledAt?.toISOString() ?? null,
+      promisedAt: job.promisedAt?.toISOString() ?? null,
+      completedAt: job.completedAt?.toISOString() ?? null,
+      amountExpected: moneyField(job.amountExpected, job.currency),
+      paymentMethod: job.paymentMethod,
+      pin: pinVisible ? job.pin : null,
+      riderName: job.riderId ? (riderNameById.get(job.riderId) ?? null) : null,
+      location: loc
+        ? {
+            point: pointFromJson(loc.point),
+            trackingState: loc.trackingState as TrackingState,
+            etaAt: job.routeEta?.toISOString() ?? null,
+            updatedAt: loc.at.toISOString(),
+          }
+        : null,
+      trackingUrl: link ? `${ctx.config.APP_ORIGIN}/track/${link.token}` : null,
+    };
+
+    if (TERMINAL_CUSTOMER_STATUSES.has(customerStatus)) history.push(dto);
+    else active.push(dto);
+  }
+
+  return { active, history, generatedAt: new Date().toISOString() };
+}

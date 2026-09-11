@@ -109,6 +109,16 @@ export const API = {
     addressChange: (token: string) => `/api/tracking/${token}/address-change`,
   },
 
+  /** Cross-business customer package dashboard (spec 4) — public, no login;
+   *  request-code/verify are phone-ownership-gated, the dashboard itself is
+   *  gated by the short-lived token they return (sent as a Bearer header,
+   *  not a login session — see lib/jwt.ts's CustomerDashboardTokenPayload). */
+  customerDashboard: {
+    requestCode: "/api/customer-dashboard/request-code",
+    verify: "/api/customer-dashboard/verify",
+    get: "/api/customer-dashboard",
+  },
+
   /** delivery messaging (spec 5G) — staff side */
   messages: {
     list: (jobId: string) => `/api/jobs/${jobId}/messages`,

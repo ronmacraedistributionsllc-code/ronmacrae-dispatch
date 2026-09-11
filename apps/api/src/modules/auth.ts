@@ -265,6 +265,14 @@ export function registerAuthHook(app: FastifyInstance, ctx: AppCtx): void {
     // /api/tracking/:token/revoke (both staff-only) stay protected.
     if (url.startsWith("/api/tracking/") && method === "POST" && (url.endsWith("/messages") || url.endsWith("/address-change"))) return true;
     if (url === "/api/auth/login" || url === "/api/auth/refresh") return true;
+    // Cross-business customer package dashboard (spec 4) — no staff/rider
+    // login; request-code/verify are phone-gated, and the dashboard list
+    // itself is gated inside the route by its own short-lived token (same
+    // "checked inside the route, not by this global hook" convention as the
+    // tracking-messages routes just above).
+    if (url === "/api/customer-dashboard/request-code" && method === "POST") return true;
+    if (url === "/api/customer-dashboard/verify" && method === "POST") return true;
+    if (url === "/api/customer-dashboard" && method === "GET") return true;
     // public customer-facing endpoints (rate limited)
     if (url === "/api/delivery-requests" && method === "POST") return true;
     if (url === "/api/quotes/public" && method === "POST") return true;

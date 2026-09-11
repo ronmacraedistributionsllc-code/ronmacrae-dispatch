@@ -30,6 +30,7 @@ import { deliveryMessageRoutes } from "./modules/delivery-messages.js";
 import { deliveryRequestRoutes } from "./modules/delivery.js";
 import { trackingRoutes } from "./modules/tracking.js";
 import { settingsRoutes } from "./modules/settings.js";
+import { customerDashboardRoutes } from "./modules/customer-dashboard.js";
 
 const SERVICE = "ronmacrae-dispatch-api";
 
@@ -117,6 +118,7 @@ export async function createApp(ctx: AppCtx): Promise<FastifyInstance> {
   await deliveryMessageRoutes(app, ctx);
   await deliveryRequestRoutes(app, ctx);
   await trackingRoutes(app, ctx);
+  await customerDashboardRoutes(app, ctx);
   await settingsRoutes(app, ctx);
   await notificationRoutes(app, ctx);
   await auditRoutes(app, ctx);

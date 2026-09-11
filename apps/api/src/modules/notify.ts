@@ -52,8 +52,19 @@ export class NotifyService {
     template: string;
     params: Record<string, string>;
     jobId?: string;
+    /** Only for messages with no owning job (e.g. the cross-business
+     *  customer-dashboard access code) — leave unset for job-linked
+     *  messages, whose business is derived from the job itself below. A
+     *  message that ends up with neither is a platform-level message and
+     *  stays invisible to every business's staff (see list()/retry()). */
+    businessId?: string;
   }): Promise<string | null> {
     const id = `nb-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    let businessId = opts.businessId ?? null;
+    if (!businessId && opts.jobId) {
+      const job = await this.prisma.job.findUnique({ where: { id: opts.jobId }, select: { businessId: true } });
+      businessId = job?.businessId ?? null;
+    }
     try {
       await this.prisma.outboxMessage.create({
         data: {
@@ -63,6 +74,7 @@ export class NotifyService {
           template: opts.template,
           params: opts.params as object,
           jobId: opts.jobId,
+          businessId,
           provider: this.provider.name,
         },
       });
@@ -129,9 +141,13 @@ export class NotifyService {
     }
   }
 
-  async list(filter: { status?: string; jobId?: string; take?: number; skip?: number }) {
+  /** `businessId` is required, not optional — a caller who forgot to pass
+   *  it should get a type error, not accidentally list every business's
+   *  notifications (this is the exact bug Stage 22 found and fixed: the
+   *  route previously had no business filter at all). */
+  async list(filter: { businessId: string; status?: string; jobId?: string; take?: number; skip?: number }) {
     const rows = await this.prisma.outboxMessage.findMany({
-      where: { status: filter.status as NotificationStatus | undefined, jobId: filter.jobId },
+      where: { businessId: filter.businessId, status: filter.status as NotificationStatus | undefined, jobId: filter.jobId },
       orderBy: { createdAt: "desc" },
       take: Math.min(filter.take ?? 100, 500),
       skip: filter.skip ?? 0,
@@ -139,9 +155,15 @@ export class NotifyService {
     return rows.map(toOutboxDto);
   }
 
-  async retry(id: string): Promise<void> {
+  /** 404s (not the row's real state) on a businessId mismatch or a
+   *  platform-level (businessId: null) message — a business must never
+   *  learn that a notification id belonging to someone else, or to no
+   *  business at all, exists. */
+  async retry(id: string, businessId: string): Promise<void> {
     const row = await this.prisma.outboxMessage.findUnique({ where: { id } });
-    if (!row) return;
+    if (!row || row.businessId !== businessId) {
+      throw httpErrors.createError(404, "Notification not found");
+    }
     await this.prisma.outboxMessage.update({ where: { id }, data: { status: "queued", attempts: 0, error: null } });
     await this.queue.enqueue("notify.dispatch", { id });
   }
@@ -326,7 +348,7 @@ const ListQuery = z.object({
 export async function notificationRoutes(app: FastifyInstance, ctx: AppCtx): Promise<void> {
   app.get("/api/notifications", { preHandler: ctx.requireStaff("admin", "dispatcher", "accountant", "viewer") }, async (req) => {
     const q = ListQuery.parse(req.query);
-    return { messages: await ctx.notify.list(q), provider: ctx.notifier.name };
+    return { messages: await ctx.notify.list({ ...q, businessId: req.user!.businessId! }), provider: ctx.notifier.name };
   });
 
   app.get("/api/notifications/provider", { preHandler: ctx.requireStaff("admin") }, async () => ({
@@ -335,7 +357,7 @@ export async function notificationRoutes(app: FastifyInstance, ctx: AppCtx): Pro
   }));
 
   app.post<{ Params: { id: string } }>("/api/notifications/:id/retry", { preHandler: ctx.requireStaff("admin", "dispatcher") }, async (req) => {
-    await ctx.notify.retry(req.params.id);
+    await ctx.notify.retry(req.params.id, req.user!.businessId!);
     await ctx.audit.record({ id: req.user!.sub, role: req.user!.role }, "notification.retry", "notification", req.params.id);
     return { ok: true };
   });

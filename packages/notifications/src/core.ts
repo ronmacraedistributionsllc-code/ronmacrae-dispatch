@@ -107,6 +107,14 @@ export const TEMPLATES: Record<string, TemplateDef> = {
     name: "requeued",
     body: "Hi {{customerName}}, we are trying again: delivery {{orderRef}} has been re-scheduled. Track: {{trackingUrl}}",
   },
+  /** Cross-business customer package dashboard (spec 4) — deliberately
+   *  carries no business name: this code isn't from any one business, it
+   *  proves phone ownership for a dashboard spanning every business the
+   *  customer has ordered from. */
+  customer_dashboard_code: {
+    name: "customer_dashboard_code",
+    body: "Your delivery-tracking code is {{code}}. It expires in 10 minutes. Didn't request this? Ignore this message.",
+  },
 };
 
 /** Effective body for a template name: an admin-configured override (see the
