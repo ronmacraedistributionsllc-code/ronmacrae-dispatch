@@ -5,16 +5,17 @@ import { toCustomerStatus, type CustomerJobStatus } from "@ronmacrae/contracts";
 import { randomToken } from "../../lib/ids.js";
 import { getBusinessSettings } from "../settings.js";
 import { JobNotifier } from "../notify.js";
-import { eventToDto, linkToDto } from "./dto.js";
+import { assertJobBusiness, eventToDto, linkToDto, type Viewer } from "./dto.js";
 import { getJobRow, listEvents } from "./repository.js";
 
 /**
  * Full event history for a job (status changes, stage updates, collections,
  * edits) - oldest first. Powers the staff "status history" panel.
  */
-export async function jobEventHistory(ctx: AppCtx, jobId: string): Promise<JobEventDto[]> {
+export async function jobEventHistory(ctx: AppCtx, jobId: string, viewer: Viewer): Promise<JobEventDto[]> {
   const job = await getJobRow(ctx, jobId);
   if (!job) throw httpErrors.createError(404, "Job not found");
+  assertJobBusiness(viewer, job.businessId);
   const events = await listEvents(ctx, jobId);
   return events.map(eventToDto);
 }
@@ -45,11 +46,12 @@ export async function customerStatusHistory(
  * Create (or refresh) the customer tracking link for a job. Idempotent: an
  * unexpired, unrevoked link is returned unchanged.
  */
-export async function createTrackingLink(ctx: AppCtx, jobId: string): Promise<TrackingLinkDto> {
+export async function createTrackingLink(ctx: AppCtx, jobId: string, viewer: Viewer): Promise<TrackingLinkDto> {
   const job = await getJobRow(ctx, jobId);
   if (!job) throw httpErrors.createError(404, "Job not found");
+  assertJobBusiness(viewer, job.businessId);
   const existing = await ctx.prisma.trackingLink.findUnique({ where: { jobId } });
-  const business = await getBusinessSettings(ctx);
+  const business = await getBusinessSettings(ctx, job.businessId);
   const ttlHours = business.trackingLinkTtlHours;
   const now = new Date();
   if (existing && !existing.revoked && existing.expiresAt > now) {
@@ -93,9 +95,10 @@ export async function createTrackingLink(ctx: AppCtx, jobId: string): Promise<Tr
 }
 
 /** Revoke a tracking link by its token. */
-export async function revokeTrackingLinkByToken(ctx: AppCtx, token: string): Promise<TrackingLinkDto> {
-  const link = await ctx.prisma.trackingLink.findUnique({ where: { token } });
+export async function revokeTrackingLinkByToken(ctx: AppCtx, token: string, viewer: Viewer): Promise<TrackingLinkDto> {
+  const link = await ctx.prisma.trackingLink.findUnique({ where: { token }, include: { job: { select: { businessId: true } } } });
   if (!link) throw httpErrors.createError(404, "Tracking link not found");
+  assertJobBusiness(viewer, link.job.businessId);
   const revoked = await ctx.prisma.trackingLink.update({
     where: { token },
     data: { revoked: true },

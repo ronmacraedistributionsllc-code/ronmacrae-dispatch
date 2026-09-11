@@ -2,7 +2,7 @@ import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { httpErrors } from "@fastify/sensible";
 import type { AppCtx } from "../ctx.js";
-import { TERMINAL_JOB_STATUSES, ROOM_DISPATCH, roomForJob } from "@ronmacrae/contracts";
+import { TERMINAL_JOB_STATUSES, roomForDispatch, roomForJob } from "@ronmacrae/contracts";
 import type { AddressChangeRequestDto, DeliveryMessageDto, DeliveryMessagesDto, MessageSenderRole } from "@ronmacrae/contracts";
 
 const MAX_MESSAGE_LENGTH = 1000;
@@ -86,14 +86,25 @@ async function assertNotRateLimited(ctx: AppCtx, jobId: string, senderRole: Mess
 }
 
 async function loadJobForMessaging(ctx: AppCtx, jobId: string) {
-  const job = await ctx.prisma.job.findUnique({ where: { id: jobId }, select: { id: true, status: true, riderId: true, addressText: true } });
+  const job = await ctx.prisma.job.findUnique({ where: { id: jobId }, select: { id: true, status: true, riderId: true, addressText: true, businessId: true } });
   if (!job) throw httpErrors.createError(404, "Job not found");
   return job;
+}
+
+/** Staff access to a job's conversation is scoped exactly like every other
+ *  job resource — a business only ever sees/writes to its own jobs' chats,
+ *  never another business's, even one sharing the same rider. */
+function assertMessagingBusiness(actorOrViewer: { role: string; businessId?: string | null }, jobBusinessId: string): void {
+  if (actorOrViewer.role === "rider" || actorOrViewer.role === "customer") return;
+  if (!actorOrViewer.businessId || actorOrViewer.businessId !== jobBusinessId) {
+    throw httpErrors.createError(404, "Job not found");
+  }
 }
 
 async function sendMessage(
   ctx: AppCtx,
   jobId: string,
+  businessId: string,
   senderRole: MessageSenderRole,
   senderId: string | null,
   body: string,
@@ -110,7 +121,7 @@ async function sendMessage(
       readByStaff: senderRole === "dispatcher" || senderRole === "system",
     },
   });
-  ctx.hub.broadcastMany([ROOM_DISPATCH, roomForJob(jobId)], {
+  ctx.hub.broadcastMany([roomForDispatch(businessId), roomForJob(jobId)], {
     type: "delivery_message",
     payload: { jobId, id: row.id, senderRole },
   });
@@ -145,15 +156,15 @@ export async function deliveryMessageRoutes(app: FastifyInstance, ctx: AppCtx): 
   // ---------------------------------------------------------------------
   // Customer side — gated entirely by the tracking token, never a login.
   // ---------------------------------------------------------------------
-  async function resolveCustomerLink(token: string): Promise<{ jobId: string; open: boolean }> {
+  async function resolveCustomerLink(token: string): Promise<{ jobId: string; businessId: string; open: boolean }> {
     const link = await ctx.prisma.trackingLink.findUnique({ where: { token } });
     if (!link) throw httpErrors.createError(410, "This tracking link is no longer valid");
     if (link.revoked) throw httpErrors.createError(410, "This tracking link has been revoked");
-    const job = await ctx.prisma.job.findUnique({ where: { id: link.jobId }, select: { status: true } });
+    const job = await ctx.prisma.job.findUnique({ where: { id: link.jobId }, select: { status: true, businessId: true } });
     if (!job) throw httpErrors.createError(410, "This tracking link is no longer valid");
     const linkOpen = link.expiresAt > new Date();
     const jobOpen = !TERMINAL_JOB_STATUSES.includes(job.status);
-    return { jobId: link.jobId, open: linkOpen && jobOpen };
+    return { jobId: link.jobId, businessId: job.businessId, open: linkOpen && jobOpen };
   }
 
   app.get<{ Params: { token: string } }>("/api/tracking/:token/messages", async (req, reply) => {
@@ -163,21 +174,21 @@ export async function deliveryMessageRoutes(app: FastifyInstance, ctx: AppCtx): 
   });
 
   app.post<{ Params: { token: string } }>("/api/tracking/:token/messages", async (req) => {
-    const { jobId, open } = await resolveCustomerLink(req.params.token);
+    const { jobId, businessId, open } = await resolveCustomerLink(req.params.token);
     if (!open) throw httpErrors.createError(409, "This delivery's conversation is closed");
     const body = SendBody.parse(req.body);
-    await sendMessage(ctx, jobId, "customer", null, body.body);
+    await sendMessage(ctx, jobId, businessId, "customer", null, body.body);
     return listMessages(ctx, jobId, { role: "customer", id: null }, open);
   });
 
   app.post<{ Params: { token: string } }>("/api/tracking/:token/address-change", async (req) => {
-    const { jobId, open } = await resolveCustomerLink(req.params.token);
+    const { jobId, businessId, open } = await resolveCustomerLink(req.params.token);
     if (!open) throw httpErrors.createError(409, "This delivery's conversation is closed");
     const body = AddressChangeBody.parse(req.body);
     const request = await ctx.prisma.addressChangeRequest.create({
       data: { jobId, requestedByRole: "customer", proposedAddressText: body.proposedAddressText, note: body.note || null },
     });
-    await sendMessage(ctx, jobId, "system", null, `Customer requested a new delivery address: "${body.proposedAddressText}". Waiting for dispatch to confirm.`);
+    await sendMessage(ctx, jobId, businessId, "system", null, `Customer requested a new delivery address: "${body.proposedAddressText}". Waiting for dispatch to confirm.`);
     await ctx.audit.record({ id: null, role: "customer" }, "address_change.request", "job", jobId, { requestId: request.id });
     return addressChangeToDto({ ...request, reviewedBy: null });
   });
@@ -187,19 +198,22 @@ export async function deliveryMessageRoutes(app: FastifyInstance, ctx: AppCtx): 
   // ---------------------------------------------------------------------
   app.get<{ Params: { id: string } }>("/api/jobs/:id/messages", { preHandler: staffRead }, async (req) => {
     const job = await loadJobForMessaging(ctx, req.params.id);
+    assertMessagingBusiness({ role: req.user!.role, businessId: req.user!.businessId }, job.businessId);
     return listMessages(ctx, req.params.id, { role: "dispatcher", id: req.user!.sub }, !TERMINAL_JOB_STATUSES.includes(job.status));
   });
 
   app.post<{ Params: { id: string } }>("/api/jobs/:id/messages", { preHandler: staffWrite }, async (req) => {
     const job = await loadJobForMessaging(ctx, req.params.id);
+    assertMessagingBusiness({ role: req.user!.role, businessId: req.user!.businessId }, job.businessId);
     if (TERMINAL_JOB_STATUSES.includes(job.status)) throw httpErrors.createError(409, "This delivery's conversation is closed");
     const body = SendBody.parse(req.body);
-    await sendMessage(ctx, req.params.id, "dispatcher", req.user!.sub, body.body);
+    await sendMessage(ctx, req.params.id, job.businessId, "dispatcher", req.user!.sub, body.body);
     return listMessages(ctx, req.params.id, { role: "dispatcher", id: req.user!.sub }, true);
   });
 
   app.get<{ Params: { id: string } }>("/api/jobs/:id/address-change-requests", { preHandler: staffRead }, async (req) => {
-    await loadJobForMessaging(ctx, req.params.id);
+    const job = await loadJobForMessaging(ctx, req.params.id);
+    assertMessagingBusiness({ role: req.user!.role, businessId: req.user!.businessId }, job.businessId);
     const rows = await ctx.prisma.addressChangeRequest.findMany({
       where: { jobId: req.params.id },
       include: { reviewedBy: { select: { name: true } } },
@@ -213,6 +227,7 @@ export async function deliveryMessageRoutes(app: FastifyInstance, ctx: AppCtx): 
     if (!request || request.jobId !== req.params.id) throw httpErrors.createError(404, "Address change request not found");
     if (request.status !== "pending") throw httpErrors.createError(409, "This request has already been reviewed");
     const job = await ctx.prisma.job.findUniqueOrThrow({ where: { id: req.params.id } });
+    assertMessagingBusiness({ role: req.user!.role, businessId: req.user!.businessId }, job.businessId);
 
     const updated = await ctx.prisma.$transaction(async (tx) => {
       await tx.job.update({ where: { id: req.params.id }, data: { addressText: request.proposedAddressText } });
@@ -234,7 +249,7 @@ export async function deliveryMessageRoutes(app: FastifyInstance, ctx: AppCtx): 
         include: { reviewedBy: { select: { name: true } } },
       });
     });
-    await sendMessage(ctx, req.params.id, "system", null, `Dispatch confirmed the new delivery address: "${request.proposedAddressText}".`);
+    await sendMessage(ctx, req.params.id, job.businessId, "system", null, `Dispatch confirmed the new delivery address: "${request.proposedAddressText}".`);
     await ctx.audit.record({ id: req.user!.sub, role: req.user!.role }, "address_change.approve", "job", req.params.id, { requestId: request.id });
     return addressChangeToDto(updated);
   });
@@ -244,12 +259,14 @@ export async function deliveryMessageRoutes(app: FastifyInstance, ctx: AppCtx): 
     const request = await ctx.prisma.addressChangeRequest.findUnique({ where: { id: req.params.reqId } });
     if (!request || request.jobId !== req.params.id) throw httpErrors.createError(404, "Address change request not found");
     if (request.status !== "pending") throw httpErrors.createError(409, "This request has already been reviewed");
+    const job = await loadJobForMessaging(ctx, req.params.id);
+    assertMessagingBusiness({ role: req.user!.role, businessId: req.user!.businessId }, job.businessId);
     const updated = await ctx.prisma.addressChangeRequest.update({
       where: { id: request.id },
       data: { status: "declined", reviewedById: req.user!.sub, reviewedAt: new Date(), note: body.note || request.note },
       include: { reviewedBy: { select: { name: true } } },
     });
-    await sendMessage(ctx, req.params.id, "system", null, "Dispatch did not confirm the requested address change. The delivery address is unchanged.");
+    await sendMessage(ctx, req.params.id, job.businessId, "system", null, "Dispatch did not confirm the requested address change. The delivery address is unchanged.");
     await ctx.audit.record({ id: req.user!.sub, role: req.user!.role }, "address_change.decline", "job", req.params.id, { requestId: request.id });
     return addressChangeToDto(updated);
   });
@@ -272,7 +289,7 @@ export async function deliveryMessageRoutes(app: FastifyInstance, ctx: AppCtx): 
     assertOwnJob(req, job);
     if (TERMINAL_JOB_STATUSES.includes(job.status)) throw httpErrors.createError(409, "This delivery's conversation is closed");
     const body = SendBody.parse(req.body);
-    await sendMessage(ctx, req.params.id, "rider", req.user!.riderId!, body.body);
+    await sendMessage(ctx, req.params.id, job.businessId, "rider", req.user!.riderId!, body.body);
     return listMessages(ctx, req.params.id, { role: "rider", id: req.user!.riderId! }, true);
   });
 
@@ -284,7 +301,7 @@ export async function deliveryMessageRoutes(app: FastifyInstance, ctx: AppCtx): 
     const request = await ctx.prisma.addressChangeRequest.create({
       data: { jobId: req.params.id, requestedByRole: "rider", proposedAddressText: body.proposedAddressText, note: body.note || null },
     });
-    await sendMessage(ctx, req.params.id, "system", null, `Rider requested a new delivery address: "${body.proposedAddressText}". Waiting for dispatch to confirm.`);
+    await sendMessage(ctx, req.params.id, job.businessId, "system", null, `Rider requested a new delivery address: "${body.proposedAddressText}". Waiting for dispatch to confirm.`);
     await ctx.audit.record({ id: req.user!.sub, role: req.user!.role }, "address_change.request", "job", req.params.id, { requestId: request.id });
     return addressChangeToDto({ ...request, reviewedBy: null });
   });

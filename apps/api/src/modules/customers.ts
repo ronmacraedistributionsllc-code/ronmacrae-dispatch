@@ -58,24 +58,35 @@ const ListQuery = z.object({
   skip: z.coerce.number().int().min(0).default(0),
 });
 
+/**
+ * Every method here is scoped to one business — a Customer row is one
+ * business's own relationship with a person, not a network-wide record (a
+ * cross-business global identity, when it exists, is a separate, additive
+ * layer on top of this — see the multi-tenancy stage's own notes). A
+ * business admin must never be able to read, edit, or match against another
+ * business's customer by guessing an id or a phone number.
+ */
 export class CustomersService {
   constructor(private readonly app: AppCtx) {}
 
-  async list(search: string | undefined, take: number, skip: number): Promise<CustomerDto[]> {
+  async list(businessId: string, search: string | undefined, take: number, skip: number): Promise<CustomerDto[]> {
     const s = search?.trim().toLowerCase();
     const rows = await this.app.prisma.customer.findMany({
-      where: s
-        ? {
-            // NOTE: no `mode: "insensitive"` here - the schema is portable and
-            // the sqlite (zero-service preview) provider has no `mode` filter.
-            OR: [
-              { name: { contains: s } },
-              { phone: { contains: s.replace(/[^\d]/g, "") } },
-              { email: { contains: s } },
-              { addressText: { contains: s } },
-            ],
-          }
-        : undefined,
+      where: {
+        businessId,
+        ...(s
+          ? {
+              // NOTE: no `mode: "insensitive"` here - the schema is portable and
+              // the sqlite (zero-service preview) provider has no `mode` filter.
+              OR: [
+                { name: { contains: s } },
+                { phone: { contains: s.replace(/[^\d]/g, "") } },
+                { email: { contains: s } },
+                { addressText: { contains: s } },
+              ],
+            }
+          : {}),
+      },
       orderBy: { name: "asc" },
       take,
       skip,
@@ -84,20 +95,21 @@ export class CustomersService {
     return rows.map(customerToDto);
   }
 
-  async get(id: string): Promise<CustomerDto | null> {
-    const row = await this.app.prisma.customer.findUnique({
-      where: { id },
+  async get(businessId: string, id: string): Promise<CustomerDto | null> {
+    const row = await this.app.prisma.customer.findFirst({
+      where: { id, businessId },
       include: { zone: { select: { name: true } } },
     });
     return row ? customerToDto(row) : null;
   }
 
-  async create(input: z.infer<typeof CreateBody>): Promise<CustomerDto> {
+  async create(businessId: string, input: z.infer<typeof CreateBody>): Promise<CustomerDto> {
     const phone = normalizePhone(input.phone);
-    const existing = await this.app.prisma.customer.findUnique({ where: { phone } });
+    const existing = await this.app.prisma.customer.findUnique({ where: { businessId_phone: { businessId, phone } } });
     if (existing) throw httpErrors.createError(409, "A customer with this phone number already exists");
     const row = await this.app.prisma.customer.create({
       data: {
+        businessId,
         name: input.name,
         phone,
         email: input.email || null,
@@ -114,8 +126,8 @@ export class CustomersService {
     return customerToDto(row);
   }
 
-  async update(id: string, input: z.infer<typeof UpdateBody>): Promise<CustomerDto> {
-    const row = await this.app.prisma.customer.findUnique({ where: { id } });
+  async update(businessId: string, id: string, input: z.infer<typeof UpdateBody>): Promise<CustomerDto> {
+    const row = await this.app.prisma.customer.findFirst({ where: { id, businessId } });
     if (!row) throw httpErrors.createError(404, "Customer not found");
     const updated = await this.app.prisma.customer.update({
       where: { id },
@@ -137,10 +149,12 @@ export class CustomersService {
   }
 
   /**
-   * Upsert by phone for the public delivery-request flow: the customer record
-   * is the recipient. Keeps existing name/address when the form omits them.
+   * Upsert by (businessId, phone) for the public delivery-request flow: the
+   * customer record is the recipient. Keeps existing name/address when the
+   * form omits them. Scoped to one business — the same phone number is a
+   * separate Customer row at a different business, never shared.
    */
-  async upsertFromRequest(input: {
+  async upsertFromRequest(businessId: string, input: {
     name: string;
     phone: string;
     email?: string | null;
@@ -149,7 +163,7 @@ export class CustomersService {
     consentTracking?: boolean;
   }): Promise<Customer> {
     const phone = normalizePhone(input.phone);
-    const existing = await this.app.prisma.customer.findUnique({ where: { phone } });
+    const existing = await this.app.prisma.customer.findUnique({ where: { businessId_phone: { businessId, phone } } });
     const point =
       (input.point ? pointToJson(input.point) : (existing?.point as Prisma.InputJsonValue | null | undefined) ?? null) ??
       Prisma.JsonNull;
@@ -161,9 +175,9 @@ export class CustomersService {
       consentTracking: input.consentTracking ?? existing?.consentTracking ?? false,
     };
     if (existing) {
-      return this.app.prisma.customer.update({ where: { phone }, data });
+      return this.app.prisma.customer.update({ where: { businessId_phone: { businessId, phone } }, data });
     }
-    return this.app.prisma.customer.create({ data: { ...data, phone } });
+    return this.app.prisma.customer.create({ data: { ...data, businessId, phone } });
   }
 }
 
@@ -172,30 +186,30 @@ export async function customerRoutes(app: FastifyInstance, ctx: AppCtx): Promise
 
   app.get("/api/customers", { preHandler: ctx.requireStaff("admin", "dispatcher", "accountant", "viewer") }, async (req) => {
     const q = ListQuery.parse(req.query);
-    return { customers: await svc.list(q.search, q.take, q.skip) };
+    return { customers: await svc.list(req.user!.businessId!, q.search, q.take, q.skip) };
   });
 
   app.get("/api/customers/search", { preHandler: ctx.requireStaff("admin", "dispatcher", "accountant", "viewer") }, async (req) => {
     const q = z.object({ q: z.string().max(80).optional(), take: z.coerce.number().int().min(1).max(20).default(10) }).parse(req.query);
-    return { customers: await svc.list(q.q, q.take, 0) };
+    return { customers: await svc.list(req.user!.businessId!, q.q, q.take, 0) };
   });
 
   app.post("/api/customers", { preHandler: ctx.requireStaff("admin", "dispatcher") }, async (req) => {
     const body = CreateBody.parse(req.body);
-    const customer = await svc.create(body);
+    const customer = await svc.create(req.user!.businessId!, body);
     await ctx.audit.record({ id: req.user!.sub, role: req.user!.role }, "customer.create", "customer", customer.id, { name: customer.name });
     return { customer };
   });
 
   app.get<{ Params: { id: string } }>("/api/customers/:id", { preHandler: ctx.requireStaff("admin", "dispatcher", "accountant", "viewer") }, async (req) => {
-    const customer = await svc.get(req.params.id);
+    const customer = await svc.get(req.user!.businessId!, req.params.id);
     if (!customer) throw httpErrors.createError(404, "Customer not found");
     return { customer };
   });
 
   app.patch<{ Params: { id: string } }>("/api/customers/:id", { preHandler: ctx.requireStaff("admin", "dispatcher") }, async (req) => {
     const body = UpdateBody.parse(req.body);
-    const customer = await svc.update(req.params.id, body);
+    const customer = await svc.update(req.user!.businessId!, req.params.id, body);
     await ctx.audit.record({ id: req.user!.sub, role: req.user!.role }, "customer.update", "customer", customer.id);
     return { customer };
   });

@@ -116,8 +116,8 @@ describe("zone writes are owner/admin-only", () => {
       payload: { name: `Zone With Orders ${Date.now()}`, center: { lat: 18.3, lng: -77.3 }, baseFee: 300 },
     });
     const zoneId = (created.json() as { zone: { id: string } }).zone.id;
-    const customer = await harness.prisma.customer.create({ data: { name: "Zone Delete Test Customer", phone: `+1876${Date.now()}` } });
-    await harness.prisma.job.create({ data: { customerId: customer.id, zoneId, status: "new" } });
+    const customer = await harness.prisma.customer.create({ data: { businessId: harness.business.id,  name: "Zone Delete Test Customer", phone: `+1876${Date.now()}` } });
+    await harness.prisma.job.create({ data: { businessId: harness.business.id,  customerId: customer.id, zoneId, status: "new" } });
 
     const res = await harness.app.inject({ method: "DELETE", url: `/api/zones/${zoneId}`, headers: { authorization: `Bearer ${adminAuth}` } });
     expect(res.statusCode).toBe(409);

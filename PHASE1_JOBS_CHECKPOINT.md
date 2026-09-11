@@ -1540,12 +1540,82 @@ npm run build --workspace @ronmacrae/web   # rebuild dist before e2e — the
 rm -f apps/api/data/e2e-test.db && cd e2e && npx playwright test --workers=1
 ```
 
-## Next: Stage 20 (section 3) — UI/UX refresh pass, then the multi-business question
+---
 
-Before Stages 21/22/23 (customer package dashboard, global customer
-identity, messaging redesign) can be scoped correctly, the user needs to
-answer: build true multi-tenancy (a real `Business` model, re-scoping
-Job/Customer/Rider/User/Zone/reports to it) now, or keep treating "the
-business" as the single existing store for these sections and revisit
-multi-tenancy later? See `WORK_IN_PROGRESS.md`'s "Two findings..." note
-under the new mega-request heading for the full reasoning.
+# Stage 20 — Multi-tenancy foundation (2026-09-11)
+
+Full detail in `WORK_IN_PROGRESS.md` under "Stage 20 — Multi-tenancy
+foundation (DONE)". The user's answer to Stage 19's open question: build
+real multi-tenancy now. Summary for resuming agents:
+
+**Data model**: new `Business`, `StaffMembership` (User's role at one
+business — User is now the global identity), `RiderMembership`
+(Rider's relationship with one business: pending/active/suspended/removed),
+`PlatformRole`/`PlatformRiderStatus` (the owner's network-wide authority and
+a rider's platform-wide approval gate). `businessId` added to
+Job/Customer/Zone/JobOffer (required); Customer phone and Zone slug
+uniqueness became per-business composites; Job numbering became
+per-business. Migrated via a three-phase, backed-up, dry-run-by-default
+script (`scripts/backfill-multitenancy.mjs`) — existing dev.db data (65
+jobs, 76 customers, 3 zones, 17 offers, 5 staff, Kei Bearer) preserved
+exactly, not reset.
+
+**Auth**: JWT gains `businessId`/`platformRole`; login resolves the actor's
+StaffMembership(s) and picks one; `Session` carries the chosen business
+forward across refresh; `requireStaff` now requires `businessId` present
+(closes a real gap where an owner token could otherwise pass a role check
+into a business-scoped route with `businessId: undefined`, which Prisma
+would treat as no filter).
+
+**Isolation enforced and verified** across all seven areas the user asked
+for first: orders, offers (membership-gated broadcast eligibility),
+messages, GPS (membership-based visibility, revised after breaking a real
+e2e spec — see below), cash ledgers, reports, and realtime (the global
+`"dispatch"` room replaced everywhere with `roomForDispatch(businessId)`;
+`hub.ts`'s `mayJoin` now checks business ownership on explicit room-join
+requests too).
+
+**A real bug found and fixed**: a brand-new rider added by a business
+landed with `pending` membership (blocking their own creator's use of
+them) — fixed so the creating business's membership goes active
+immediately; platform approval only gates a *second* business later
+sharing that same rider. Caught by 10 failing e2e specs before the fix.
+
+**Also found**: an initial, stricter GPS rule ("only visible while on an
+active job for this business right now") broke a legitimate, already-
+tested UX (seeing available riders on the map before assigning anything) —
+reverted to a membership-based rule that still fully isolates a rider a
+business has never worked with.
+
+## Commands run and results (Stage 20)
+
+| # | Command | Result |
+| --- | --- | --- |
+| 1 | `npm run typecheck --workspaces` (root) | **PASS** — 0 errors |
+| 2 | `npx vitest run` (apps/api) | **PASS** — 133/133 (126 prior + 7 new multi-tenancy tests, incl. a real two-socket WS isolation test) |
+| 3 | `npx vitest run` / `npm run build` (apps/web) | **PASS** — 8/8, clean build |
+| 4 | Full e2e suite (27 specs), serial, fresh `e2e-test.db` | **PASS** — 27/27 |
+| 5 | LAN + tunnel demo servers restarted on the new build | **PASS** — health, login, and a real write verified on both |
+
+## Re-verify (Stage 20)
+
+```bash
+npm run typecheck --workspaces
+npm run test --workspace @ronmacrae/api
+npm run test --workspace @ronmacrae/web
+npm run build --workspace @ronmacrae/web
+npm run build --workspace @ronmacrae/api
+rm -f apps/api/data/e2e-test.db && cd e2e && npx playwright test --workers=1
+```
+
+To re-run the (idempotency-guarded) migration on a different database:
+```bash
+cd apps/api
+DEV_DB=1 DATABASE_URL="file:$(pwd)/data/dev.db" node scripts/backfill-multitenancy.mjs         # dry run
+DEV_DB=1 DATABASE_URL="file:$(pwd)/data/dev.db" node scripts/backfill-multitenancy.mjs --yes   # execute
+```
+
+## Next: Stage 21 (section 3) — UI/UX refresh pass
+
+Now proceeding on top of the multi-tenancy foundation. No open questions
+blocking it.

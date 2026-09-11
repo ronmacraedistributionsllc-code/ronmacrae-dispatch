@@ -4,7 +4,7 @@ import { httpErrors } from "@fastify/sensible";
 import type { AppCtx } from "../../ctx.js";
 import type { JobStatus } from "@ronmacrae/contracts";
 import { JOB_STATUSES } from "@ronmacrae/contracts";
-import { jobToDto, jobSummaryToDto, type Actor } from "./dto.js";
+import { jobToDto, jobSummaryToDto, assertJobBusiness, type Actor } from "./dto.js";
 import { AssignBody, assignJob, unassignJob } from "./assign.js";
 import { CreateJobBody, UpdateJobBody, createJob, updateJob, viewerFor } from "./create.js";
 import { getJobByNumber, getJobRow, listJobs, countJobs, returnJobFor, type JobListFilter } from "./repository.js";
@@ -19,6 +19,7 @@ function actorFor(req: FastifyRequest): Actor {
     name: req.user?.name ?? null,
     role: req.user?.role ?? "anonymous",
     riderId: req.user?.riderId ?? null,
+    businessId: req.user?.businessId ?? null,
   };
 }
 
@@ -59,6 +60,7 @@ export async function jobRoutes(app: FastifyInstance, ctx: AppCtx): Promise<void
   app.get("/api/jobs", { preHandler: staff }, async (req) => {
     const q = JobListQuery.parse(req.query);
     const filter: JobListFilter = {
+      businessId: req.user!.businessId!,
       status: parseStatuses(q.status),
       source: q.source,
       riderId: q.riderId,
@@ -84,11 +86,16 @@ export async function jobRoutes(app: FastifyInstance, ctx: AppCtx): Promise<void
   // resolve by id or job number (RM-000123)
   app.get<{ Params: { id: string } }>("/api/jobs/:id", { preHandler: ctx.requireAuth }, async (req) => {
     let row = await getJobRow(ctx, req.params.id);
-    if (!row && /^rm-/i.test(req.params.id)) row = await getJobByNumber(ctx, req.params.id);
+    // Job numbers are only unique per business now — a rider (no fixed
+    // session business) can't resolve one this way; they look up by id.
+    if (!row && /^rm-/i.test(req.params.id) && req.user!.businessId) {
+      row = await getJobByNumber(ctx, req.user!.businessId, req.params.id);
+    }
     if (!row) throw httpErrors.createError(404, "Job not found");
     if (req.user!.role === "rider" && row.riderId !== req.user!.riderId) {
       throw httpErrors.createError(403, "Not your job");
     }
+    assertJobBusiness({ role: req.user!.role, businessId: req.user!.businessId }, row.businessId);
     const returnJobId = await returnJobFor(ctx, row.id);
     return { job: jobToDto(row, viewerFor(req), ctx.config.APP_ORIGIN, { returnJobId }) };
   });
@@ -158,18 +165,18 @@ export async function jobRoutes(app: FastifyInstance, ctx: AppCtx): Promise<void
   });
 
   app.get<{ Params: { id: string } }>("/api/jobs/:id/events", { preHandler: staff }, async (req) => {
-    return { events: await jobEventHistory(ctx, req.params.id) };
+    return { events: await jobEventHistory(ctx, req.params.id, viewerFor(req)) };
   });
 
   // customer tracking link for a job (dispatcher shares it)
   app.post<{ Params: { id: string } }>("/api/jobs/:id/tracking-link", { preHandler: writer }, async (req) => {
-    const link = await createTrackingLink(ctx, req.params.id);
+    const link = await createTrackingLink(ctx, req.params.id, viewerFor(req));
     await ctx.audit.record(actorFor(req), "job.tracking_link", "job", req.params.id);
     return { link };
   });
 
   app.post<{ Params: { token: string } }>("/api/jobs/tracking/:token/revoke", { preHandler: writer }, async (req) => {
-    const link = await revokeTrackingLinkByToken(ctx, req.params.token);
+    const link = await revokeTrackingLinkByToken(ctx, req.params.token, viewerFor(req));
     await ctx.audit.record(actorFor(req), "job.tracking_revoke", "trackingLink", link.id);
     return { link };
   });

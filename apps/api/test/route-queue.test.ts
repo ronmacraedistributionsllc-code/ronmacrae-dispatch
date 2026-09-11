@@ -10,7 +10,7 @@ let seq = 0;
 const uniq = () => `${Date.now()}${++seq}`;
 
 async function makeCustomer(h: TestHarness) {
-  return h.prisma.customer.create({ data: { name: "Test Customer", phone: `+1876555${uniq()}` } });
+  return h.prisma.customer.create({ data: { businessId: h.business.id,  name: "Test Customer", phone: `+1876555${uniq()}` } });
 }
 
 async function makeRider(h: TestHarness) {
@@ -37,9 +37,9 @@ describe("rider job reorder", () => {
   it("sets routeSeq to match the submitted order, for exactly the rider's active jobs", async () => {
     const customer = await makeCustomer(harness);
     const { rider, token } = await makeRider(harness);
-    const jobA = await harness.prisma.job.create({ data: { customerId: customer.id, riderId: rider.id, status: "assigned" } });
-    const jobB = await harness.prisma.job.create({ data: { customerId: customer.id, riderId: rider.id, status: "accepted" } });
-    const jobC = await harness.prisma.job.create({ data: { customerId: customer.id, riderId: rider.id, status: "picked_up" } });
+    const jobA = await harness.prisma.job.create({ data: { businessId: harness.business.id,  customerId: customer.id, riderId: rider.id, status: "assigned" } });
+    const jobB = await harness.prisma.job.create({ data: { businessId: harness.business.id,  customerId: customer.id, riderId: rider.id, status: "accepted" } });
+    const jobC = await harness.prisma.job.create({ data: { businessId: harness.business.id,  customerId: customer.id, riderId: rider.id, status: "picked_up" } });
 
     const res = await harness.app.inject({
       method: "POST",
@@ -59,8 +59,8 @@ describe("rider job reorder", () => {
   it("rejects a reorder that omits one of the rider's active jobs", async () => {
     const customer = await makeCustomer(harness);
     const { rider, token } = await makeRider(harness);
-    const jobA = await harness.prisma.job.create({ data: { customerId: customer.id, riderId: rider.id, status: "assigned" } });
-    await harness.prisma.job.create({ data: { customerId: customer.id, riderId: rider.id, status: "accepted" } }); // jobB, deliberately omitted below
+    const jobA = await harness.prisma.job.create({ data: { businessId: harness.business.id,  customerId: customer.id, riderId: rider.id, status: "assigned" } });
+    await harness.prisma.job.create({ data: { businessId: harness.business.id,  customerId: customer.id, riderId: rider.id, status: "accepted" } }); // jobB, deliberately omitted below
 
     const res = await harness.app.inject({
       method: "POST",
@@ -75,8 +75,8 @@ describe("rider job reorder", () => {
     const customer = await makeCustomer(harness);
     const { rider: riderA, token: tokenA } = await makeRider(harness);
     const { rider: riderB } = await makeRider(harness);
-    const jobA = await harness.prisma.job.create({ data: { customerId: customer.id, riderId: riderA.id, status: "assigned" } });
-    const jobB = await harness.prisma.job.create({ data: { customerId: customer.id, riderId: riderB.id, status: "assigned" } });
+    const jobA = await harness.prisma.job.create({ data: { businessId: harness.business.id,  customerId: customer.id, riderId: riderA.id, status: "assigned" } });
+    const jobB = await harness.prisma.job.create({ data: { businessId: harness.business.id,  customerId: customer.id, riderId: riderB.id, status: "assigned" } });
 
     const res = await harness.app.inject({
       method: "POST",
@@ -93,7 +93,7 @@ describe("rider job reorder", () => {
   it("a dispatcher cannot reorder a rider's queue for them — only the rider can", async () => {
     const customer = await makeCustomer(harness);
     const { rider } = await makeRider(harness);
-    const jobA = await harness.prisma.job.create({ data: { customerId: customer.id, riderId: rider.id, status: "assigned" } });
+    const jobA = await harness.prisma.job.create({ data: { businessId: harness.business.id,  customerId: customer.id, riderId: rider.id, status: "assigned" } });
     const staffTok = await dispatcherToken(harness);
 
     const res = await harness.app.inject({
@@ -108,7 +108,7 @@ describe("rider job reorder", () => {
   it("dispatchers can view a rider's active jobs (to inspect their queue), read-only", async () => {
     const customer = await makeCustomer(harness);
     const { rider } = await makeRider(harness);
-    await harness.prisma.job.create({ data: { customerId: customer.id, riderId: rider.id, status: "assigned" } });
+    await harness.prisma.job.create({ data: { businessId: harness.business.id,  customerId: customer.id, riderId: rider.id, status: "assigned" } });
     const staffTok = await dispatcherToken(harness);
 
     const res = await harness.app.inject({

@@ -17,10 +17,12 @@ function whatsAppDigits(phone: string): string {
  * (SMS/WhatsApp) — a phone call can't carry text, so the label itself names
  * the job instead.
  */
-export function ContactDispatch({ jobLabel }: { jobLabel: string }): React.JSX.Element | null {
+export function ContactDispatch({ jobId, jobLabel }: { jobId: string; jobLabel: string }): React.JSX.Element | null {
   const contact = useQuery({
-    queryKey: ["dispatch-contact"],
-    queryFn: () => apiFetch<DispatchContactDto>(API.bearer.dispatchContact),
+    // A rider can carry jobs for several businesses — the dispatch contact
+    // is per-business, so it's keyed (and fetched) per job, never shared.
+    queryKey: ["dispatch-contact", jobId],
+    queryFn: () => apiFetch<DispatchContactDto>(API.bearer.dispatchContact(jobId)),
     staleTime: 5 * 60_000,
   });
 

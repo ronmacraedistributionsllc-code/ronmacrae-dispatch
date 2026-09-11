@@ -7,10 +7,13 @@ import { buildTestHarness, type TestHarness } from "./helpers/test-app.js";
 
 let harness: TestHarness;
 
-async function makeRiderToken(h: TestHarness) {
+async function makeRiderWithJob(h: TestHarness) {
   const rider = await h.prisma.rider.create({ data: { name: "Contact Test Rider", phone: `+1876571${Date.now()}`, active: true, status: "available" } });
   const user = await h.prisma.user.create({ data: { name: rider.name, passwordHash: "unused-in-tests", role: "rider" } });
-  return h.tokenFor({ id: user.id, name: user.name, role: "rider", riderId: rider.id });
+  const token = await h.tokenFor({ id: user.id, name: user.name, role: "rider", riderId: rider.id });
+  const customer = await h.prisma.customer.create({ data: { businessId: h.business.id, name: "Contact Test Customer", phone: `+1876572${Date.now()}` } });
+  const job = await h.prisma.job.create({ data: { businessId: h.business.id, customerId: customer.id, riderId: rider.id, status: "assigned" } });
+  return { token, jobId: job.id };
 }
 
 async function adminToken(h: TestHarness) {
@@ -37,8 +40,8 @@ describe("GET /api/bearer/dispatch-contact", () => {
     });
     expect(put.statusCode).toBe(200);
 
-    const riderTok = await makeRiderToken(harness);
-    const res = await harness.app.inject({ method: "GET", url: "/api/bearer/dispatch-contact", headers: { authorization: `Bearer ${riderTok}` } });
+    const { token: riderTok, jobId } = await makeRiderWithJob(harness);
+    const res = await harness.app.inject({ method: "GET", url: `/api/bearer/dispatch-contact?jobId=${jobId}`, headers: { authorization: `Bearer ${riderTok}` } });
     expect(res.statusCode).toBe(200);
     const body = res.json() as { businessName: string; dispatchPhone: string; dispatchWhatsApp: string };
     expect(body.dispatchPhone).toBe("+18765559999");

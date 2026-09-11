@@ -62,8 +62,8 @@ describe("new customers default to consentTracking: true", () => {
 describe("order-confirmed notification", () => {
   it("fires once, the first time a tracking link is created, and not again on a refresh", async () => {
     const dispatcher = await dispatcherToken(harness);
-    const customer = await harness.prisma.customer.create({ data: { name: "Order Confirm Customer", phone: `+1876562${uniq()}`, consentTracking: true } });
-    const job = await harness.prisma.job.create({ data: { customerId: customer.id, status: "new" } });
+    const customer = await harness.prisma.customer.create({ data: { businessId: harness.business.id,  name: "Order Confirm Customer", phone: `+1876562${uniq()}`, consentTracking: true } });
+    const job = await harness.prisma.job.create({ data: { businessId: harness.business.id,  customerId: customer.id, status: "new" } });
 
     const first = await harness.app.inject({ method: "POST", url: `/api/tracking/${job.id}`, headers: { authorization: `Bearer ${dispatcher}` } });
     expect(first.statusCode).toBe(200);
@@ -79,8 +79,8 @@ describe("order-confirmed notification", () => {
 
   it("does not fire when the customer has not consented to tracking", async () => {
     const dispatcher = await dispatcherToken(harness);
-    const customer = await harness.prisma.customer.create({ data: { name: "No Consent Customer", phone: `+1876563${uniq()}`, consentTracking: false } });
-    const job = await harness.prisma.job.create({ data: { customerId: customer.id, status: "new" } });
+    const customer = await harness.prisma.customer.create({ data: { businessId: harness.business.id,  name: "No Consent Customer", phone: `+1876563${uniq()}`, consentTracking: false } });
+    const job = await harness.prisma.job.create({ data: { businessId: harness.business.id,  customerId: customer.id, status: "new" } });
 
     const res = await harness.app.inject({ method: "POST", url: `/api/tracking/${job.id}`, headers: { authorization: `Bearer ${dispatcher}` } });
     expect(res.statusCode).toBe(200);
@@ -93,8 +93,8 @@ describe("heading-to-pickup notification", () => {
   it("fires when the rider reports that stage", async () => {
     const dispatcher = await dispatcherToken(harness);
     const { rider, token: riderTok } = await makeRider(harness);
-    const customer = await harness.prisma.customer.create({ data: { name: "Heading Test Customer", phone: `+1876564${uniq()}`, consentTracking: true } });
-    const job = await harness.prisma.job.create({ data: { customerId: customer.id, riderId: rider.id, status: "accepted" } });
+    const customer = await harness.prisma.customer.create({ data: { businessId: harness.business.id,  name: "Heading Test Customer", phone: `+1876564${uniq()}`, consentTracking: true } });
+    const job = await harness.prisma.job.create({ data: { businessId: harness.business.id,  customerId: customer.id, riderId: rider.id, status: "accepted" } });
     void dispatcher;
 
     const res = await harness.app.inject({ method: "POST", url: `/api/bearer/jobs/${job.id}/stage`, headers: { authorization: `Bearer ${riderTok}` }, payload: { stage: "heading_to_pickup" } });
@@ -105,8 +105,8 @@ describe("heading-to-pickup notification", () => {
 
   it("does not fire for the at_pickup stage (only heading_to_pickup is customer-visible)", async () => {
     const { rider, token: riderTok } = await makeRider(harness);
-    const customer = await harness.prisma.customer.create({ data: { name: "At Pickup Test Customer", phone: `+1876565${uniq()}`, consentTracking: true } });
-    const job = await harness.prisma.job.create({ data: { customerId: customer.id, riderId: rider.id, status: "accepted" } });
+    const customer = await harness.prisma.customer.create({ data: { businessId: harness.business.id,  name: "At Pickup Test Customer", phone: `+1876565${uniq()}`, consentTracking: true } });
+    const job = await harness.prisma.job.create({ data: { businessId: harness.business.id,  customerId: customer.id, riderId: rider.id, status: "accepted" } });
 
     const res = await harness.app.inject({ method: "POST", url: `/api/bearer/jobs/${job.id}/stage`, headers: { authorization: `Bearer ${riderTok}` }, payload: { stage: "at_pickup" } });
     expect(res.statusCode).toBe(200);
@@ -118,8 +118,8 @@ describe("heading-to-pickup notification", () => {
 describe("in_transit vs. delivering send genuinely different messages", () => {
   it("uses distinct templates for 'in transit' and 'near destination'", async () => {
     const { rider, token: riderTok } = await makeRider(harness);
-    const customer = await harness.prisma.customer.create({ data: { name: "Transit Test Customer", phone: `+1876566${uniq()}`, consentTracking: true } });
-    const job = await harness.prisma.job.create({ data: { customerId: customer.id, riderId: rider.id, status: "picked_up" } });
+    const customer = await harness.prisma.customer.create({ data: { businessId: harness.business.id,  name: "Transit Test Customer", phone: `+1876566${uniq()}`, consentTracking: true } });
+    const job = await harness.prisma.job.create({ data: { businessId: harness.business.id,  customerId: customer.id, riderId: rider.id, status: "picked_up" } });
 
     const toTransit = await harness.app.inject({ method: "POST", url: `/api/bearer/jobs/${job.id}/transition`, headers: { authorization: `Bearer ${riderTok}` }, payload: { to: "in_transit" } });
     expect(toTransit.statusCode).toBe(200);
@@ -213,8 +213,8 @@ describe("Twilio status webhook", () => {
   it("moves a 'sent' message to 'delivered' on a delivered callback, unsigned when no auth token is configured", async () => {
     const { rider } = await makeRider(harness);
     void rider;
-    const customer = await harness.prisma.customer.create({ data: { name: "Webhook Test Customer", phone: `+1876567${uniq()}` } });
-    const job = await harness.prisma.job.create({ data: { customerId: customer.id, status: "new" } });
+    const customer = await harness.prisma.customer.create({ data: { businessId: harness.business.id,  name: "Webhook Test Customer", phone: `+1876567${uniq()}` } });
+    const job = await harness.prisma.job.create({ data: { businessId: harness.business.id,  customerId: customer.id, status: "new" } });
     const outbox = await harness.prisma.outboxMessage.create({
       data: { channel: "whatsapp", to: customer.phone, template: "delivered", params: {}, jobId: job.id, status: "sent", provider: "twilio", providerRef: `SMtest${uniq()}` },
     });
@@ -231,8 +231,8 @@ describe("Twilio status webhook", () => {
   });
 
   it("moves a message to 'failed' on an undelivered callback, with the reason recorded", async () => {
-    const customer = await harness.prisma.customer.create({ data: { name: "Webhook Fail Customer", phone: `+1876568${uniq()}` } });
-    const job = await harness.prisma.job.create({ data: { customerId: customer.id, status: "new" } });
+    const customer = await harness.prisma.customer.create({ data: { businessId: harness.business.id,  name: "Webhook Fail Customer", phone: `+1876568${uniq()}` } });
+    const job = await harness.prisma.job.create({ data: { businessId: harness.business.id,  customerId: customer.id, status: "new" } });
     const outbox = await harness.prisma.outboxMessage.create({
       data: { channel: "sms", to: customer.phone, template: "delivered", params: {}, jobId: job.id, status: "sent", provider: "twilio", providerRef: `SMfail${uniq()}` },
     });

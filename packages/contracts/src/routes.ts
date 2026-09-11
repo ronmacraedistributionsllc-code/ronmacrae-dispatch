@@ -201,7 +201,7 @@ export const API = {
     /** rider sets their own intended work order for their active jobs (spec 5B) */
     reorder: "/api/bearer/jobs/reorder",
     /** "Contact dispatch" button — spec 5F */
-    dispatchContact: "/api/bearer/dispatch-contact",
+    dispatchContact: (jobId: string) => `/api/bearer/dispatch-contact?jobId=${encodeURIComponent(jobId)}`,
   },
 
   offers: {

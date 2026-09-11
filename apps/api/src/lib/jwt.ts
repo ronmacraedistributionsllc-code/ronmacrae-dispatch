@@ -1,12 +1,23 @@
 import { SignJWT, jwtVerify, type JWTPayload } from "jose";
 import { createHash, randomBytes } from "node:crypto";
-import type { Role } from "@ronmacrae/contracts";
+import type { PlatformRole, Role } from "@ronmacrae/contracts";
 
 export interface AccessTokenPayload {
   sub: string; // user id
   name: string;
+  /** For staff, this is their role AT `businessId` below (from their
+   *  StaffMembership) — not a global role. For a rider, `role: "rider"` and
+   *  `businessId` is absent (a rider's access is per-job via
+   *  RiderMembership, not one fixed session business). */
   role: Role;
   riderId?: string;
+  /** The business this staff session is scoped to. Absent for riders and for
+   *  a platform-owner session (platformRole below), which is not tied to any
+   *  single business. */
+  businessId?: string;
+  /** Platform-wide authority — see the Business/StaffMembership model doc.
+   *  Independent of, and does not imply, membership in any business. */
+  platformRole?: PlatformRole;
   type: "access";
 }
 
@@ -26,11 +37,13 @@ export class JwtIssuer {
     this.secret = new TextEncoder().encode(sessionSecret);
   }
 
-  async issueAccess(user: { id: string; name: string; role: Role; riderId?: string }): Promise<string> {
+  async issueAccess(user: { id: string; name: string; role: Role; riderId?: string; businessId?: string; platformRole?: PlatformRole }): Promise<string> {
     const payload = {
       name: user.name,
       role: user.role,
       ...(user.riderId ? { riderId: user.riderId } : {}),
+      ...(user.businessId ? { businessId: user.businessId } : {}),
+      ...(user.platformRole ? { platformRole: user.platformRole } : {}),
       type: "access" as const,
     };
     return new SignJWT(payload as JWTPayload)

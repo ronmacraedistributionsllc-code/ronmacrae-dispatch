@@ -55,6 +55,9 @@ function makeApp(opts: { rule?: { fee: number; minFee: number | null } | null; z
       findUnique: vi.fn().mockImplementation(({ where }: { where: { id: string } }) =>
         Promise.resolve((opts.zones ?? []).find((z) => z.id === where.id) ?? null),
       ),
+      findFirst: vi.fn().mockImplementation(({ where }: { where: { id: string } }) =>
+        Promise.resolve((opts.zones ?? []).find((z) => z.id === where.id) ?? null),
+      ),
     },
   } as unknown as PrismaClient;
 
@@ -90,7 +93,7 @@ describe("FareEngine.quote", () => {
 
   it("applies a zone-pair fare rule with the min-fee floor", async () => {
     const { app } = makeApp({ rule: { fee: 100, minFee: 250 }, zones: [row("z1", "Kingston", 300, 50)] });
-    const q = await new FareEngine(app, new ZonesService(app)).quote({ fromPoint: KINGSTON, toPoint: PORTMORE });
+    const q = await new FareEngine(app, new ZonesService(app)).quote("biz1", { fromPoint: KINGSTON, toPoint: PORTMORE });
     expect(q.fee.amount).toBe(250);
     expect(q.routingProvider).toBe("fake");
     expect(q.distanceM).toBe(10_000);
@@ -99,27 +102,27 @@ describe("FareEngine.quote", () => {
 
   it("uses destination zone base + per-km when no rule matches", async () => {
     const { app } = makeApp({ rule: null, zones: [row("z1", "Kingston", 300, 50)] });
-    const q = await new FareEngine(app, new ZonesService(app)).quote({ fromPoint: KINGSTON, toPoint: PORTMORE });
+    const q = await new FareEngine(app, new ZonesService(app)).quote("biz1", { fromPoint: KINGSTON, toPoint: PORTMORE });
     // 300 base + 10 km * 50/km
     expect(q.fee.amount).toBe(800);
   });
 
   it("estimates from distance when there is no zone data", async () => {
     const { app } = makeApp({ rule: null, zones: [] });
-    const q = await new FareEngine(app, new ZonesService(app)).quote({ fromPoint: KINGSTON, toPoint: PORTMORE });
+    const q = await new FareEngine(app, new ZonesService(app)).quote("biz1", { fromPoint: KINGSTON, toPoint: PORTMORE });
     expect(q.fee.amount).toBe(150); // 10 km * 15 JMD/km
     expect(q.breakdown.some((b) => b.label.includes("Distance estimate"))).toBe(true);
   });
 
   it("adds the express surcharge on top of the rule fee", async () => {
     const { app } = makeApp({ rule: { fee: 400, minFee: null }, zones: [row("z1", "Kingston", 300, 50)] });
-    const q = await new FareEngine(app, new ZonesService(app)).quote({ fromPoint: KINGSTON, toPoint: PORTMORE, express: true });
+    const q = await new FareEngine(app, new ZonesService(app)).quote("biz1", { fromPoint: KINGSTON, toPoint: PORTMORE, express: true });
     expect(q.fee.amount).toBe(500); // 400 * 1.25
   });
 
   it("adds the destination zone's flat urgent surcharge when urgent is requested", async () => {
     const { app } = makeApp({ rule: null, zones: [row("z1", "Portmore", 300, 50, 150)] });
-    const q = await new FareEngine(app, new ZonesService(app)).quote({ fromPoint: KINGSTON, toPoint: PORTMORE, urgent: true });
+    const q = await new FareEngine(app, new ZonesService(app)).quote("biz1", { fromPoint: KINGSTON, toPoint: PORTMORE, urgent: true });
     // 300 base + 10km*50/km = 800, + flat 150 urgent surcharge = 950
     expect(q.fee.amount).toBe(950);
     expect(q.breakdown.some((b) => b.label === "Urgent delivery")).toBe(true);
@@ -127,7 +130,7 @@ describe("FareEngine.quote", () => {
 
   it("does not add an urgent surcharge when the zone has none configured", async () => {
     const { app } = makeApp({ rule: null, zones: [row("z1", "Kingston", 300, 50, null)] });
-    const q = await new FareEngine(app, new ZonesService(app)).quote({ fromPoint: KINGSTON, toPoint: PORTMORE, urgent: true });
+    const q = await new FareEngine(app, new ZonesService(app)).quote("biz1", { fromPoint: KINGSTON, toPoint: PORTMORE, urgent: true });
     expect(q.fee.amount).toBe(800); // unchanged from the non-urgent case
     expect(q.breakdown.some((b) => b.label === "Urgent delivery")).toBe(false);
   });

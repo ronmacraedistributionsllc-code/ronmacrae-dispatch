@@ -17,7 +17,7 @@ import type {
   OutboxMessageDto,
   RiderStage,
 } from "@ronmacrae/contracts";
-import { ROOM_DISPATCH } from "@ronmacrae/contracts";
+import { roomForDispatch } from "@ronmacrae/contracts";
 
 const TEMPLATES_SETTING_KEY = "notificationTemplates";
 
@@ -110,18 +110,23 @@ export class NotifyService {
     if (result.status === "failed") {
       await this.queue.enqueue("notify.dispatch", { id }, { delayMs: 5 * 60_000 });
     }
-    // mirror to dashboard
-    this.hub.broadcast(ROOM_DISPATCH, {
-      type: "notification",
-      payload: {
-        id,
-        channel: row.channel,
-        to: row.to,
-        template: row.template,
-        status: result.status,
-        at: new Date().toISOString(),
-      },
-    });
+    // mirror to dashboard — only the business that owns the related job, if
+    // there is one (a notification not tied to any job has no business to
+    // attribute it to, so it's skipped here rather than broadcast globally).
+    const notifyJob = row.jobId ? await this.prisma.job.findUnique({ where: { id: row.jobId }, select: { businessId: true } }) : null;
+    if (notifyJob) {
+      this.hub.broadcast(roomForDispatch(notifyJob.businessId), {
+        type: "notification",
+        payload: {
+          id,
+          channel: row.channel,
+          to: row.to,
+          template: row.template,
+          status: result.status,
+          at: new Date().toISOString(),
+        },
+      });
+    }
   }
 
   async list(filter: { status?: string; jobId?: string; take?: number; skip?: number }) {
@@ -390,7 +395,10 @@ export async function notificationRoutes(app: FastifyInstance, ctx: AppCtx): Pro
       twilioStatus === "delivered" ? "delivered" : twilioStatus === "failed" || twilioStatus === "undelivered" ? "failed" : null;
     if (nextStatus) {
       await ctx.prisma.outboxMessage.update({ where: { id: row.id }, data: { status: nextStatus, error: nextStatus === "failed" ? `Twilio: ${twilioStatus}` : null } });
-      ctx.hub.broadcast(ROOM_DISPATCH, { type: "notification", payload: { id: row.id, channel: row.channel, to: row.to, template: row.template, status: nextStatus, at: new Date().toISOString() } });
+      const webhookJob = row.jobId ? await ctx.prisma.job.findUnique({ where: { id: row.jobId }, select: { businessId: true } }) : null;
+      if (webhookJob) {
+        ctx.hub.broadcast(roomForDispatch(webhookJob.businessId), { type: "notification", payload: { id: row.id, channel: row.channel, to: row.to, template: row.template, status: nextStatus, at: new Date().toISOString() } });
+      }
     }
     return { ok: true };
   });

@@ -45,15 +45,17 @@ const UpdateZone = z.object({
   active: z.boolean().optional(),
 });
 
+/** Every method is scoped to one business — a zone (and the fees it carries)
+ *  belongs to exactly the business that configured it, same as jobs/customers. */
 export class ZonesService {
   constructor(
     private readonly app: Pick<AppCtx, "prisma" | "geo" | "config">,
   ) {}
 
-  /** Point-in-polygon over active zones. */
-  async detect(point: GeoPoint | null): Promise<{ zoneId: string | null; zoneName: string | null }> {
+  /** Point-in-polygon over this business's own active zones. */
+  async detect(businessId: string, point: GeoPoint | null): Promise<{ zoneId: string | null; zoneName: string | null }> {
     if (!point) return { zoneId: null, zoneName: null };
-    const zones = await this.app.prisma.zone.findMany({ where: { active: true } });
+    const zones = await this.app.prisma.zone.findMany({ where: { businessId, active: true } });
     for (const z of zones) {
       try {
         if (pointInZone(point, z.geometry as unknown as ZoneGeometry)) {
@@ -66,23 +68,24 @@ export class ZonesService {
     return { zoneId: null, zoneName: null };
   }
 
-  async list(): Promise<ZoneDto[]> {
-    const rows = await this.app.prisma.zone.findMany({ orderBy: { name: "asc" } });
+  async list(businessId: string): Promise<ZoneDto[]> {
+    const rows = await this.app.prisma.zone.findMany({ where: { businessId }, orderBy: { name: "asc" } });
     return rows.map(zoneToDto);
   }
 
-  async get(id: string) {
-    const z = await this.app.prisma.zone.findUnique({ where: { id } });
+  async get(businessId: string, id: string) {
+    const z = await this.app.prisma.zone.findFirst({ where: { id, businessId } });
     return z ? zoneToDto(z) : null;
   }
 
-  async create(input: z.infer<typeof CreateZone>, currency: string) {
+  async create(businessId: string, input: z.infer<typeof CreateZone>, currency: string) {
     const slug = input.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
-    const exists = await this.app.prisma.zone.findUnique({ where: { slug } });
+    const exists = await this.app.prisma.zone.findUnique({ where: { businessId_slug: { businessId, slug } } });
     if (exists) throw httpErrors.createError(409, "Zone name already exists");
     const geometry = input.geometry ?? squareZoneGeometry(input.center!, input.radiusKm);
     const zone = await this.app.prisma.zone.create({
       data: {
+        businessId,
         name: input.name,
         slug,
         parish: input.parish || null,
@@ -97,8 +100,8 @@ export class ZonesService {
     return zoneToDto(zone);
   }
 
-  async update(id: string, input: z.infer<typeof UpdateZone>, currency: string) {
-    const zone = await this.app.prisma.zone.findUnique({ where: { id } });
+  async update(businessId: string, id: string, input: z.infer<typeof UpdateZone>, currency: string) {
+    const zone = await this.app.prisma.zone.findFirst({ where: { id, businessId } });
     if (!zone) throw httpErrors.createError(404, "Zone not found");
     const geometry = input.geometry ?? (input.center ? squareZoneGeometry(input.center, input.radiusKm ?? 3) : undefined);
     const updated = await this.app.prisma.zone.update({
@@ -118,10 +121,11 @@ export class ZonesService {
     return zoneToDto(updated);
   }
 
-  /** zone fee for a quote: base fee + per-km rate */
-  async zoneFees(zoneId: string | null, distanceM: number | null, _currency: string) {
+  /** zone fee for a quote: base fee + per-km rate. Scoped so a fromZoneId/toZoneId
+   *  leaked or guessed from another business never prices against this one's zone. */
+  async zoneFees(businessId: string, zoneId: string | null, distanceM: number | null, _currency: string) {
     if (!zoneId) return { fee: null, zone: null as ZoneDto | null };
-    const zone = await this.app.prisma.zone.findUnique({ where: { id: zoneId } });
+    const zone = await this.app.prisma.zone.findFirst({ where: { id: zoneId, businessId } });
     if (!zone) return { fee: null, zone: null };
     let fee = zone.baseFee; // minor units
     if (zone.perKmFee != null && distanceM != null) {
@@ -131,8 +135,8 @@ export class ZonesService {
     return { fee, zone: zoneToDto(zone) };
   }
 
-  async delete(id: string): Promise<void> {
-    const zone = await this.app.prisma.zone.findUnique({ where: { id } });
+  async delete(businessId: string, id: string): Promise<void> {
+    const zone = await this.app.prisma.zone.findFirst({ where: { id, businessId } });
     if (!zone) throw httpErrors.createError(404, "Zone not found");
     const jobCount = await this.app.prisma.job.count({ where: { zoneId: id } });
     if (jobCount > 0) {
@@ -149,34 +153,43 @@ export async function zoneRoutes(app: FastifyInstance, ctx: AppCtx): Promise<voi
   // use them (for order entry, quoting) but never create/edit/enable/delete them.
   const owner = ctx.requireStaff("admin");
 
-  app.get("/api/zones", { preHandler: staff }, async () => ({ zones: await svc.list() }));
+  app.get("/api/zones", { preHandler: staff }, async (req) => ({ zones: await svc.list(req.user!.businessId!) }));
 
   app.post("/api/zones", { preHandler: owner }, async (req) => {
     const body = CreateZone.parse(req.body);
-    const zone = await svc.create(body, ctx.config.OPERATIONAL_CURRENCY);
+    const zone = await svc.create(req.user!.businessId!, body, ctx.config.OPERATIONAL_CURRENCY);
     await ctx.audit.record({ id: req.user!.sub, role: req.user!.role }, "zone.create", "zone", zone.id, { name: zone.name });
     return { zone };
   });
 
   app.patch<{ Params: { id: string } }>("/api/zones/:id", { preHandler: owner }, async (req) => {
     const body = UpdateZone.parse(req.body);
-    const zone = await svc.update(req.params.id, body, ctx.config.OPERATIONAL_CURRENCY);
+    const zone = await svc.update(req.user!.businessId!, req.params.id, body, ctx.config.OPERATIONAL_CURRENCY);
     await ctx.audit.record({ id: req.user!.sub, role: req.user!.role }, "zone.update", "zone", zone.id);
     return { zone };
   });
 
   app.delete<{ Params: { id: string } }>("/api/zones/:id", { preHandler: owner }, async (req) => {
-    await svc.delete(req.params.id);
+    await svc.delete(req.user!.businessId!, req.params.id);
     await ctx.audit.record({ id: req.user!.sub, role: req.user!.role }, "zone.delete", "zone", req.params.id);
     return { ok: true };
   });
 
   app.post("/api/zones/detect", { preHandler: staff }, async (req) => {
     const body = z.object({ point: z.object({ lat: z.number(), lng: z.number() }) }).parse(req.body);
-    return svc.detect(body.point as GeoPoint);
+    return svc.detect(req.user!.businessId!, body.point as GeoPoint);
   });
 
   // ---- fare rules ----
+  // Not yet business-scoped in the schema (FareRule has no businessId) — out
+  // of this stage's bounded scope (fare rules aren't one of the areas this
+  // stage verifies isolation for). Flagged here rather than silently left
+  // looking finished: a FareRule row is currently visible/editable by any
+  // business's admin, referencing zone ids that ARE now business-scoped, so
+  // in practice a rule naming another business's zone id just won't resolve
+  // to anything (zoneFees/list scope by businessId) rather than leaking data,
+  // but the fare-rules list itself is still unscoped. Revisit alongside zones
+  // if fare rules become a real per-business feature.
   const CreateRule = z.object({
     fromZoneId: z.string(),
     toZoneId: z.string(),
@@ -185,9 +198,9 @@ export async function zoneRoutes(app: FastifyInstance, ctx: AppCtx): Promise<voi
     note: z.string().max(200).optional(),
   });
 
-  app.get("/api/zones/fare-rules", { preHandler: staff }, async () => {
+  app.get("/api/zones/fare-rules", { preHandler: staff }, async (req) => {
     const rows = await ctx.prisma.fareRule.findMany({ orderBy: { validFrom: "desc" } });
-    const zones = new Map((await svc.list()).map((z) => [z.id, z.name]));
+    const zones = new Map((await svc.list(req.user!.businessId!)).map((z) => [z.id, z.name]));
     return {
       rules: rows.map((r) => ({
         id: r.id,

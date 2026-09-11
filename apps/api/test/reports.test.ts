@@ -9,7 +9,7 @@ let seq = 0;
 const uniq = () => `${Date.now()}${++seq}`;
 
 async function makeCustomer(h: TestHarness) {
-  return h.prisma.customer.create({ data: { name: "Report Test Customer", phone: `+1876569${uniq()}` } });
+  return h.prisma.customer.create({ data: { businessId: h.business.id,  name: "Report Test Customer", phone: `+1876569${uniq()}` } });
 }
 async function makeRider(h: TestHarness, overrides: Record<string, unknown> = {}) {
   return h.prisma.rider.create({ data: { name: "Report Test Rider", phone: `+1876570${uniq()}`, active: true, status: "available", ...overrides } });
@@ -33,10 +33,10 @@ describe("operating report: bucket counts and money totals", () => {
     const rider = await makeRider(harness, { payRate: 200, payCurrency: "JMD" });
     const admin = await staffToken(harness, "admin");
 
-    await harness.prisma.job.create({ data: { customerId: customer.id, riderId: rider.id, status: "delivered", fee: 500, priority: "urgent", createdAt: new Date(), completedAt: new Date() } });
-    await harness.prisma.job.create({ data: { customerId: customer.id, riderId: rider.id, status: "accepted", fee: 300 } });
-    await harness.prisma.job.create({ data: { customerId: customer.id, status: "cancelled", fee: 100 } });
-    await harness.prisma.job.create({ data: { customerId: customer.id, status: "new" } });
+    await harness.prisma.job.create({ data: { businessId: harness.business.id,  customerId: customer.id, riderId: rider.id, status: "delivered", fee: 500, priority: "urgent", createdAt: new Date(), completedAt: new Date() } });
+    await harness.prisma.job.create({ data: { businessId: harness.business.id,  customerId: customer.id, riderId: rider.id, status: "accepted", fee: 300 } });
+    await harness.prisma.job.create({ data: { businessId: harness.business.id,  customerId: customer.id, status: "cancelled", fee: 100 } });
+    await harness.prisma.job.create({ data: { businessId: harness.business.id,  customerId: customer.id, status: "new" } });
 
     const res = await harness.app.inject({ method: "GET", url: "/api/reports/summary", headers: { authorization: `Bearer ${admin}` } });
     expect(res.statusCode).toBe(200);
@@ -55,13 +55,13 @@ describe("operating report: COD math", () => {
     const admin = await staffToken(harness, "admin");
 
     // Fully collected and handed in exact: no outstanding, no variance.
-    await harness.prisma.job.create({ data: { customerId: customer.id, riderId: rider.id, status: "delivered", paymentMethod: "cod", amountExpected: 1000, amountCollected: 1000, codHandedInAmount: 1000, codStatus: "handed_in", createdAt: new Date(), completedAt: new Date() } });
+    await harness.prisma.job.create({ data: { businessId: harness.business.id,  customerId: customer.id, riderId: rider.id, status: "delivered", paymentMethod: "cod", amountExpected: 1000, amountCollected: 1000, codHandedInAmount: 1000, codStatus: "handed_in", createdAt: new Date(), completedAt: new Date() } });
     // Short: handed in less than collected.
-    await harness.prisma.job.create({ data: { customerId: customer.id, riderId: rider.id, status: "delivered", paymentMethod: "cod", amountExpected: 500, amountCollected: 500, codHandedInAmount: 450, codStatus: "handed_in", createdAt: new Date(), completedAt: new Date() } });
+    await harness.prisma.job.create({ data: { businessId: harness.business.id,  customerId: customer.id, riderId: rider.id, status: "delivered", paymentMethod: "cod", amountExpected: 500, amountCollected: 500, codHandedInAmount: 450, codStatus: "handed_in", createdAt: new Date(), completedAt: new Date() } });
     // Over: handed in more than collected.
-    await harness.prisma.job.create({ data: { customerId: customer.id, riderId: rider.id, status: "delivered", paymentMethod: "cod", amountExpected: 500, amountCollected: 500, codHandedInAmount: 520, codStatus: "handed_in", createdAt: new Date(), completedAt: new Date() } });
+    await harness.prisma.job.create({ data: { businessId: harness.business.id,  customerId: customer.id, riderId: rider.id, status: "delivered", paymentMethod: "cod", amountExpected: 500, amountCollected: 500, codHandedInAmount: 520, codStatus: "handed_in", createdAt: new Date(), completedAt: new Date() } });
     // Still outstanding: not fully collected yet.
-    await harness.prisma.job.create({ data: { customerId: customer.id, riderId: rider.id, status: "accepted", paymentMethod: "cod", amountExpected: 800, amountCollected: 300 } });
+    await harness.prisma.job.create({ data: { businessId: harness.business.id,  customerId: customer.id, riderId: rider.id, status: "accepted", paymentMethod: "cod", amountExpected: 800, amountCollected: 300 } });
 
     const res = await harness.app.inject({ method: "GET", url: `/api/reports/summary?riderId=${rider.id}`, headers: { authorization: `Bearer ${admin}` } });
     const body = res.json() as { summary: { codExpected: { amount: number }; codCollected: { amount: number }; codHandedIn: { amount: number }; codOutstanding: { amount: number }; codShortageTotal: { amount: number }; codOverageTotal: { amount: number } } };
@@ -81,10 +81,10 @@ describe("operating report: average delivery time", () => {
     const admin = await staffToken(harness, "admin");
     const created = new Date("2026-01-01T00:00:00.000Z");
 
-    await harness.prisma.job.create({ data: { customerId: customer.id, riderId: rider.id, status: "delivered", createdAt: created, completedAt: new Date(created.getTime() + 30 * 60_000), scheduledAt: new Date(created.getTime() + 5 * 60_000) } });
-    await harness.prisma.job.create({ data: { customerId: customer.id, riderId: rider.id, status: "delivered", createdAt: created, completedAt: new Date(created.getTime() + 60 * 60_000) } });
+    await harness.prisma.job.create({ data: { businessId: harness.business.id,  customerId: customer.id, riderId: rider.id, status: "delivered", createdAt: created, completedAt: new Date(created.getTime() + 30 * 60_000), scheduledAt: new Date(created.getTime() + 5 * 60_000) } });
+    await harness.prisma.job.create({ data: { businessId: harness.business.id,  customerId: customer.id, riderId: rider.id, status: "delivered", createdAt: created, completedAt: new Date(created.getTime() + 60 * 60_000) } });
     // Not yet delivered — must not contribute to the average even though it has a promisedAt.
-    await harness.prisma.job.create({ data: { customerId: customer.id, riderId: rider.id, status: "accepted", createdAt: created, promisedAt: new Date(created.getTime() + 10 * 60_000) } });
+    await harness.prisma.job.create({ data: { businessId: harness.business.id,  customerId: customer.id, riderId: rider.id, status: "accepted", createdAt: created, promisedAt: new Date(created.getTime() + 10 * 60_000) } });
 
     const res = await harness.app.inject({ method: "GET", url: `/api/reports/summary?riderId=${rider.id}&from=2026-01-01&to=2026-01-02`, headers: { authorization: `Bearer ${admin}` } });
     const body = res.json() as { summary: { averageDeliveryTimeMs: number | null; averageDeliveryTimeSampleSize: number } };
@@ -96,7 +96,7 @@ describe("operating report: average delivery time", () => {
     const customer = await makeCustomer(harness);
     const rider = await makeRider(harness);
     const admin = await staffToken(harness, "admin");
-    await harness.prisma.job.create({ data: { customerId: customer.id, riderId: rider.id, status: "accepted" } });
+    await harness.prisma.job.create({ data: { businessId: harness.business.id,  customerId: customer.id, riderId: rider.id, status: "accepted" } });
 
     const res = await harness.app.inject({ method: "GET", url: `/api/reports/summary?riderId=${rider.id}`, headers: { authorization: `Bearer ${admin}` } });
     const body = res.json() as { summary: { averageDeliveryTimeMs: number | null; averageDeliveryTimeSampleSize: number } };
@@ -110,8 +110,8 @@ describe("operating report: rider earnings are honestly labeled", () => {
     const customer = await makeCustomer(harness);
     const rider = await makeRider(harness, { payRate: 150, payCurrency: "JMD" });
     const admin = await staffToken(harness, "admin");
-    await harness.prisma.job.create({ data: { customerId: customer.id, riderId: rider.id, status: "delivered", completedAt: new Date() } });
-    await harness.prisma.job.create({ data: { customerId: customer.id, riderId: rider.id, status: "delivered", completedAt: new Date() } });
+    await harness.prisma.job.create({ data: { businessId: harness.business.id,  customerId: customer.id, riderId: rider.id, status: "delivered", completedAt: new Date() } });
+    await harness.prisma.job.create({ data: { businessId: harness.business.id,  customerId: customer.id, riderId: rider.id, status: "delivered", completedAt: new Date() } });
 
     const res = await harness.app.inject({ method: "GET", url: `/api/reports/summary?riderId=${rider.id}`, headers: { authorization: `Bearer ${admin}` } });
     const body = res.json() as { byRider: { riderId: string; jobsCompleted: number; estimatedEarnings: { amount: number } | null }[] };
@@ -124,7 +124,7 @@ describe("operating report: rider earnings are honestly labeled", () => {
     const customer = await makeCustomer(harness);
     const rider = await makeRider(harness); // no payRate
     const admin = await staffToken(harness, "admin");
-    await harness.prisma.job.create({ data: { customerId: customer.id, riderId: rider.id, status: "delivered", completedAt: new Date() } });
+    await harness.prisma.job.create({ data: { businessId: harness.business.id,  customerId: customer.id, riderId: rider.id, status: "delivered", completedAt: new Date() } });
 
     const res = await harness.app.inject({ method: "GET", url: `/api/reports/summary?riderId=${rider.id}`, headers: { authorization: `Bearer ${admin}` } });
     const body = res.json() as { byRider: { riderId: string; estimatedEarnings: unknown }[]; notes: string[] };
@@ -139,8 +139,8 @@ describe("operating report: filters", () => {
     const customer = await makeCustomer(harness);
     const rider = await makeRider(harness);
     const admin = await staffToken(harness, "admin");
-    await harness.prisma.job.create({ data: { customerId: customer.id, riderId: rider.id, status: "delivered", completedAt: new Date() } });
-    await harness.prisma.job.create({ data: { customerId: customer.id, riderId: rider.id, status: "accepted" } });
+    await harness.prisma.job.create({ data: { businessId: harness.business.id,  customerId: customer.id, riderId: rider.id, status: "delivered", completedAt: new Date() } });
+    await harness.prisma.job.create({ data: { businessId: harness.business.id,  customerId: customer.id, riderId: rider.id, status: "accepted" } });
 
     const res = await harness.app.inject({ method: "GET", url: `/api/reports/summary?riderId=${rider.id}&bucket=completed`, headers: { authorization: `Bearer ${admin}` } });
     const body = res.json() as { rows: { bucket: string }[] };
@@ -152,8 +152,8 @@ describe("operating report: filters", () => {
     const customer = await makeCustomer(harness);
     const rider = await makeRider(harness);
     const admin = await staffToken(harness, "admin");
-    await harness.prisma.job.create({ data: { customerId: customer.id, riderId: rider.id, status: "delivered", paymentMethod: "online", completedAt: new Date() } });
-    await harness.prisma.job.create({ data: { customerId: customer.id, riderId: rider.id, status: "delivered", paymentMethod: "cod", completedAt: new Date() } });
+    await harness.prisma.job.create({ data: { businessId: harness.business.id,  customerId: customer.id, riderId: rider.id, status: "delivered", paymentMethod: "online", completedAt: new Date() } });
+    await harness.prisma.job.create({ data: { businessId: harness.business.id,  customerId: customer.id, riderId: rider.id, status: "delivered", paymentMethod: "cod", completedAt: new Date() } });
 
     const res = await harness.app.inject({ method: "GET", url: `/api/reports/summary?riderId=${rider.id}&paymentMethod=online`, headers: { authorization: `Bearer ${admin}` } });
     const body = res.json() as { rows: { paymentMethod: string }[] };
@@ -182,7 +182,7 @@ describe("operating report: CSV export", () => {
     const customer = await makeCustomer(harness);
     const rider = await makeRider(harness);
     const admin = await staffToken(harness, "admin");
-    await harness.prisma.job.create({ data: { customerId: customer.id, riderId: rider.id, status: "delivered", pin: "1234", completedAt: new Date() } });
+    await harness.prisma.job.create({ data: { businessId: harness.business.id,  customerId: customer.id, riderId: rider.id, status: "delivered", pin: "1234", completedAt: new Date() } });
 
     const res = await harness.app.inject({ method: "GET", url: `/api/reports/jobs.csv?riderId=${rider.id}`, headers: { authorization: `Bearer ${admin}` } });
     expect(res.statusCode).toBe(200);

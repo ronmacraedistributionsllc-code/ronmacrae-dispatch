@@ -16,7 +16,7 @@ let seq = 0;
 const uniq = () => `${Date.now()}${++seq}`;
 
 async function makeCustomer(h: TestHarness, overrides: Record<string, unknown> = {}) {
-  return h.prisma.customer.create({ data: { name: "Test Customer", phone: `+1876555${uniq()}`, ...overrides } });
+  return h.prisma.customer.create({ data: { businessId: h.business.id,  name: "Test Customer", phone: `+1876555${uniq()}`, ...overrides } });
 }
 
 async function makeRider(h: TestHarness, overrides: Record<string, unknown> = {}) {
@@ -26,7 +26,7 @@ async function makeRider(h: TestHarness, overrides: Record<string, unknown> = {}
 }
 
 async function makeJob(h: TestHarness, customerId: string, overrides: Record<string, unknown> = {}) {
-  return h.prisma.job.create({ data: { customerId, status: "new", ...overrides } });
+  return h.prisma.job.create({ data: { businessId: h.business.id,  customerId, status: "new", ...overrides } });
 }
 
 async function dispatcherToken(h: TestHarness) {
@@ -189,8 +189,7 @@ describe("offer expiration", () => {
     const customer = await makeCustomer(harness);
     const job = await makeJob(harness, customer.id);
     const rider = await makeRider(harness);
-    const offer = await harness.prisma.jobOffer.create({
-      data: { jobId: job.id, riderId: rider.id, expiresAt: new Date(Date.now() - 60_000) },
+    const offer = await harness.prisma.jobOffer.create({ data: { businessId: harness.business.id,  jobId: job.id, riderId: rider.id, expiresAt: new Date(Date.now() - 60_000) },
     });
     const token = await riderToken(harness, rider.id);
 

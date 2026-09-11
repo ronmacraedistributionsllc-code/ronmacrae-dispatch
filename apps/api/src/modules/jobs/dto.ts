@@ -1,4 +1,5 @@
 import type { Prisma } from "@prisma/client";
+import { httpErrors } from "@fastify/sensible";
 import type {
   AssignmentDto,
   CodEventDto,
@@ -31,6 +32,9 @@ export const jobInclude = {
 export interface Viewer {
   role: string;
   riderId?: string | null;
+  /** Absent for riders (cross-business by identity, not session) and for a
+   *  platform-owner session (not tied to one business). */
+  businessId?: string | null;
 }
 
 /** the authenticated actor performing an action (audit + event attribution) */
@@ -39,6 +43,22 @@ export interface Actor {
   name: string | null;
   role: string;
   riderId?: string | null;
+  businessId?: string | null;
+}
+
+/**
+ * The entire cross-business isolation boundary for job-scoped resources:
+ * a staff actor/viewer may only touch a job that belongs to their own
+ * business. A rider's access is checked separately (by riderId ownership,
+ * not businessId, since one rider can hold jobs across several businesses).
+ * 404 rather than 403 — a business should never learn that another
+ * business's job even exists.
+ */
+export function assertJobBusiness(actorOrViewer: { role: string; businessId?: string | null }, jobBusinessId: string): void {
+  if (actorOrViewer.role === "rider") return;
+  if (!actorOrViewer.businessId || actorOrViewer.businessId !== jobBusinessId) {
+    throw httpErrors.createError(404, "Job not found");
+  }
 }
 
 /** Map a session role onto the actor types recorded on job events. */

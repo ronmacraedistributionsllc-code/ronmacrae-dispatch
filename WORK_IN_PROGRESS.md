@@ -1687,24 +1687,23 @@ completed Stage 8–18 features). Ten numbered requirement sections; the user's
 own closing instruction is the same as before: bounded stages, checkpoint +
 `WORK_IN_PROGRESS.md` after each, commit only after verification.
 
-## Two findings that change how several later sections must be scoped
+## Two findings that changed how the rest of this plan is scoped
 
-Surfaced while starting Stage 19 — worth recording here since they affect
-sections 4/5/6/7/9 specifically, not just as a footnote:
+Surfaced while starting Stage 19 — recorded here since they shaped
+everything from Stage 20 on, not just as a footnote:
 
-1. **No multi-business data model exists today.** The whole schema is
+1. **No multi-business data model existed at the time.** The schema was
    single-tenant: one `Setting`-backed `BusinessSettings` singleton, one
-   `Customer` table, one `Rider` table, no `Business` model at all. Several
-   of the new sections' own wording presupposes a multi-business "network"
-   (section 4: "across participating businesses"; section 6: "business-
-   specific customer relationships", "a business must not discover another
-   business's orders"; section 9: "Business → Riders → Rider profile → Cash
-   held for **my** business"). Building true multi-tenancy (a `Business`
-   model, and re-scoping Job/Customer/Rider/User/Zone/Settings/reports to
-   it, plus rewriting cross-cutting authorization) is a foundational,
-   architecture-level change — arguably as large as the rest of this
-   request combined. **Flagged to the user; not started without direction.**
-   Sections 1/2/3/8 do not depend on the answer and are proceeding now.
+   `Customer` table, one `Rider` table, no `Business` model at all — flagged
+   to the user before going further, since several later sections' own
+   wording presupposes a multi-business "network" (section 4: "across
+   participating businesses"; section 6: "business-specific customer
+   relationships"; section 9: "Business → Riders → cash held for **my**
+   business"). **Resolved**: the user asked for real multi-tenancy, built
+   now as Stage 20 (below) — a `Business` model, global User/Rider identity
+   with per-business memberships, and business isolation verified across
+   orders/offers/messages/GPS/cash-ledgers/reports/realtime. Everything from
+   Stage 21 on is now written business-aware from the start.
 2. **The Stage 18 delivery-messaging model is one shared thread per job**,
    not the three distinct pairwise conversations this request's section 5
    describes (customer↔dispatch, customer↔rider, rider↔dispatch). Today,
@@ -1713,21 +1712,22 @@ sections 4/5/6/7/9 specifically, not just as a footnote:
    failure mode section 5 explicitly warns against. Fixing this properly
    needs a real thread-scoping change (a `conversationKind` dimension, or
    separate models), not just additive read-receipts/retry work. **Deferred
-   to the dedicated Stage 23 (section 5) rather than patched hastily now.**
+   to the dedicated Stage 24 (section 5) rather than patched hastily now.**
 
 ## Stage plan
 
 | # | Stage | Section(s) | Status |
 | - | ----- | ---------- | ------ |
 | 19 | Three-step rider flow + rider dashboard (Offers / To pick up / In my possession / History) | 1, 2 | DONE |
-| 20 | UI/UX refresh pass (typography, contrast, empty/loading/error states, mobile bottom nav) across rider/customer/dispatcher screens + verified screenshots | 3 | NOT STARTED |
-| 21 | Customer package dashboard + restricted rider-location display post-collection | 4 | NOT STARTED (partly blocked on the multi-business question for "across participating businesses") |
-| 22 | Global customer identity: phone normalization (libphonenumber, JM default), safe email normalization, verified-vs-provisional records, duplicate-resolution audit trail, rate limiting | 6 | NOT STARTED (partly blocked on the multi-business question) |
-| 23 | Messaging redesign: split the one shared thread into the three real pairwise conversations, add delivered/read receipts, retry-without-duplicate, reassignment access revocation | 5 | NOT STARTED (needs the thread-model redesign above) |
-| 24 | Sign-in/account linking: email verification, password reset, account-claim flow, expiring/single-use codes; Instagram login feasibility investigation (implement only if genuinely supported for this use case; otherwise document why it's disabled) | 7 | NOT STARTED |
-| 25 | Deleted-orders trash: soft-delete + 30-day restore window + scheduled purge job, preserving ledger/dispute/audit records | 8 | NOT STARTED |
-| 26 | Rider cash-profile corrections: separate collected / awaiting handover / handed-in-unconfirmed / confirmed / disputed / earnings-payable, snapshot money components, fix "handed in" prematurely clearing confirmed-owed amount | 9 | NOT STARTED |
-| 27 | Full verification + handoff pass across all of 19–26 | 10 | NOT STARTED |
+| 20 | Multi-tenancy foundation: Business model, global User/Rider identity with per-business/platform memberships, isolation across orders/offers/messages/GPS/cash-ledgers/reports/realtime, verified with two businesses sharing one rider | (foundational — enables 4, 6, 7, 9) | DONE |
+| 21 | UI/UX refresh pass (typography, contrast, empty/loading/error states, mobile bottom nav) across rider/customer/dispatcher screens + verified screenshots | 3 | NOT STARTED |
+| 22 | Customer package dashboard + restricted rider-location display post-collection, across participating businesses | 4 | NOT STARTED |
+| 23 | Global customer identity: phone normalization (libphonenumber, JM default), safe email normalization, verified-vs-provisional records, duplicate-resolution audit trail, rate limiting, per-business customer relationships on top of Stage 20's Business model | 6 | NOT STARTED |
+| 24 | Messaging redesign: split the one shared thread into the three real pairwise conversations, add delivered/read receipts, retry-without-duplicate, reassignment access revocation | 5 | NOT STARTED (needs the thread-model redesign above) |
+| 25 | Sign-in/account linking: email verification, password reset, account-claim flow, expiring/single-use codes; Instagram login feasibility investigation (implement only if genuinely supported for this use case; otherwise document why it's disabled) | 7 | NOT STARTED |
+| 26 | Deleted-orders trash: soft-delete + 30-day restore window + scheduled purge job, preserving ledger/dispute/audit records, scoped per business | 8 | NOT STARTED |
+| 27 | Rider cash-profile corrections: separate collected / awaiting handover / handed-in-unconfirmed / confirmed / disputed / earnings-payable, snapshot money components, fix "handed in" prematurely clearing confirmed-owed amount, per business a rider works for | 9 | NOT STARTED |
+| 28 | Full verification + handoff pass across all of 19–27 | 10 | NOT STARTED |
 
 Each stage: implement, typecheck, run meaningful tests (new + full existing
 suite), update this file with what was actually found/built/tested, update
@@ -1836,8 +1836,202 @@ locator that matched both an offer card and the now-accepted job's card
 (same item-summary text) — scoped to the "Decline" button instead, which
 only an open offer renders.
 
-**Not done in this stage**: dashboard visual/typography refresh (Stage 20);
-customer/dispatcher screen changes (Stage 20/21); the rider-earnings figure
+**Not done in this stage**: dashboard visual/typography refresh (Stage 21);
+customer/dispatcher screen changes (Stage 21/22); the rider-earnings figure
 still uses the existing `job.fee` field as a stand-in for "your delivery
-fee" — Stage 26 (section 9) is where money components get properly
+fee" — Stage 27 (section 9) is where money components get properly
 snapshotted per order to avoid any double-counting against the COD total.
+
+## Stage 20 — Multi-tenancy foundation (DONE)
+
+The user's explicit answer to Stage 19's open question: **"build real
+multi-tenancy now."** Preserve Ronmacrae as the first business and migrate
+its existing data without resetting it; one global identity per person with
+business-specific staff memberships; riders get a global profile with
+memberships in multiple businesses; the user is the platform owner, business
+admins manage only their own businesses, and platform approval gates a
+rider working the open network. First priority (per the user's own
+ordering): implement and verify business isolation across orders, offers,
+messages, GPS, cash ledgers, reports and realtime subscriptions, tested with
+two businesses sharing one rider — before continuing the rider-interface/
+identity/messaging/cash-profile work already queued.
+
+**Migration** (backed up `dev.db` first as
+`dev.db.bak-multitenancy-20260910-235645`; three-phase — schema pushed with
+every new `businessId` nullable, a data-backfill script, then the columns
+tightened to required, each phase verified by row-count diffs before the
+next):
+- New models: `Business` (settings that used to live in the old
+  `Setting("business")` singleton now live directly on it, per business),
+  `StaffMembership` (a User's role at one specific business — a User is now
+  the global identity; role lives on the membership, not the user),
+  `RiderMembership` (a Rider's relationship with one specific business:
+  pending/active/suspended/removed), plus `PlatformRole` (owner) on `User`
+  and `PlatformRiderStatus` (pending/approved/suspended) on `Rider` — the
+  platform-wide gate on a rider working the open network at all, separate
+  from any one business's own membership decision.
+- `businessId` added to Job/Customer/Zone/JobOffer (required); `Customer`'s
+  phone-unique constraint and `Zone`'s slug-unique constraint both became
+  per-business composites (`@@unique([businessId, phone/slug])`) — the same
+  phone number is now a separate Customer row at a different business, not
+  a collision. `Job.jobNumber`/`externalRef` uniqueness likewise became
+  per-business (each business's own RM-000001 sequence).
+- `apps/api/scripts/backfill-multitenancy.mjs` (new, dry-run by default,
+  `--yes` to execute, one transaction, idempotency-guarded against a second
+  run): created the "Ronmacrae Distributions" Business from the old
+  settings blob; backfilled `businessId` onto all 65 jobs / 76 customers /
+  3 zones / 17 offers; created a StaffMembership for each of the 5 existing
+  staff users mirroring their prior role exactly (nothing about their
+  access changed); created an active RiderMembership for Kei Bearer, marked
+  platform-approved (a real, already-vetted rider, not a new signup);
+  created a dedicated platform-owner login (`owner@ronmacrae.example`),
+  deliberately separate from any business's own admin — the owner oversees
+  every business but isn't automatically a member of any one of them.
+  Verified: every Job/Customer/Zone/JobOffer row has a non-null businessId
+  post-migration, all prior row counts unchanged.
+
+**Auth/session redesign**: the JWT payload gains `businessId` (the business
+a staff session is scoped to — absent for riders and for a platform-owner
+session) and `platformRole`. Login resolves the actor's `StaffMembership`
+list and picks one (explicit `businessId` in the request, or the first
+active one — no business-switcher UI yet, a documented gap for a multi-
+business admin); a rider or platform-owner gets no fixed session business.
+`Session` gained a `businessId` column so a refresh carries the *same*
+business forward rather than re-resolving to "first membership" every time,
+which would otherwise let a multi-business admin's session silently jump
+business mid-session. `guards.ts`'s `requireStaff` now also requires
+`businessId` to be present (not just the role match) — closing a real gap
+where a platform-owner token could otherwise pass a role check and then hit
+a business-scoped list route with `businessId: undefined`, which Prisma
+treats as "no filter" rather than "no business" (a one-line guard standing
+between that and a real cross-tenant leak). A new `requireOwner` guard
+exists for future platform-owner-only routes (none added yet — owner
+console UI is out of this stage's bounded scope).
+
+**Isolation enforced across all seven named areas** — every list/read/write
+route for these now filters or asserts on `businessId` (404, not 403, on a
+cross-business access attempt, so a business never even learns another
+business's resource exists):
+- **Orders**: `jobs/repository.ts`'s list filter, and a shared
+  `assertJobBusiness` guard (`jobs/dto.ts`) applied at every job-mutating
+  function (transition, assign/unassign, collect, cancel/return, tracking
+  links, history) — skipped only for the rider path, which is checked by
+  riderId ownership instead (a rider legitimately spans businesses).
+- **Offers**: `eligibleRiders()` now requires an *active RiderMembership at
+  the broadcasting business*, not just globally `active`/`available` — the
+  actual mechanism a shared rider only receives the right business's
+  offers. Offer list/withdraw scoped; the accept flow re-checks the
+  rider's membership is still active at accept time (it could have been
+  suspended between broadcast and accept).
+- **Messages**: every staff route (`delivery-messages.ts`) checks the
+  job's businessId before reading/writing; customer/rider paths already
+  scoped by token/riderId ownership, untouched.
+- **GPS**: `GET /api/rider-locations` and the ops board's rider roster/
+  location both scope to riders with an *active membership* at the
+  requesting business (matching the roster a business can see/plan
+  against) — a rider never a member of a business (or removed from it)
+  never appears on that business's map or ops board, on any business,
+  regardless of who else they're currently delivering for. (An earlier,
+  stricter draft of this rule — "only while on an active job for THIS
+  business right now" — broke the legitimate "see my available riders
+  before assigning anything" use case an existing e2e spec already
+  verified; reverted to the membership-based rule, which still fully
+  prevents a business from seeing a rider they've never worked with.)
+- **Cash ledgers (COD)**: `GET /api/cod`, per-job COD event history, and
+  hand-in/approve/dispute all scoped/asserted on businessId.
+- **Reports**: `buildReport()` takes a required `businessId` and filters
+  every job query by it — the summary, CSV export and every total are
+  scoped.
+- **Realtime**: the single global `"dispatch"` room is gone — replaced
+  with `roomForDispatch(businessId)` everywhere a job/offer/message/
+  notification/rider-status/rider-location event broadcasts to staff
+  (17 call sites across jobs/offers/delivery-messages/notify/riders/
+  location-sim). `hub.ts`'s `mayJoin` now checks business ownership before
+  letting staff explicitly join a `job:`/`customer:`/`dispatch:` room —
+  previously any authenticated staff member could join *any* job/customer
+  room by just asking, which was harmless in a single-tenant system and a
+  real leak in a multi-tenant one.
+- Also fixed along the way (not one of the 7 named areas, but directly
+  required for correct isolation): `ZonesService`/`FareEngine` (zone
+  detection and fee quoting are now business-scoped — an unscoped version
+  could have quoted using another business's zone), the "Contact dispatch"
+  endpoint (a rider now passes which job's business they mean, since they
+  can carry jobs for several at once), and `CustomersService` (business-
+  scoped, matching the new per-business phone-uniqueness).
+
+**Test harness**: rather than editing the ~90 existing test-fixture call
+sites across a dozen files, `test/helpers/test-app.ts` now creates one
+default `Business` per test file and wraps its Prisma client in a `$extends`
+query interceptor that fills in that business's id on `job`/`customer`/
+`zone`/`jobOffer.create()` calls that omit it, and auto-adds an active
+`RiderMembership` there whenever a test creates a `rider`. This is
+test-fixture-only — real request-handling code always sets `businessId`
+explicitly from the authenticated actor, so the default never fires for
+anything actually going through the API. TypeScript still required
+`businessId` in each fixture's own literal (the extension changes runtime
+behavior, not the generated Prisma types), so ~90 call sites across 10
+files were still mechanically updated to satisfy the compiler; `tokenFor`
+gained an optional `businessId`/`platformRole` override, defaulting staff
+tokens to the harness's own business.
+
+**A real bug found while wiring this up**: a brand-new rider added by a
+business (`POST /api/riders` with a never-before-seen phone) was landing
+with membership `pending` — correct in spirit (platform approval gates a
+rider joining the *open network*) but wrong for the everyday case: the
+business creating the rider is *already* vouching for them directly, and
+the old single-tenant behavior always made a newly-added rider immediately
+usable. Fixed: the creating business's own membership goes `active`
+immediately; `platformStatus` still starts `pending` and only gates a
+*second*, different business later adding the *same* (already-existing)
+rider to share them. Caught by 10 e2e specs failing (offers, ops-board,
+route-queue, reports, realtime) before the fix — all passing after it.
+
+**`seed.ts` rewritten** to create the Business first and thread its id
+through every staff/rider/zone/customer upsert (StaffMembership per staff
+user, an active platform-approved RiderMembership for Kei Bearer) — the
+e2e suite reseeds a disposable `e2e-test.db` from scratch on every run, so
+this had to become multi-tenancy-aware from the ground up, not migrated.
+
+**Tests**: `apps/api/test/multi-tenancy.test.ts` (new, 7 tests) — two
+businesses, one rider with an active membership at both, covering all
+seven areas: orders (list/get/cancel all 404 across businesses), offers
+(the shared rider is eligible at both, an A-only rider never is at B's
+broadcast), messages (read/write both 404 cross-business, the intruding
+message never lands), cash ledgers (COD list/events/hand-in all excluded
+cross-business), reports (summary + CSV both scoped), GPS (a business
+never sees a rider it's never worked with; gains and keeps visibility once
+an actual membership exists), and **realtime** — a genuine live `ws`
+connection test (the harness's Fastify app listening on an ephemeral port,
+two real WebSocket clients) proving a `job.state` broadcast for Business
+A's job reaches only A's socket, and that B's socket can't even join A's
+job room by guessing its id.
+
+**Verification run**: `npm run typecheck --workspaces` clean; `apps/api`
+vitest 133/133 (126 prior + 7 new multi-tenancy tests); `apps/web` vitest
+8/8 + clean build; full e2e suite, fresh `e2e-test.db`, 27/27 real specs
+passing serially — every pre-existing spec still green, not just the new
+isolation test.
+
+**Also restarted** (as this stage's schema/build changes made their old,
+already-running processes incompatible with new writes): the LAN and
+Cloudflare-tunnel demo servers from earlier this session, on the freshly
+built multi-tenancy-aware `dist` — both verified working (login, a real
+write) afterward. Worth flagging honestly: the LAN demo (port 3000/8443)
+was actually killed as a side effect of this stage's own `lsof -ti:3000 |
+xargs kill` e2e-prep step run several times during this work — not a
+deliberate stop. It's back up now; sorry for the gap if you were using it.
+
+**Not done in this stage** (explicitly out of bounded scope, queued for
+later stages or flagged as open gaps): no owner-console UI (business
+creation/listing, rider platform-approval screen) — the backend guard
+(`requireOwner`) and data model exist, no routes/screens use them yet; no
+business-switcher UI for a staff member with multiple memberships (defaults
+to their first, or an explicit `businessId` at login); `FareRule` (zone-pair
+fare overrides) and notification-template overrides remain global/unscoped
+— documented in-code as a deliberate simplification, not a leak (fare rules
+resolve through already-scoped zone ids; template *wording* isn't sensitive
+data); rider `dailyCapacity`/earnings figures remain global-not-per-business
+by design (a rider's real total load has to be visible to anyone
+considering assigning them more work). Sections 4/6/7/9's actual feature
+work (customer package dashboard, global customer identity, sign-in, cash-
+profile corrections) starts next, now on top of this foundation.

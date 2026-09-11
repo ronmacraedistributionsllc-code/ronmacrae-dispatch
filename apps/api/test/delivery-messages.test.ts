@@ -9,7 +9,7 @@ let seq = 0;
 const uniq = () => `${Date.now()}${++seq}`;
 
 async function makeCustomer(h: TestHarness) {
-  return h.prisma.customer.create({ data: { name: "Msg Test Customer", phone: `+1876572${uniq()}` } });
+  return h.prisma.customer.create({ data: { businessId: h.business.id,  name: "Msg Test Customer", phone: `+1876572${uniq()}` } });
 }
 async function makeRider(h: TestHarness) {
   const rider = await h.prisma.rider.create({ data: { name: "Msg Test Rider", phone: `+1876573${uniq()}`, active: true, status: "available" } });
@@ -22,7 +22,7 @@ async function staffToken(h: TestHarness, role: "admin" | "dispatcher" | "accoun
   return h.tokenFor({ id: user.id, name: user.name, role });
 }
 async function makeJobWithLink(h: TestHarness, customerId: string, overrides: Record<string, unknown> = {}) {
-  const job = await h.prisma.job.create({ data: { customerId, status: "assigned", ...overrides } });
+  const job = await h.prisma.job.create({ data: { businessId: h.business.id,  customerId, status: "assigned", ...overrides } });
   const link = await h.prisma.trackingLink.create({ data: { jobId: job.id, token: `tok-${uniq()}`, expiresAt: new Date(Date.now() + 3600_000) } });
   return { job, link };
 }
@@ -70,7 +70,7 @@ describe("basic conversation: customer, rider, dispatcher", () => {
     const customer = await makeCustomer(harness);
     const { rider: riderA, token: tokenA } = await makeRider(harness);
     const { rider: riderB, token: tokenB } = await makeRider(harness);
-    const jobA = await harness.prisma.job.create({ data: { customerId: customer.id, riderId: riderA.id, status: "accepted" } });
+    const jobA = await harness.prisma.job.create({ data: { businessId: harness.business.id,  customerId: customer.id, riderId: riderA.id, status: "accepted" } });
     void riderB;
 
     const send = await harness.app.inject({ method: "POST", url: `/api/bearer/jobs/${jobA.id}/messages`, headers: { authorization: `Bearer ${tokenA}` }, payload: { body: "Heading to you now" } });
@@ -104,7 +104,7 @@ describe("conversation closure", () => {
   it("closes to new messages once the job reaches a terminal status, for both staff and rider", async () => {
     const customer = await makeCustomer(harness);
     const { rider, token: riderTok } = await makeRider(harness);
-    const job = await harness.prisma.job.create({ data: { customerId: customer.id, riderId: rider.id, status: "delivered" } });
+    const job = await harness.prisma.job.create({ data: { businessId: harness.business.id,  customerId: customer.id, riderId: rider.id, status: "delivered" } });
     const dispatcherTok = await staffToken(harness, "dispatcher");
 
     const staffSend = await harness.app.inject({ method: "POST", url: `/api/jobs/${job.id}/messages`, headers: { authorization: `Bearer ${dispatcherTok}` }, payload: { body: "hello" } });
@@ -121,7 +121,7 @@ describe("conversation closure", () => {
 
   it("closes to the customer once the tracking link has expired (read-only history remains)", async () => {
     const customer = await makeCustomer(harness);
-    const job = await harness.prisma.job.create({ data: { customerId: customer.id, status: "assigned" } });
+    const job = await harness.prisma.job.create({ data: { businessId: harness.business.id,  customerId: customer.id, status: "assigned" } });
     const link = await harness.prisma.trackingLink.create({ data: { jobId: job.id, token: `tok-${uniq()}`, expiresAt: new Date(Date.now() - 1000) } });
 
     const read = await harness.app.inject({ method: "GET", url: `/api/tracking/${link.token}/messages` });
@@ -133,7 +133,7 @@ describe("conversation closure", () => {
 
   it("a revoked tracking link blocks the conversation entirely (410), not just writes", async () => {
     const customer = await makeCustomer(harness);
-    const job = await harness.prisma.job.create({ data: { customerId: customer.id, status: "assigned" } });
+    const job = await harness.prisma.job.create({ data: { businessId: harness.business.id,  customerId: customer.id, status: "assigned" } });
     const link = await harness.prisma.trackingLink.create({ data: { jobId: job.id, token: `tok-${uniq()}`, expiresAt: new Date(Date.now() + 3600_000), revoked: true } });
 
     const read = await harness.app.inject({ method: "GET", url: `/api/tracking/${link.token}/messages` });
@@ -196,7 +196,7 @@ describe("address change requests: reviewed, never silently applied", () => {
   it("a rider can also propose an address change, subject to the same review", async () => {
     const customer = await makeCustomer(harness);
     const { rider, token: riderTok } = await makeRider(harness);
-    const job = await harness.prisma.job.create({ data: { customerId: customer.id, riderId: rider.id, status: "accepted", addressText: "Old" } });
+    const job = await harness.prisma.job.create({ data: { businessId: harness.business.id,  customerId: customer.id, riderId: rider.id, status: "accepted", addressText: "Old" } });
 
     const propose = await harness.app.inject({ method: "POST", url: `/api/bearer/jobs/${job.id}/address-change`, headers: { authorization: `Bearer ${riderTok}` }, payload: { proposedAddressText: "Rider Suggested Address" } });
     expect(propose.statusCode).toBe(200);

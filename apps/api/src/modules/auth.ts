@@ -37,7 +37,49 @@ const LoginBody = z.object({
   identifier: z.string().min(3),
   password: z.string().min(1),
   totpCode: z.string().max(8).optional(),
+  /** Selects which business to sign into, for a staff member with more than
+   *  one active StaffMembership. Omitted (the common case — one membership,
+   *  or a rider/owner login) defaults to their only/first one; there is no
+   *  business-switcher UI yet, so a multi-business admin currently has to
+   *  log in again with this to reach a second business. */
+  businessId: z.string().optional(),
 });
+
+interface StaffContext {
+  businessId: string | null;
+  role: Role;
+  platformRole: "owner" | null;
+  memberships: { businessId: string; businessName: string; role: Role }[];
+}
+
+/** Resolves which business (and role at that business) this login/refresh
+ *  is for. A platform owner gets no businessId at all — the owner console
+ *  is separate, business-scoped routes never accept an owner's token (see
+ *  guards.ts's requireStaff, which requires a businessId, not just a role
+ *  match) rather than silently treating "no business" as "every business". */
+async function resolveStaffContext(
+  ctx: AppCtx,
+  user: { id: string; role: Role; platformRole: string | null },
+  requestedBusinessId?: string,
+): Promise<StaffContext> {
+  if (user.platformRole === "owner") {
+    return { businessId: null, role: user.role, platformRole: "owner", memberships: [] };
+  }
+  if (user.role === "rider") {
+    return { businessId: null, role: user.role, platformRole: null, memberships: [] };
+  }
+  const staffMemberships = await ctx.prisma.staffMembership.findMany({
+    where: { userId: user.id, active: true },
+    include: { business: { select: { id: true, name: true } } },
+  });
+  const memberships = staffMemberships.map((m) => ({ businessId: m.businessId, businessName: m.business.name, role: m.role }));
+  if (memberships.length === 0) {
+    throw httpErrors.createError(403, "This account has no active business membership");
+  }
+  const chosen =
+    (requestedBusinessId ? memberships.find((m) => m.businessId === requestedBusinessId) : undefined) ?? memberships[0]!;
+  return { businessId: chosen.businessId, role: chosen.role, platformRole: null, memberships };
+}
 
 export async function authRoutes(app: FastifyInstance, ctx: AppCtx): Promise<void> {
   app.post("/api/auth/login", async (req, reply) => {
@@ -57,7 +99,8 @@ export async function authRoutes(app: FastifyInstance, ctx: AppCtx): Promise<voi
         throw httpErrors.createError(401, "TOTP code required");
       }
     }
-    const tokenPair = await issueTokenPair(ctx, user, req.headers["user-agent"]);
+    const staffContext = await resolveStaffContext(ctx, user, body.businessId);
+    const tokenPair = await issueTokenPair(ctx, user, staffContext, req.headers["user-agent"]);
     await ctx.audit.record({ id: user.id, role: user.role }, "auth.login", "user", user.id);
     reply.setCookie(REFRESH_COOKIE, tokenPair.refresh, {
       path: "/api/auth",
@@ -69,6 +112,9 @@ export async function authRoutes(app: FastifyInstance, ctx: AppCtx): Promise<voi
     return {
       user: toUserDto(user),
       riderId: user.rider?.id ?? null,
+      businessId: staffContext.businessId,
+      platformRole: staffContext.platformRole,
+      memberships: staffContext.memberships,
       accessToken: tokenPair.access,
     };
   });
@@ -88,7 +134,13 @@ export async function authRoutes(app: FastifyInstance, ctx: AppCtx): Promise<voi
     // rotate: invalidate only the presented session; the user's other active
     // sessions (other devices/tabs) must survive the refresh
     await ctx.prisma.session.deleteMany({ where: { tokenHash: hashToken(token) } });
-    const tokenPair = await issueTokenPair(ctx, user, req.headers["user-agent"]);
+    // Carry the session's own business forward rather than re-resolving from
+    // scratch — a multi-business admin's session must not silently jump to a
+    // different business (e.g. "first membership") on every token refresh.
+    const staffContext = session.businessId
+      ? await resolveStaffContext(ctx, user, session.businessId)
+      : await resolveStaffContext(ctx, user);
+    const tokenPair = await issueTokenPair(ctx, user, staffContext, req.headers["user-agent"]);
     reply.setCookie(REFRESH_COOKIE, tokenPair.refresh, {
       path: "/api/auth",
       httpOnly: true,
@@ -99,6 +151,8 @@ export async function authRoutes(app: FastifyInstance, ctx: AppCtx): Promise<voi
     return {
       user: toUserDto(user),
       riderId: user.rider?.id ?? null,
+      businessId: staffContext.businessId,
+      platformRole: staffContext.platformRole,
       accessToken: tokenPair.access,
     };
   });
@@ -165,13 +219,16 @@ export async function authRoutes(app: FastifyInstance, ctx: AppCtx): Promise<voi
 async function issueTokenPair(
   ctx: AppCtx,
   user: { id: string; name: string; role: Role; rider?: { id: string } | null },
+  staffContext: StaffContext,
   userAgent: string | undefined,
 ) {
   const access = await ctx.jwt.issueAccess({
     id: user.id,
     name: user.name,
-    role: user.role,
+    role: staffContext.role,
     riderId: user.rider?.id,
+    businessId: staffContext.businessId ?? undefined,
+    platformRole: staffContext.platformRole ?? undefined,
   });
   const jti = newJti();
   const { token: refresh, expiresAt } = await ctx.jwt.issueRefresh({ id: user.id }, jti);
@@ -181,6 +238,7 @@ async function issueTokenPair(
       userId: user.id,
       tokenHash: hashToken(refresh),
       userAgent: userAgent?.slice(0, 200),
+      businessId: staffContext.businessId,
       expiresAt,
     },
   });

@@ -10,6 +10,9 @@ type Db = Pick<AppCtx, "prisma">;
 export type JobSort = "newest" | "oldest" | "scheduled";
 
 export interface JobListFilter {
+  /** Omit only for a rider's own cross-business job list — every staff-facing
+   *  list MUST pass this, since it's the entire isolation boundary. */
+  businessId?: string;
   status?: JobStatus | JobStatus[];
   source?: string;
   riderId?: string;
@@ -39,6 +42,7 @@ export function jobListWhere(f: JobListFilter): Prisma.JobWhereInput {
     });
   }
   return {
+    ...(f.businessId ? { businessId: f.businessId } : {}),
     ...(f.status ? { status: Array.isArray(f.status) ? { in: f.status } : f.status } : {}),
     ...(f.source ? { source: f.source } : {}),
     ...(f.riderId ? { riderId: f.riderId } : {}),
@@ -73,12 +77,16 @@ export async function getJobRow(db: Db, id: string): Promise<JobRow | null> {
   return db.prisma.job.findUnique({ where: { id }, include: jobInclude });
 }
 
-export async function getJobByNumber(db: Db, jobNumber: string): Promise<JobRow | null> {
+/** Job numbers are only unique per business now (see the schema's
+ *  `@@unique([businessId, jobNumber])`) — resolving by number alone, without
+ *  a businessId, is deliberately not offered any more; callers that used to
+ *  do a global "RM-000123" lookup now scope it to their own business. */
+export async function getJobByNumber(db: Db, businessId: string, jobNumber: string): Promise<JobRow | null> {
   const trimmed = jobNumber.trim().toUpperCase();
-  const direct = await db.prisma.job.findUnique({ where: { jobNumber: trimmed }, include: jobInclude });
+  const direct = await db.prisma.job.findUnique({ where: { businessId_jobNumber: { businessId, jobNumber: trimmed } }, include: jobInclude });
   if (direct) return direct;
   // allow "rm-000042"
-  return db.prisma.job.findUnique({ where: { jobNumber: jobNumber.trim() }, include: jobInclude });
+  return db.prisma.job.findUnique({ where: { businessId_jobNumber: { businessId, jobNumber: jobNumber.trim() } }, include: jobInclude });
 }
 
 /** `RM-000123` style numbers; derived from the highest existing one. */
@@ -86,8 +94,12 @@ export function formatJobNumber(n: number): string {
   return `RM-${String(Math.max(1, n)).padStart(6, "0")}`;
 }
 
-export async function nextJobNumber(db: Db): Promise<string> {
-  const last = await db.prisma.job.findFirst({ orderBy: { jobNumber: "desc" }, select: { jobNumber: true } });
+/** Job numbers are per-business (each business's own RM-000001, RM-000002...
+ *  sequence) — matches the schema's `@@unique([businessId, jobNumber])`, and
+ *  means a business's own order count is never inferable from another
+ *  business's numbering. */
+export async function nextJobNumber(db: Db, businessId: string): Promise<string> {
+  const last = await db.prisma.job.findFirst({ where: { businessId }, orderBy: { jobNumber: "desc" }, select: { jobNumber: true } });
   const raw = last?.jobNumber?.split("-")[1] ?? "";
   const n = /^\d+$/.test(raw) ? Number.parseInt(raw, 10) : 0;
   return formatJobNumber(n + 1);

@@ -1,16 +1,18 @@
 /**
  * Development seed (idempotent).
- * Creates demo staff + a rider, Kingston-area zones with fare rules,
- * a couple of customers and the business settings blob.
+ * Creates the demo business, demo staff + a rider (as members of it),
+ * Kingston-area zones with fare rules, a couple of customers, and the
+ * business's own settings — all scoped to that one seeded business.
  */
 import { loadConfig } from "./config.js";
 import { createLogger } from "./lib/log.js";
 import { getPrisma } from "./prisma.js";
 import { hashPassword } from "./lib/password.js";
 import { minorOf } from "@ronmacrae/money";
-import { BusinessSettings } from "@ronmacrae/contracts";
 import type { ZoneGeometry } from "@ronmacrae/contracts";
 import type { PrismaClient } from "@prisma/client";
+
+const BUSINESS_SLUG = "ronmacrae";
 
 function square(lat: number, lng: number, dLat: number, dLng: number): ZoneGeometry {
   const ring: [number, number][] = [
@@ -30,9 +32,29 @@ interface SeedUser {
   password: string;
 }
 
-async function seedStaff(prisma: PrismaClient, users: SeedUser[]): Promise<void> {
+async function seedBusiness(prisma: PrismaClient, currency: string, usdToJmdRate: number, pinLength: number, trackingLinkTtlHours: number): Promise<string> {
+  const business = await prisma.business.upsert({
+    where: { slug: BUSINESS_SLUG },
+    create: {
+      name: "Ronmacrae Distributions",
+      slug: BUSINESS_SLUG,
+      dispatchPhone: "+8765550100",
+      dispatchWhatsApp: "+8765550100",
+      operationalCurrency: currency,
+      usdToJmdRate,
+      pinLength,
+      trackingLinkTtlHours,
+      nativeAppRecommended: true,
+    },
+    update: {},
+  });
+  console.log(`  business ${business.name} (${business.slug})`);
+  return business.id;
+}
+
+async function seedStaff(prisma: PrismaClient, businessId: string, users: SeedUser[]): Promise<void> {
   for (const u of users) {
-    await prisma.user.upsert({
+    const user = await prisma.user.upsert({
       where: { email: u.email },
       create: {
         email: u.email,
@@ -43,11 +65,16 @@ async function seedStaff(prisma: PrismaClient, users: SeedUser[]): Promise<void>
       },
       update: { name: u.name, role: u.role, active: true },
     });
+    await prisma.staffMembership.upsert({
+      where: { userId_businessId: { userId: user.id, businessId } },
+      create: { userId: user.id, businessId, role: u.role, active: true },
+      update: { role: u.role, active: true },
+    });
     console.log(`  staff   ${u.role.padEnd(11)} ${u.email} / ${u.password}`);
   }
 }
 
-async function seedRider(prisma: PrismaClient): Promise<string> {
+async function seedRider(prisma: PrismaClient, businessId: string): Promise<string> {
   const user = await prisma.user.upsert({
     where: { phone: "+8765550001" },
     create: {
@@ -70,14 +97,20 @@ async function seedRider(prisma: PrismaClient): Promise<string> {
       status: "available",
       dailyCapacity: 15,
       active: true,
+      platformStatus: "approved",
     },
-    update: { userId: user.id, name: user.name, active: true },
+    update: { userId: user.id, name: user.name, active: true, platformStatus: "approved" },
+  });
+  await prisma.riderMembership.upsert({
+    where: { riderId_businessId: { riderId: rider.id, businessId } },
+    create: { riderId: rider.id, businessId, status: "active", approvedAt: new Date() },
+    update: { status: "active", approvedAt: new Date() },
   });
   console.log(`  rider   ${rider.name} ${rider.phone} / rider1234 (id ${rider.id})`);
   return rider.id;
 }
 
-async function seedZones(prisma: PrismaClient): Promise<Record<string, string>> {
+async function seedZones(prisma: PrismaClient, businessId: string): Promise<Record<string, string>> {
   const zones = [
     { name: "Kingston Central", parish: "Kingston", slug: "kingston-central", lat: 17.9714, lng: -76.7932, base: 300, perKm: 55 },
     { name: "Portmore", parish: "St. Catherine", slug: "portmore", lat: 17.9266, lng: -76.803, base: 250, perKm: 50 },
@@ -86,8 +119,9 @@ async function seedZones(prisma: PrismaClient): Promise<Record<string, string>> 
   const ids: Record<string, string> = {};
   for (const z of zones) {
     const row = await prisma.zone.upsert({
-      where: { slug: z.slug },
+      where: { businessId_slug: { businessId, slug: z.slug } },
       create: {
+        businessId,
         name: z.name,
         slug: z.slug,
         parish: z.parish,
@@ -112,15 +146,16 @@ async function main(): Promise<void> {
   await prisma.$connect();
 
   console.log("Seeding demo data (idempotent):");
-  await seedStaff(prisma, [
+  const businessId = await seedBusiness(prisma, config.OPERATIONAL_CURRENCY, config.USD_TO_JMD_RATE, config.PIN_LENGTH, config.TRACKING_LINK_TTL_HOURS);
+  await seedStaff(prisma, businessId, [
     { email: "admin@ronmacrae.example", name: "Ada Admin", role: "admin", password: "admin1234" },
     { email: "dispatcher@ronmacrae.example", name: "Dwayne Dispatch", role: "dispatcher", password: "dispatch1234" },
     { email: "accountant@ronmacrae.example", name: "Anita Accounts", role: "accountant", password: "account1234" },
     { email: "viewer@ronmacrae.example", name: "Vera Viewer", role: "viewer", password: "viewer1234" },
   ]);
-  await seedRider(prisma);
+  await seedRider(prisma, businessId);
 
-  const zoneIds = await seedZones(prisma);
+  const zoneIds = await seedZones(prisma, businessId);
   await prisma.fareRule.upsert({
     where: { fromZoneId_toZoneId: { fromZoneId: zoneIds["kingston-central"]!, toZoneId: zoneIds["portmore"]! } },
     create: {
@@ -141,8 +176,9 @@ async function main(): Promise<void> {
   ];
   for (const c of customers) {
     await prisma.customer.upsert({
-      where: { phone: c.phone },
+      where: { businessId_phone: { businessId, phone: c.phone } },
       create: {
+        businessId,
         name: c.name,
         phone: c.phone,
         email: c.email,
@@ -154,23 +190,7 @@ async function main(): Promise<void> {
     console.log(`  customer ${c.name} ${c.phone}`);
   }
 
-  const settings: BusinessSettings = {
-    businessName: "Ronmacrae Distributions",
-    dispatchPhone: "+8765550100",
-    dispatchWhatsApp: "+8765550100",
-    operationalCurrency: config.OPERATIONAL_CURRENCY,
-    usdToJmdRate: config.USD_TO_JMD_RATE,
-    defaultZoneId: zoneIds["kingston-central"] ?? null,
-    pinLength: config.PIN_LENGTH,
-    trackingLinkTtlHours: config.TRACKING_LINK_TTL_HOURS,
-    nativeAppRecommended: true,
-  };
-  await prisma.setting.upsert({
-    where: { key: "business" },
-    create: { key: "business", value: settings as unknown as object },
-    update: { value: settings as unknown as object },
-  });
-  console.log("  settings business");
+  await prisma.business.update({ where: { id: businessId }, data: { defaultZoneId: zoneIds["kingston-central"] ?? null } });
 
   await prisma.$disconnect();
   log.info({}, "seed complete");

@@ -5,10 +5,10 @@ import type { AppCtx } from "../ctx.js";
 import { minorOf } from "@ronmacrae/money";
 import type { CodStatus, JobSummaryDto } from "@ronmacrae/contracts";
 import { COD_STATUSES } from "@ronmacrae/contracts";
-import { actorType, codEventToDto, jobInclude, jobSummaryToDto, jobToDto, type Actor, type JobRow, type Viewer } from "./jobs/index.js";
+import { actorType, assertJobBusiness, codEventToDto, jobInclude, jobSummaryToDto, jobToDto, type Actor, type JobRow, type Viewer } from "./jobs/index.js";
 
-const actorFor = (req: FastifyRequest): Actor => ({ id: req.user!.sub, name: req.user!.name, role: req.user!.role, riderId: req.user!.riderId });
-const viewerFor = (req: FastifyRequest): Viewer => ({ role: req.user!.role, riderId: req.user!.riderId });
+const actorFor = (req: FastifyRequest): Actor => ({ id: req.user!.sub, name: req.user!.name, role: req.user!.role, riderId: req.user!.riderId, businessId: req.user!.businessId });
+const viewerFor = (req: FastifyRequest): Viewer => ({ role: req.user!.role, riderId: req.user!.riderId, businessId: req.user!.businessId });
 
 const HandInBody = z.object({
   /** major units — the cash actually being handed over right now */
@@ -42,9 +42,10 @@ function assertCanRecord(actor: Actor, row: Pick<JobRow, "riderId">): void {
   if (!RECORDING_STAFF.includes(actor.role)) throw httpErrors.createError(403, "Insufficient permissions to record COD collection");
 }
 
-async function getRow(ctx: AppCtx, jobId: string): Promise<JobRow> {
+async function getRow(ctx: AppCtx, jobId: string, actorOrViewer: { role: string; businessId?: string | null }): Promise<JobRow> {
   const row = await ctx.prisma.job.findUnique({ where: { id: jobId }, include: jobInclude });
   if (!row) throw httpErrors.createError(404, "Job not found");
+  assertJobBusiness(actorOrViewer, row.businessId);
   return row;
 }
 
@@ -71,6 +72,7 @@ export async function codRoutes(app: FastifyInstance, ctx: AppCtx): Promise<void
   app.get("/api/cod", { preHandler: monitor }, async (req) => {
     const q = ListQuery.parse(req.query);
     const where = {
+      businessId: req.user!.businessId!,
       paymentMethod: "cod" as const,
       ...(q.status ? { codStatus: q.status } : {}),
       ...(q.riderId ? { riderId: q.riderId } : {}),
@@ -89,7 +91,7 @@ export async function codRoutes(app: FastifyInstance, ctx: AppCtx): Promise<void
   });
 
   app.get<{ Params: { id: string } }>("/api/jobs/:id/cod/events", { preHandler: ctx.requireAuth }, async (req) => {
-    const row = await getRow(ctx, req.params.id);
+    const row = await getRow(ctx, req.params.id, { role: req.user!.role, businessId: req.user!.businessId });
     if (req.user!.role === "rider" && row.riderId !== req.user!.riderId) {
       throw httpErrors.createError(403, "Not your job");
     }
@@ -106,7 +108,7 @@ export async function codRoutes(app: FastifyInstance, ctx: AppCtx): Promise<void
   app.post<{ Params: { id: string } }>("/api/jobs/:id/cod/hand-in", { preHandler: ctx.requireAuth }, async (req) => {
     const body = HandInBody.parse(req.body);
     const actor = actorFor(req);
-    const row = await getRow(ctx, req.params.id);
+    const row = await getRow(ctx, req.params.id, actor);
     assertCanRecord(actor, row);
     if (row.paymentMethod !== "cod") throw httpErrors.createError(409, "This job is not cash-on-delivery");
     if (row.codStatus === "approved") throw httpErrors.createError(409, "This entry is already approved and cannot be changed — ask an accountant to dispute it first if it needs correcting");
@@ -141,7 +143,7 @@ export async function codRoutes(app: FastifyInstance, ctx: AppCtx): Promise<void
   app.post<{ Params: { id: string } }>("/api/jobs/:id/cod/approve", { preHandler: approver }, async (req) => {
     const body = ApproveBody.parse(req.body ?? {});
     const actor = actorFor(req);
-    const row = await getRow(ctx, req.params.id);
+    const row = await getRow(ctx, req.params.id, actor);
     if (row.paymentMethod !== "cod") throw httpErrors.createError(409, "This job is not cash-on-delivery");
     if (row.codStatus === "approved") throw httpErrors.createError(409, "Already approved");
     if (row.codStatus === "pending_collection") throw httpErrors.createError(409, "Nothing has been collected yet");
@@ -170,7 +172,7 @@ export async function codRoutes(app: FastifyInstance, ctx: AppCtx): Promise<void
   app.post<{ Params: { id: string } }>("/api/jobs/:id/cod/dispute", { preHandler: approver }, async (req) => {
     const body = DisputeBody.parse(req.body);
     const actor = actorFor(req);
-    const row = await getRow(ctx, req.params.id);
+    const row = await getRow(ctx, req.params.id, actor);
     if (row.paymentMethod !== "cod") throw httpErrors.createError(409, "This job is not cash-on-delivery");
     if (row.codStatus === "pending_collection") throw httpErrors.createError(409, "Nothing has been collected yet");
 

@@ -20,30 +20,49 @@ const STALE_LOCATION_MS = 5 * 60_000;
  * contact rider, inspect route queue) is an existing endpoint elsewhere —
  * this endpoint only aggregates what to show, never a new way to change
  * anything, so it carries no additional write-permission surface.
+ *
+ * Business isolation: everything here — the roster, and each rider's live
+ * location — is scoped to riders with an *active membership* at this
+ * business. A dispatcher can see where their own available riders are even
+ * before assigning anything (the whole point of an ops board), but a rider
+ * who was never a member of this business (or was removed from it) never
+ * appears here at all, on any business's board, regardless of who else they
+ * currently carry a job for.
  */
 export async function opsBoardRoutes(app: FastifyInstance, ctx: AppCtx): Promise<void> {
-  app.get("/api/ops-board", { preHandler: ctx.requireStaff("admin", "dispatcher", "accountant", "viewer") }, async () => {
+  app.get("/api/ops-board", { preHandler: ctx.requireStaff("admin", "dispatcher", "accountant", "viewer") }, async (req) => {
+    const businessId = req.user!.businessId!;
     const now = new Date();
 
-    const riders = await ctx.prisma.rider.findMany({ where: { active: true }, orderBy: { name: "asc" } });
+    const riders = await ctx.prisma.rider.findMany({
+      where: { active: true, memberships: { some: { businessId, status: "active" } } },
+      orderBy: { name: "asc" },
+    });
     const riderIds = riders.map((r) => r.id);
 
     const [activeCounts, latestLocations, openOffers, activeJobs, codJobs] = await Promise.all([
+      // Deliberately NOT businessId-scoped: dailyCapacity is a global cap on
+      // how much a rider can carry at once (see Rider.dailyCapacity), so
+      // "capacity remaining" has to reflect their real total load across
+      // every business they work for, or a dispatcher could over-assign a
+      // rider who looks free but is actually maxed out elsewhere. This is
+      // the one place a small aggregate (a job count, no details) is
+      // deliberately shared across a rider's businesses — never job content.
       ctx.prisma.job.groupBy({ by: ["riderId"], where: { riderId: { in: riderIds }, status: { in: [...ACTIVE_JOB_STATUSES] } }, _count: { _all: true } }),
       ctx.prisma.riderLocation.findMany({
         where: { riderId: { in: riderIds }, at: { gte: new Date(now.getTime() - 24 * 3600_000) } },
         orderBy: { at: "desc" },
       }),
       ctx.prisma.jobOffer.findMany({
-        where: { status: "open", expiresAt: { gt: now } },
+        where: { businessId, status: "open", expiresAt: { gt: now } },
         include: { job: { select: { jobNumber: true, priority: true } }, rider: { select: { name: true } } },
         orderBy: { expiresAt: "asc" },
       }),
       ctx.prisma.job.findMany({
-        where: { status: { in: [...ACTIVE_JOB_STATUSES] } },
+        where: { businessId, status: { in: [...ACTIVE_JOB_STATUSES] } },
         include: jobInclude,
       }),
-      ctx.prisma.job.findMany({ where: { paymentMethod: "cod", codStatus: "handed_in" }, include: jobInclude, orderBy: { codHandoverAt: "asc" } }),
+      ctx.prisma.job.findMany({ where: { businessId, paymentMethod: "cod", codStatus: "handed_in" }, include: jobInclude, orderBy: { codHandoverAt: "asc" } }),
     ]);
 
     const activeCountByRider = new Map(activeCounts.map((c) => [c.riderId, c._count._all]));

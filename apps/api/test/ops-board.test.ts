@@ -10,7 +10,7 @@ let seq = 0;
 const uniq = () => `${Date.now()}${++seq}`;
 
 async function makeCustomer(h: TestHarness) {
-  return h.prisma.customer.create({ data: { name: "Test Customer", phone: `+1876555${uniq()}` } });
+  return h.prisma.customer.create({ data: { businessId: h.business.id,  name: "Test Customer", phone: `+1876555${uniq()}` } });
 }
 
 async function makeRider(h: TestHarness, overrides: Record<string, unknown> = {}) {
@@ -34,7 +34,7 @@ describe("ops board aggregation", () => {
   it("reports a rider's active-job count, remaining capacity, and marks a stale location honestly", async () => {
     const customer = await makeCustomer(harness);
     const rider = await makeRider(harness, { dailyCapacity: 2 });
-    await harness.prisma.job.create({ data: { customerId: customer.id, riderId: rider.id, status: "assigned" } });
+    await harness.prisma.job.create({ data: { businessId: harness.business.id,  customerId: customer.id, riderId: rider.id, status: "assigned" } });
     // A location from 10 minutes ago — well past the 5-minute staleness window.
     await harness.prisma.riderLocation.create({
       data: { riderId: rider.id, point: { lat: 18.0, lng: -76.8 }, trackingState: "active", clientSeq: 1, at: new Date(Date.now() - 10 * 60_000) },
@@ -54,7 +54,12 @@ describe("ops board aggregation", () => {
   });
 
   it("does not mark a fresh location as stale", async () => {
+    const customer = await makeCustomer(harness);
     const rider = await makeRider(harness);
+    // Location is only shown for a rider currently on an active job for this
+    // business (see ops-board.ts's isolation note) — without one, "no active
+    // job" and "location withheld" would be indistinguishable from each other.
+    await harness.prisma.job.create({ data: { businessId: harness.business.id, customerId: customer.id, riderId: rider.id, status: "assigned" } });
     await harness.prisma.riderLocation.create({
       data: { riderId: rider.id, point: { lat: 18.0, lng: -76.8 }, trackingState: "active", clientSeq: 1, at: new Date() },
     });
@@ -75,10 +80,10 @@ describe("ops board aggregation", () => {
   it("lists a waiting (open, unexpired) offer, and never an expired one", async () => {
     const customer = await makeCustomer(harness);
     const rider = await makeRider(harness);
-    const job = await harness.prisma.job.create({ data: { customerId: customer.id, status: "new", priority: "urgent" } });
-    const openOffer = await harness.prisma.jobOffer.create({ data: { jobId: job.id, riderId: rider.id, expiresAt: new Date(Date.now() + 60_000) } });
-    const expiredJob = await harness.prisma.job.create({ data: { customerId: customer.id, status: "new" } });
-    await harness.prisma.jobOffer.create({ data: { jobId: expiredJob.id, riderId: rider.id, expiresAt: new Date(Date.now() - 60_000) } });
+    const job = await harness.prisma.job.create({ data: { businessId: harness.business.id,  customerId: customer.id, status: "new", priority: "urgent" } });
+    const openOffer = await harness.prisma.jobOffer.create({ data: { businessId: harness.business.id,  jobId: job.id, riderId: rider.id, expiresAt: new Date(Date.now() + 60_000) } });
+    const expiredJob = await harness.prisma.job.create({ data: { businessId: harness.business.id,  customerId: customer.id, status: "new" } });
+    await harness.prisma.jobOffer.create({ data: { businessId: harness.business.id,  jobId: expiredJob.id, riderId: rider.id, expiresAt: new Date(Date.now() - 60_000) } });
     const token = await staffToken(harness);
 
     const res = await harness.app.inject({ method: "GET", url: "/api/ops-board", headers: { authorization: `Bearer ${token}` } });
@@ -91,11 +96,9 @@ describe("ops board aggregation", () => {
   it("flags an overdue job (promisedAt in the past, still active) and excludes one that isn't due yet", async () => {
     const customer = await makeCustomer(harness);
     const rider = await makeRider(harness);
-    const overdue = await harness.prisma.job.create({
-      data: { customerId: customer.id, riderId: rider.id, status: "accepted", promisedAt: new Date(Date.now() - 30 * 60_000) },
+    const overdue = await harness.prisma.job.create({ data: { businessId: harness.business.id,  customerId: customer.id, riderId: rider.id, status: "accepted", promisedAt: new Date(Date.now() - 30 * 60_000) },
     });
-    const notDue = await harness.prisma.job.create({
-      data: { customerId: customer.id, riderId: rider.id, status: "accepted", promisedAt: new Date(Date.now() + 30 * 60_000) },
+    const notDue = await harness.prisma.job.create({ data: { businessId: harness.business.id,  customerId: customer.id, riderId: rider.id, status: "accepted", promisedAt: new Date(Date.now() + 30 * 60_000) },
     });
     const token = await staffToken(harness);
 
@@ -110,8 +113,8 @@ describe("ops board aggregation", () => {
   it("lists a job awaiting COD handover approval and only that status", async () => {
     const customer = await makeCustomer(harness);
     const rider = await makeRider(harness);
-    const awaiting = await harness.prisma.job.create({ data: { customerId: customer.id, riderId: rider.id, paymentMethod: "cod", codStatus: "handed_in" } });
-    const notYet = await harness.prisma.job.create({ data: { customerId: customer.id, riderId: rider.id, paymentMethod: "cod", codStatus: "collected" } });
+    const awaiting = await harness.prisma.job.create({ data: { businessId: harness.business.id,  customerId: customer.id, riderId: rider.id, paymentMethod: "cod", codStatus: "handed_in" } });
+    const notYet = await harness.prisma.job.create({ data: { businessId: harness.business.id,  customerId: customer.id, riderId: rider.id, paymentMethod: "cod", codStatus: "collected" } });
     const token = await staffToken(harness);
 
     const res = await harness.app.inject({ method: "GET", url: "/api/ops-board", headers: { authorization: `Bearer ${token}` } });

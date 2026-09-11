@@ -6,7 +6,7 @@ import { normalizePhone } from "./auth.js";
 import { pointFromJson, pointToJson, moneyField } from "../geo-mappers.js";
 import { minorOf } from "@ronmacrae/money";
 import { hashPassword } from "../lib/password.js";
-import { ACTIVE_JOB_STATUSES, type GeoPoint, type RiderDto, type RiderLocationDto, type RiderStatus, type VehicleType } from "@ronmacrae/contracts";
+import { ACTIVE_JOB_STATUSES, roomForDispatch, type GeoPoint, type RiderDto, type RiderLocationDto, type RiderStatus, type VehicleType } from "@ronmacrae/contracts";
 import { Prisma, type Rider } from "@prisma/client";
 
 /** Re-exported for backward compatibility; canonical set lives in contracts. */
@@ -94,13 +94,21 @@ const ListQuery = z.object({
 export class RidersService {
   constructor(private readonly app: AppCtx) {}
 
-  async list(includeInactive: boolean): Promise<RiderDto[]> {
+  /** Riders who are members of this business — global riders shared with
+   *  other businesses never appear in a business that hasn't invited them. */
+  async list(businessId: string, includeInactive: boolean): Promise<RiderDto[]> {
     const rows = await this.app.prisma.rider.findMany({
-      where: includeInactive ? undefined : { active: true },
+      where: {
+        ...(includeInactive ? {} : { active: true }),
+        memberships: { some: { businessId, ...(includeInactive ? {} : { status: "active" }) } },
+      },
       orderBy: { name: "asc" },
       include: { homeZone: { select: { name: true } } },
     });
     const ids = rows.map((r) => r.id);
+    // Deliberately global (not businessId-scoped) — see the same note in
+    // ops-board.ts: a rider's "current job" for capacity/status purposes
+    // reflects their real total load, not just this business's slice.
     const jobs = await this.app.prisma.job.findMany({
       where: { riderId: { in: ids }, status: { in: [...ACTIVE_JOB_STATUSES] } },
       orderBy: { updatedAt: "desc" },
@@ -114,19 +122,40 @@ export class RidersService {
     return rows.map((r) => riderToDto(r, { currentJobId: current.get(r.id) ?? null }));
   }
 
-  async get(id: string): Promise<RiderDto | null> {
-    const row = await this.app.prisma.rider.findUnique({
-      where: { id },
+  async get(businessId: string, id: string): Promise<RiderDto | null> {
+    const row = await this.app.prisma.rider.findFirst({
+      where: { id, memberships: { some: { businessId } } },
       include: { homeZone: { select: { name: true } } },
     });
     if (!row) return null;
     return withCurrentJob(this.app, row);
   }
 
-  async create(input: z.infer<typeof CreateBody>, currency: string): Promise<RiderDto> {
+  /**
+   * Add a rider to this business. If the phone matches an existing *global*
+   * rider (shared with another business, or previously removed from this
+   * one), this reuses that identity and just adds/reactivates the
+   * membership here — it never creates a second Rider row for the same
+   * person, and never lets one business silently overwrite another's
+   * existing profile fields for that shared rider. A genuinely new rider
+   * starts platform-`pending` — the platform owner still has to approve
+   * them for the open network before their membership here can go active.
+   */
+  async create(businessId: string, input: z.infer<typeof CreateBody>, currency: string): Promise<RiderDto> {
     const phone = normalizePhone(input.phone);
-    const exists = await this.app.prisma.rider.findUnique({ where: { phone } });
-    if (exists) throw httpErrors.createError(409, "A rider with this phone number already exists");
+    const existing = await this.app.prisma.rider.findUnique({ where: { phone } });
+    if (existing) {
+      const existingMembership = await this.app.prisma.riderMembership.findUnique({ where: { riderId_businessId: { riderId: existing.id, businessId } } });
+      if (existingMembership?.status === "active") throw httpErrors.createError(409, "A rider with this phone number is already a member of your business");
+      const membershipStatus = existing.platformStatus === "approved" ? "active" : "pending";
+      if (existingMembership) {
+        await this.app.prisma.riderMembership.update({ where: { id: existingMembership.id }, data: { status: membershipStatus, approvedAt: membershipStatus === "active" ? new Date() : null } });
+      } else {
+        await this.app.prisma.riderMembership.create({ data: { riderId: existing.id, businessId, status: membershipStatus, approvedAt: membershipStatus === "active" ? new Date() : null } });
+      }
+      const row = await this.app.prisma.rider.findUniqueOrThrow({ where: { id: existing.id }, include: { homeZone: { select: { name: true } } } });
+      return withCurrentJob(this.app, row);
+    }
     let userId: string | null = null;
     if (input.password) {
       const user = await this.app.prisma.user.upsert({
@@ -136,26 +165,35 @@ export class RidersService {
       });
       userId = user.id;
     }
-    const row = await this.app.prisma.rider.create({
-      data: {
-        userId,
-        name: input.name,
-        phone,
-        vehicle: input.vehicle as VehicleType,
-        plate: input.plate || null,
-        homeZoneId: input.homeZoneId || null,
-        basePoint: pointToJson(input.basePoint ?? null) ?? Prisma.JsonNull,
-        dailyCapacity: input.dailyCapacity,
-        payRate: input.payRate != null ? minorOf(input.payRate, currency) : null,
-        status: "available",
-      },
-      include: { homeZone: { select: { name: true } } },
+    const row = await this.app.prisma.$transaction(async (tx) => {
+      const rider = await tx.rider.create({
+        data: {
+          userId,
+          name: input.name,
+          phone,
+          vehicle: input.vehicle as VehicleType,
+          plate: input.plate || null,
+          homeZoneId: input.homeZoneId || null,
+          basePoint: pointToJson(input.basePoint ?? null) ?? Prisma.JsonNull,
+          dailyCapacity: input.dailyCapacity,
+          payRate: input.payRate != null ? minorOf(input.payRate, currency) : null,
+          status: "available",
+          // Platform approval gates a rider being *shared* onto a second
+          // business later (see the `existing` branch above) — it does not
+          // block the one business that's directly onboarding them right
+          // now, who is themselves vouching for this rider by adding them.
+          platformStatus: "pending",
+        },
+        include: { homeZone: { select: { name: true } } },
+      });
+      await tx.riderMembership.create({ data: { riderId: rider.id, businessId, status: "active", approvedAt: new Date() } });
+      return rider;
     });
     return withCurrentJob(this.app, row);
   }
 
-  async update(id: string, input: z.infer<typeof UpdateBody>, currency: string): Promise<RiderDto> {
-    const row = await this.app.prisma.rider.findUnique({ where: { id } });
+  async update(businessId: string, id: string, input: z.infer<typeof UpdateBody>, currency: string): Promise<RiderDto> {
+    const row = await this.app.prisma.rider.findFirst({ where: { id, memberships: { some: { businessId } } } });
     if (!row) throw httpErrors.createError(404, "Rider not found");
     const updated = await this.app.prisma.rider.update({
       where: { id },
@@ -190,7 +228,7 @@ export class RidersService {
   async setStatus(
     riderId: string,
     body: z.infer<typeof StatusBody>,
-    actor: { id: string; role: string; riderId?: string },
+    actor: { id: string; role: string; riderId?: string; businessId?: string | null },
   ): Promise<RiderDto> {
     const row = await this.app.prisma.rider.findUnique({
       where: { id: riderId },
@@ -199,6 +237,13 @@ export class RidersService {
     if (!row) throw httpErrors.createError(404, "Rider not found");
     if (actor.role === "rider" && actor.riderId !== riderId) {
       throw httpErrors.createError(403, "You can only change your own status");
+    }
+    if (actor.role !== "rider") {
+      // Staff may only change the status of a rider actually in their own
+      // network — not some other business's rider, even one this rider
+      // happens to also carry jobs for.
+      const membership = await this.app.prisma.riderMembership.findUnique({ where: { riderId_businessId: { riderId, businessId: actor.businessId ?? "__none__" } } });
+      if (membership?.status !== "active") throw httpErrors.createError(404, "Rider not found");
     }
     if (body.status === "offline") {
       const active = await this.app.prisma.job.count({ where: { riderId, status: { in: [...ACTIVE_JOB_STATUSES] } } });
@@ -212,7 +257,13 @@ export class RidersService {
       `rider:${riderId}`,
       { type: "rider.status", payload: { riderId, status: body.status } },
     );
-    this.app.hub.broadcast("dispatch", { type: "rider.status", payload: { riderId, status: body.status, name: row.name } });
+    // Every business this rider is actively a member of cares about their
+    // availability changing — never just the business that happened to
+    // trigger this particular call.
+    const memberships = await this.app.prisma.riderMembership.findMany({ where: { riderId, status: "active" }, select: { businessId: true } });
+    for (const m of memberships) {
+      this.app.hub.broadcast(roomForDispatch(m.businessId), { type: "rider.status", payload: { riderId, status: body.status, name: row.name } });
+    }
     await this.app.audit.record(actor, "rider.status", "rider", riderId, { status: body.status, reason: body.reason ?? null });
     return withCurrentJob(this.app, { ...updated, homeZone: row.homeZone });
   }
@@ -245,15 +296,15 @@ export class RidersService {
         clientSeq,
       },
     });
-    const job = await this.app.prisma.job.findFirst({
+    const jobsForRider = await this.app.prisma.job.findMany({
       where: { riderId, status: { in: [...ACTIVE_JOB_STATUSES] } },
-      select: { id: true },
+      select: { id: true, businessId: true },
     });
     // A real report (this method) always wins over the preview-only simulated leg
     // for the rider's active job — matches LocationSimulator's own documented intent
     // ("the web bearer app can override the simulation with real GPS"), which the
     // simulator's write path alone can't enforce since it never sees real reports.
-    if (job) this.app.sim.stopForJob(job.id);
+    for (const j of jobsForRider) this.app.sim.stopForJob(j.id);
     const dto = {
       id: `loc-${clientSeq}`,
       riderId,
@@ -264,8 +315,17 @@ export class RidersService {
       trackingState: input.trackingState ?? "active",
       at: new Date().toISOString(),
     };
-    const rooms = [`rider:${riderId}`, "dispatch"];
-    if (job) rooms.push(`job:${job.id}`);
+    // Live position goes out to every job room this rider currently has
+    // active, plus — matching the ops board / rider-locations REST snapshot
+    // — every business that has an active membership with this rider, not
+    // only ones with a job in flight right now (a dispatcher watches their
+    // available riders' positions too, before assigning anything).
+    const memberships = await this.app.prisma.riderMembership.findMany({ where: { riderId, status: "active" }, select: { businessId: true } });
+    const rooms = [
+      `rider:${riderId}`,
+      ...jobsForRider.map((j) => `job:${j.id}`),
+      ...memberships.map((m) => roomForDispatch(m.businessId)),
+    ];
     this.app.hub.broadcastMany(rooms, { type: "rider.location", payload: dto });
   }
 
@@ -275,8 +335,18 @@ export class RidersService {
    * the last 24h so a location scan never has to walk the full, ever-growing
    * history table.
    */
-  async latestLocations(): Promise<RiderLocationDto[]> {
-    const riders = await this.app.prisma.rider.findMany({ where: { active: true }, select: { id: true } });
+  async latestLocations(businessId: string): Promise<RiderLocationDto[]> {
+    // Same roster rule as list()/the ops board: any rider who is an active
+    // member of this business — a dispatcher legitimately wants to see
+    // where their own available riders are before assigning anything, not
+    // only once a job is already underway. A rider never a member of this
+    // business (or removed from it) is never visible here, which is the
+    // real isolation boundary: never another business's location data for a
+    // rider who isn't even part of this one's network.
+    const riders = await this.app.prisma.rider.findMany({
+      where: { active: true, memberships: { some: { businessId, status: "active" } } },
+      select: { id: true },
+    });
     const riderIds = riders.map((r) => r.id);
     if (riderIds.length === 0) return [];
     const rows = await this.app.prisma.riderLocation.findMany({
@@ -303,25 +373,25 @@ export async function riderRoutes(app: FastifyInstance, ctx: AppCtx): Promise<vo
 
   app.get("/api/riders", { preHandler: ctx.requireStaff("admin", "dispatcher", "accountant", "viewer") }, async (req) => {
     const q = ListQuery.parse(req.query);
-    return { riders: await svc.list(q.includeInactive) };
+    return { riders: await svc.list(req.user!.businessId!, q.includeInactive) };
   });
 
   app.post("/api/riders", { preHandler: ctx.requireStaff("admin", "dispatcher") }, async (req) => {
     const body = CreateBody.parse(req.body);
-    const rider = await svc.create(body, ctx.config.OPERATIONAL_CURRENCY);
+    const rider = await svc.create(req.user!.businessId!, body, ctx.config.OPERATIONAL_CURRENCY);
     await ctx.audit.record({ id: req.user!.sub, role: req.user!.role }, "rider.create", "rider", rider.id, { name: rider.name });
     return { rider };
   });
 
   app.get<{ Params: { id: string } }>("/api/riders/:id", { preHandler: ctx.requireStaff("admin", "dispatcher", "accountant", "viewer") }, async (req) => {
-    const rider = await svc.get(req.params.id);
+    const rider = await svc.get(req.user!.businessId!, req.params.id);
     if (!rider) throw httpErrors.createError(404, "Rider not found");
     return { rider };
   });
 
   app.patch<{ Params: { id: string } }>("/api/riders/:id", { preHandler: ctx.requireStaff("admin", "dispatcher") }, async (req) => {
     const body = UpdateBody.parse(req.body);
-    const rider = await svc.update(req.params.id, body, ctx.config.OPERATIONAL_CURRENCY);
+    const rider = await svc.update(req.user!.businessId!, req.params.id, body, ctx.config.OPERATIONAL_CURRENCY);
     await ctx.audit.record({ id: req.user!.sub, role: req.user!.role }, "rider.update", "rider", rider.id);
     return { rider };
   });
@@ -332,12 +402,13 @@ export async function riderRoutes(app: FastifyInstance, ctx: AppCtx): Promise<vo
       id: req.user!.sub,
       role: req.user!.role,
       riderId: req.user!.riderId,
+      businessId: req.user!.businessId,
     });
     return { rider };
   });
 
-  app.get("/api/rider-locations", { preHandler: ctx.requireStaff("admin", "dispatcher", "accountant", "viewer") }, async () => {
-    return { locations: await svc.latestLocations() };
+  app.get("/api/rider-locations", { preHandler: ctx.requireStaff("admin", "dispatcher", "accountant", "viewer") }, async (req) => {
+    return { locations: await svc.latestLocations(req.user!.businessId!) };
   });
 
   app.post<{ Params: { id: string } }>("/api/rider-locations/:id/report", { preHandler: ctx.requireAuth }, async (req) => {

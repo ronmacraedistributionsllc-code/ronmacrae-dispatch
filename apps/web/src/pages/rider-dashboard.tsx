@@ -352,7 +352,7 @@ function RiderJobCard({ job, onChanged }: { job: JobDto; onChanged: () => void }
       <a className="btn !px-3 !py-1.5 text-sm" href={navigateHref(job)} target="_blank" rel="noreferrer">📍 Navigate</a>
       <button className="btn !px-3 !py-1.5 text-sm" onClick={() => setShowChat((v) => !v)}>💬 Message customer</button>
     </div>
-    {ACTIVE_JOB_STATUSES.includes(job.status) ? <ContactDispatch jobLabel={jobLabel} /> : null}
+    {ACTIVE_JOB_STATUSES.includes(job.status) ? <ContactDispatch jobId={job.id} jobLabel={jobLabel} /> : null}
     {showChat ? (
       <div className="rounded-lg border border-zinc-700 p-3">
         <RiderJobChat jobId={job.id} />

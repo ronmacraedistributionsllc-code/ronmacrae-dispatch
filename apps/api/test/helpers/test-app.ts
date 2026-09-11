@@ -48,7 +48,12 @@ export interface TestHarness {
   ctx: AppCtx;
   prisma: PrismaClient;
   jwt: JwtIssuer;
-  tokenFor: (user: { id: string; name: string; role: Role; riderId?: string }) => Promise<string>;
+  /** The default business every pre-multi-tenancy test fixture lands in (see
+   *  the businessId auto-fill extension below). Tests exercising real
+   *  cross-business isolation create a second Business explicitly instead of
+   *  relying on this one. */
+  business: { id: string; name: string };
+  tokenFor: (user: { id: string; name: string; role: Role; riderId?: string; businessId?: string | null; platformRole?: "owner" }) => Promise<string>;
   cleanup: () => Promise<void>;
 }
 
@@ -72,7 +77,35 @@ export async function buildTestHarness(dbName: string): Promise<TestHarness> {
     LOG_LEVEL: "error",
   });
   const log = createLogger("error", "api-test");
-  const prisma = getPrisma(config);
+  const basePrisma = getPrisma(config);
+  const business = await basePrisma.business.create({ data: { name: "Test Business", slug: `test-business-${dbName}` } });
+
+  // Most existing test fixtures predate multi-tenancy and create Job/Customer/
+  // Zone/JobOffer/Rider rows with no businessId at all. Rather than editing
+  // ~90 call sites across a dozen files, this extension fills in the one
+  // default business whenever a test fixture omits it — real request-handling
+  // code always sets businessId explicitly from the authenticated actor, so
+  // this default never fires for anything going through the actual API, only
+  // for these direct-to-Prisma test setup calls. A rider fixture also gets an
+  // active RiderMembership at that business, matching the platform's rule
+  // that only an active membership makes a rider eligible for that
+  // business's offers/assignments.
+  const prisma = basePrisma.$extends({
+    query: {
+      job: { create: ({ args, query }) => { args.data.businessId ??= business.id; return query(args); } },
+      customer: { create: ({ args, query }) => { args.data.businessId ??= business.id; return query(args); } },
+      zone: { create: ({ args, query }) => { args.data.businessId ??= business.id; return query(args); } },
+      jobOffer: { create: ({ args, query }) => { args.data.businessId ??= business.id; return query(args); } },
+      rider: {
+        create: async ({ args, query }) => {
+          const rider = (await query(args)) as { id: string };
+          await basePrisma.riderMembership.create({ data: { riderId: rider.id, businessId: business.id, status: "active", approvedAt: new Date() } });
+          return rider;
+        },
+      },
+    },
+  }) as unknown as PrismaClient;
+
   const jwt = new JwtIssuer(config.SESSION_SECRET);
   const queue = createQueueDriver(log, "memory", "");
   const hub = new RealtimeHub(jwt, prisma, log, config.APP_ORIGIN);
@@ -87,10 +120,22 @@ export async function buildTestHarness(dbName: string): Promise<TestHarness> {
     ctx,
     prisma,
     jwt,
-    tokenFor: (user) => jwt.issueAccess(user),
+    business,
+    // Staff roles default to the harness's own business unless the test
+    // explicitly passes a different one (or `businessId: null` — used for a
+    // platform-owner token, which has no single business). Riders never
+    // carry a businessId on their own token (their access is per-job via
+    // RiderMembership, not a fixed session business).
+    tokenFor: (user) => {
+      const businessId =
+        user.businessId === null
+          ? undefined
+          : (user.businessId ?? (user.role !== "rider" && !user.platformRole ? business.id : undefined));
+      return jwt.issueAccess({ id: user.id, name: user.name, role: user.role, riderId: user.riderId, businessId, platformRole: user.platformRole });
+    },
     cleanup: async () => {
       await app.close();
-      await prisma.$disconnect();
+      await basePrisma.$disconnect();
       rmSync(dbFile, { force: true });
       rmSync(`${dbFile}-journal`, { force: true });
     },

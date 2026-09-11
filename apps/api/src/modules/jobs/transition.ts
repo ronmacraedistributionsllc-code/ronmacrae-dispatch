@@ -17,12 +17,12 @@ import {
   JOB_STATUSES,
   RIDER_STAGES,
   RETURNABLE_STATUSES,
-  ROOM_DISPATCH,
   TERMINAL_JOB_STATUSES,
   TRANSITION_PRIMARY_ACTOR,
   allowedTransitions,
   canTransition,
   roomForCustomer,
+  roomForDispatch,
   roomForJob,
   roomForRider,
 } from "@ronmacrae/contracts";
@@ -32,6 +32,7 @@ import { getBusinessSettings } from "../settings.js";
 import { JobNotifier } from "../notify.js";
 import {
   actorType,
+  assertJobBusiness,
   eventToDto,
   jobInclude,
   jobToDto,
@@ -89,6 +90,7 @@ export async function recordRiderStage(
   const row = await getJobRow(ctx, jobId);
   if (!row) throw httpErrors.createError(404, "Job not found");
   if (actor.role === "rider" && row.riderId !== actor.riderId) throw httpErrors.createError(403, "Not your job");
+  assertJobBusiness(actor, row.businessId);
   if (TERMINAL_JOB_STATUSES.includes(row.status)) throw httpErrors.createError(409, "Cannot update a closed job");
   // Duplicate-submit guard: a repeated tap of the same stage (double-click,
   // retried offline action) is a harmless no-op rather than a second audit
@@ -118,12 +120,12 @@ export async function recordRiderStage(
     return { job, event };
   });
   const dto = jobToDto(updated.job, viewer, ctx.config.APP_ORIGIN);
-  ctx.hub.broadcastMany([ROOM_DISPATCH, roomForJob(jobId)], {
+  ctx.hub.broadcastMany([roomForDispatch(row.businessId), roomForJob(jobId)], {
     type: "job.state",
     payload: { job: dto, event: eventToDto(updated.event) },
   });
   if (row.customer.consentTracking) {
-    const business = await getBusinessSettings(ctx);
+    const business = await getBusinessSettings(ctx, row.businessId);
     const linkUrl = updated.job.link ? `${ctx.config.APP_ORIGIN}/track/${updated.job.link.token}` : null;
     await new JobNotifier(ctx.notify)
       .forRiderStage(stage, {
@@ -195,6 +197,8 @@ export async function transitionJob(
     if (TRANSITION_PRIMARY_ACTOR[to] !== "rider") {
       throw httpErrors.createError(403, `Riders cannot move a job to ${to}`);
     }
+  } else {
+    assertJobBusiness(actor, row.businessId);
   }
 
   const terminal = TERMINAL_JOB_STATUSES.includes(to);
@@ -274,11 +278,12 @@ export async function transitionJob(
   const dto = jobToDto(job, viewer, ctx.config.APP_ORIGIN);
 
   // realtime: dispatch + job room + customer room for customer-visible statuses
-  const rooms = [ROOM_DISPATCH, roomForJob(jobId)];
+  const dispatchRoom = roomForDispatch(row.businessId);
+  const rooms = [dispatchRoom, roomForJob(jobId)];
   if (CUSTOMER_BROADCAST_STATUSES.includes(to)) rooms.push(roomForCustomer(job.customerId));
   ctx.hub.broadcastMany(rooms, { type: "job.state", payload: { job: dto, event: eventDto } });
   if (row.riderId && (to === "assigned" || to === "accepted")) {
-    ctx.hub.broadcastMany([roomForRider(row.riderId), ROOM_DISPATCH], {
+    ctx.hub.broadcastMany([roomForRider(row.riderId), dispatchRoom], {
       type: "job.assigned",
       payload: { job: dto, riderId: row.riderId },
     });
@@ -305,7 +310,7 @@ export async function transitionJob(
 
   // customer notification (only when the customer consented to tracking)
   if (row.customer.consentTracking) {
-    const business = await getBusinessSettings(ctx);
+    const business = await getBusinessSettings(ctx, row.businessId);
     const linkUrl = job.link ? `${ctx.config.APP_ORIGIN}/track/${job.link.token}` : null;
     const notifier = new JobNotifier(ctx.notify);
     await notifier
@@ -353,6 +358,7 @@ export async function createReturnJob(
 ): Promise<JobDto> {
   const original = await getJobRow(ctx, originalJobId);
   if (!original) throw httpErrors.createError(404, "Job not found");
+  assertJobBusiness(actor, original.businessId);
   if (!RETURNABLE_STATUSES.includes(original.status)) {
     throw httpErrors.createError(409, `Only delivered or failed jobs can be returned (job is ${original.status})`);
   }
@@ -360,7 +366,8 @@ export async function createReturnJob(
   const row = await ctx.prisma.$transaction(async (tx) => {
     const job = await tx.job.create({
       data: {
-        jobNumber: await nextJobNumber(ctx),
+        businessId: original.businessId,
+        jobNumber: await nextJobNumber(ctx, original.businessId),
         externalRef: null,
         source: "manual",
         originalJobId,

@@ -2,12 +2,12 @@ import { z } from "zod";
 import { httpErrors } from "@fastify/sensible";
 import type { AppCtx } from "../../ctx.js";
 import type { JobDto, JobStatus } from "@ronmacrae/contracts";
-import { ACTIVE_JOB_STATUSES, ROOM_DISPATCH, roomForJob, roomForRider } from "@ronmacrae/contracts";
+import { ACTIVE_JOB_STATUSES, roomForDispatch, roomForJob, roomForRider } from "@ronmacrae/contracts";
 import { haversineM } from "@ronmacrae/geo";
 import { pointFromJson } from "../../geo-mappers.js";
 import { getBusinessSettings } from "../settings.js";
 import { JobNotifier } from "../notify.js";
-import { actorType, eventToDto, jobInclude, jobToDto, type Actor, type Viewer } from "./dto.js";
+import { actorType, assertJobBusiness, eventToDto, jobInclude, jobToDto, type Actor, type Viewer } from "./dto.js";
 import { getJobRow, latestRiderPoint } from "./repository.js";
 
 export const AssignBody = z.object({
@@ -36,9 +36,15 @@ export async function assignJob(
 ): Promise<JobDto> {
   const row = await getJobRow(ctx, jobId);
   if (!row) throw httpErrors.createError(404, "Job not found");
+  assertJobBusiness(actor, row.businessId);
   const rider = await ctx.prisma.rider.findUnique({ where: { id: input.riderId } });
   if (!rider) throw httpErrors.createError(404, "Rider not found");
   if (!rider.active) throw httpErrors.createError(409, `${rider.name} is not active`);
+  // A dispatcher can only assign to a rider actually in their own network —
+  // not to some other business's rider, even one they happen to share via a
+  // separate membership elsewhere.
+  const membership = await ctx.prisma.riderMembership.findUnique({ where: { riderId_businessId: { riderId: input.riderId, businessId: row.businessId } } });
+  if (membership?.status !== "active") throw httpErrors.createError(404, "Rider not found");
   if (row.status !== "new" && row.status !== "assigned") {
     throw httpErrors.createError(409, `Only new or unaccepted jobs can be assigned (job is ${row.status})`);
   }
@@ -110,12 +116,13 @@ export async function assignJob(
 
   const dto = jobToDto(updated.job, viewer, ctx.config.APP_ORIGIN);
   const eventDto = eventToDto(updated.event);
+  const dispatchRoom = roomForDispatch(row.businessId);
 
-  ctx.hub.broadcastMany([roomForRider(input.riderId), ROOM_DISPATCH], {
+  ctx.hub.broadcastMany([roomForRider(input.riderId), dispatchRoom], {
     type: "job.assigned",
     payload: { job: dto, riderId: input.riderId, source: "assign" },
   });
-  ctx.hub.broadcastMany([roomForJob(jobId), ROOM_DISPATCH], { type: "job.state", payload: { job: dto, event: eventDto } });
+  ctx.hub.broadcastMany([roomForJob(jobId), dispatchRoom], { type: "job.state", payload: { job: dto, event: eventDto } });
 
   // Direct assignment alerts only the one rider it was assigned to (not a broadcast
   // to every eligible rider — that's the offer flow). Content excludes customer
@@ -147,7 +154,7 @@ export async function assignJob(
   }
 
   if (row.customer.consentTracking) {
-    const business = await getBusinessSettings(ctx);
+    const business = await getBusinessSettings(ctx, row.businessId);
     const linkUrl = updated.job.link ? `${ctx.config.APP_ORIGIN}/track/${updated.job.link.token}` : null;
     await new JobNotifier(ctx.notify)
       .forJobEvent(eventDto, {
@@ -185,6 +192,7 @@ export async function unassignJob(
   if (actor.role === "rider" && row.riderId !== actor.riderId) {
     throw httpErrors.createError(403, "Not your job");
   }
+  assertJobBusiness(actor, row.businessId);
   if (row.status !== "assigned" && row.status !== "accepted") {
     throw httpErrors.createError(409, `Only assigned jobs can be unassigned (job is ${row.status})`);
   }
@@ -222,7 +230,7 @@ export async function unassignJob(
   });
   const dto = jobToDto(updated.job, viewer, ctx.config.APP_ORIGIN);
   void ctx.sim.reconcileJob(jobId, "new", null);
-  ctx.hub.broadcastMany([roomForJob(jobId), ROOM_DISPATCH], {
+  ctx.hub.broadcastMany([roomForJob(jobId), roomForDispatch(row.businessId)], {
     type: "job.state",
     payload: { job: dto, event: eventToDto(updated.event) },
   });

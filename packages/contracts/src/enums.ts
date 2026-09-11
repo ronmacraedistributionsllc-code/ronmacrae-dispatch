@@ -6,6 +6,22 @@ export type Role = (typeof ROLES)[number];
 export const STAFF_ROLES = ["admin", "dispatcher", "accountant", "viewer"] as const;
 export type StaffRole = (typeof STAFF_ROLES)[number];
 
+/** Platform-wide authority, separate from (and not implying) membership in
+ *  any specific business — see Business/StaffMembership/RiderMembership. */
+export const PLATFORM_ROLES = ["owner"] as const;
+export type PlatformRole = (typeof PLATFORM_ROLES)[number];
+
+/** Whether a rider may work through the open network at all — a
+ *  platform-owner-controlled gate, independent of any one business's own
+ *  membership decision (see RiderMembershipStatus). */
+export const PLATFORM_RIDER_STATUSES = ["pending", "approved", "suspended"] as const;
+export type PlatformRiderStatus = (typeof PLATFORM_RIDER_STATUSES)[number];
+
+/** A rider's relationship with one specific business. Can only reach
+ *  `active` once the rider also holds platform-level approval. */
+export const RIDER_MEMBERSHIP_STATUSES = ["pending", "active", "suspended", "removed"] as const;
+export type RiderMembershipStatus = (typeof RIDER_MEMBERSHIP_STATUSES)[number];
+
 /**
  * Internal workflow statuses.
  * Store outcomes the dispatcher must distinguish: customer not answering,

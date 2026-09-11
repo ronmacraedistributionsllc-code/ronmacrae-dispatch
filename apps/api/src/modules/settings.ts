@@ -16,37 +16,49 @@ const BusinessSettingsBody = z.object({
   nativeAppRecommended: z.boolean().default(true),
 });
 
-/** Business blob with safe defaults so every flow works on a fresh DB. */
-export async function getBusinessSettings(app: AppCtx): Promise<BusinessSettings> {
-  const row = await app.prisma.setting.findUnique({ where: { key: "business" } });
-  const v = (row?.value ?? {}) as Partial<BusinessSettings>;
+/** Business settings now live directly on the Business row (multi-tenancy,
+ *  Stage 20) — every caller is scoped to one businessId, never a global
+ *  singleton. Falls back to safe defaults only for fields the row itself
+ *  leaves null (dispatch contact, USD rate). */
+export async function getBusinessSettings(app: AppCtx, businessId: string): Promise<BusinessSettings> {
+  const row = await app.prisma.business.findUnique({ where: { id: businessId } });
+  if (!row) throw httpErrors.createError(404, "Business not found");
   return {
-    businessName: v.businessName ?? "Ronmacrae Distributions",
-    dispatchPhone: v.dispatchPhone ?? "",
-    dispatchWhatsApp: v.dispatchWhatsApp ?? "",
-    operationalCurrency: v.operationalCurrency ?? app.config.OPERATIONAL_CURRENCY,
-    usdToJmdRate: v.usdToJmdRate ?? app.config.USD_TO_JMD_RATE,
-    defaultZoneId: v.defaultZoneId ?? null,
-    pinLength: v.pinLength ?? app.config.PIN_LENGTH,
-    trackingLinkTtlHours: v.trackingLinkTtlHours ?? app.config.TRACKING_LINK_TTL_HOURS,
-    nativeAppRecommended: v.nativeAppRecommended ?? true,
+    businessName: row.name,
+    dispatchPhone: row.dispatchPhone ?? "",
+    dispatchWhatsApp: row.dispatchWhatsApp ?? "",
+    operationalCurrency: row.operationalCurrency,
+    usdToJmdRate: row.usdToJmdRate ?? app.config.USD_TO_JMD_RATE,
+    defaultZoneId: row.defaultZoneId,
+    pinLength: row.pinLength,
+    trackingLinkTtlHours: row.trackingLinkTtlHours,
+    nativeAppRecommended: row.nativeAppRecommended,
   };
 }
 
 export async function settingsRoutes(app: FastifyInstance, ctx: AppCtx): Promise<void> {
-  app.get("/api/settings/business", { preHandler: ctx.requireStaff("admin", "dispatcher", "accountant", "viewer") }, async () => {
-    return { settings: await getBusinessSettings(ctx) };
+  app.get("/api/settings/business", { preHandler: ctx.requireStaff("admin", "dispatcher", "accountant", "viewer") }, async (req) => {
+    return { settings: await getBusinessSettings(ctx, req.user!.businessId!) };
   });
 
   app.put("/api/settings/business", { preHandler: ctx.requireStaff("admin") }, async (req) => {
     const body = BusinessSettingsBody.parse(req.body);
-    const settings: BusinessSettings = body;
-    await ctx.prisma.setting.upsert({
-      where: { key: "business" },
-      create: { key: "business", value: settings as unknown as object },
-      update: { value: settings as unknown as object },
+    const businessId = req.user!.businessId!;
+    await ctx.prisma.business.update({
+      where: { id: businessId },
+      data: {
+        name: body.businessName,
+        dispatchPhone: body.dispatchPhone || null,
+        dispatchWhatsApp: body.dispatchWhatsApp || null,
+        operationalCurrency: body.operationalCurrency,
+        usdToJmdRate: body.usdToJmdRate,
+        defaultZoneId: body.defaultZoneId,
+        pinLength: body.pinLength,
+        trackingLinkTtlHours: body.trackingLinkTtlHours,
+        nativeAppRecommended: body.nativeAppRecommended,
+      },
     });
     await ctx.audit.record({ id: req.user!.sub, role: req.user!.role }, "settings.business_update", "setting", "business");
-    return { settings };
+    return { settings: body };
   });
 }

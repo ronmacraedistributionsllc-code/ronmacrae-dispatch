@@ -1,5 +1,5 @@
 import type { GeoPoint } from "@ronmacrae/contracts";
-import { roomForRider, roomForJob, ROOM_DISPATCH } from "@ronmacrae/contracts";
+import { roomForRider, roomForJob, roomForDispatch } from "@ronmacrae/contracts";
 import type { PrismaClient } from "../prisma.js";
 import type { RealtimeHub } from "./hub.js";
 import type { Logger } from "../lib/log.js";
@@ -121,8 +121,14 @@ export class LocationSimulator {
         },
       })
       .catch((err) => this.log.warn({ err: String(err), jobId: leg.jobId }, "sim location write failed"));
+    // GPS is business-isolated the same as everything else: only the
+    // business whose package this rider is currently carrying sees this
+    // live position, via that job's own dispatch room.
+    const job = await this.prisma.job.findUnique({ where: { id: leg.jobId }, select: { businessId: true } }).catch(() => null);
+    const rooms = [roomForRider(leg.riderId), roomForJob(leg.jobId)];
+    if (job?.businessId) rooms.push(roomForDispatch(job.businessId));
     this.hub.broadcastMany(
-      [roomForRider(leg.riderId), roomForJob(leg.jobId), ROOM_DISPATCH],
+      rooms,
       {
         type: "rider.location",
         payload: {

@@ -15,7 +15,7 @@ let seq = 0;
 const uniq = () => `${Date.now()}${++seq}`;
 
 async function makeCustomer(h: TestHarness) {
-  return h.prisma.customer.create({ data: { name: "Test Customer", phone: `+1876555${uniq()}` } });
+  return h.prisma.customer.create({ data: { businessId: h.business.id,  name: "Test Customer", phone: `+1876555${uniq()}` } });
 }
 
 async function makeRider(h: TestHarness) {
@@ -31,8 +31,7 @@ async function staffToken(h: TestHarness, role: "admin" | "dispatcher" | "accoun
 }
 
 async function makeCodJob(h: TestHarness, customerId: string, riderId: string, amountExpected = 1000) {
-  return h.prisma.job.create({
-    data: { customerId, riderId, status: "delivered", paymentMethod: "cod", amountExpected, currency: "JMD" },
+  return h.prisma.job.create({ data: { businessId: h.business.id,  customerId, riderId, status: "delivered", paymentMethod: "cod", amountExpected, currency: "JMD" },
   });
 }
 

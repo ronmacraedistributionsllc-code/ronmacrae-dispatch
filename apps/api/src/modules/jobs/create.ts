@@ -9,7 +9,7 @@ import { pointToJson } from "../../geo-mappers.js";
 import { deliveryPin } from "../../lib/ids.js";
 import { ZonesService } from "../zones.js";
 import { FareEngine } from "../quotes.js";
-import { actorType, jobInclude, jobToDto, type Actor, type JobRow, type Viewer } from "./dto.js";
+import { actorType, assertJobBusiness, jobInclude, jobToDto, type Actor, type JobRow, type Viewer } from "./dto.js";
 import { isUniqueViolation, nextJobNumber, returnJobFor } from "./repository.js";
 
 const PointSchema = z.object({
@@ -79,8 +79,8 @@ export const UpdateJobBody = z.object({
 export type CreateJobInput = z.infer<typeof CreateJobBody>;
 export type UpdateJobInput = z.infer<typeof UpdateJobBody>;
 
-export function viewerFor(req: { user: { role: string; riderId?: string } | null }): Viewer {
-  return { role: req.user?.role ?? "anonymous", riderId: req.user?.riderId ?? null };
+export function viewerFor(req: { user: { role: string; riderId?: string; businessId?: string } | null }): Viewer {
+  return { role: req.user?.role ?? "anonymous", riderId: req.user?.riderId ?? null, businessId: req.user?.businessId ?? null };
 }
 
 export async function createJob(
@@ -89,11 +89,15 @@ export async function createJob(
   actor: Actor,
   viewer: Viewer,
 ): Promise<JobDto> {
+  const businessId = actor.businessId;
+  if (!businessId) throw httpErrors.createError(403, "No business context for this session");
   const cur = ctx.config.OPERATIONAL_CURRENCY;
-  const customer = await ctx.prisma.customer.findUnique({ where: { id: body.customerId } });
+  // Scoped to this business: a dispatcher must never be able to attach a
+  // new order to another business's customer record, even by guessing an id.
+  const customer = await ctx.prisma.customer.findFirst({ where: { id: body.customerId, businessId } });
   if (!customer) throw httpErrors.createError(404, "Customer not found");
   if (body.externalRef) {
-    const dup = await ctx.prisma.job.findFirst({ where: { externalRef: body.externalRef }, select: { id: true } });
+    const dup = await ctx.prisma.job.findFirst({ where: { externalRef: body.externalRef, businessId }, select: { id: true } });
     if (dup) throw httpErrors.createError(409, `A job with external reference ${body.externalRef} already exists`);
   }
 
@@ -103,7 +107,7 @@ export async function createJob(
     feeMinor = minorOf(body.fee, cur);
   } else if (body.pickupPoint && body.point) {
     try {
-      const quote = await new FareEngine(ctx, new ZonesService(ctx)).quote({
+      const quote = await new FareEngine(ctx, new ZonesService(ctx)).quote(businessId, {
         fromPoint: body.pickupPoint as GeoPoint,
         toPoint: body.point as GeoPoint,
         express: body.priority === "express",
@@ -119,9 +123,10 @@ export async function createJob(
   const cod = body.paymentMethod === "cod";
 
   const zones = new ZonesService(ctx);
-  const zone = body.point ? await zones.detect(body.point as GeoPoint) : { zoneId: null, zoneName: null };
+  const zone = body.point ? await zones.detect(businessId, body.point as GeoPoint) : { zoneId: null, zoneName: null };
 
   const data = {
+    businessId,
     jobNumber: "",
     externalRef: body.externalRef || null,
     source: body.source,
@@ -165,7 +170,7 @@ export async function createJob(
     try {
       row = await ctx.prisma.$transaction(async (tx) => {
         const job = await tx.job.create({
-          data: { ...data, jobNumber: await nextJobNumber(ctx) },
+          data: { ...data, jobNumber: await nextJobNumber(ctx, businessId) },
           include: jobInclude,
         });
         await tx.jobEvent.create({
@@ -204,6 +209,7 @@ export async function updateJob(
   const cur = ctx.config.OPERATIONAL_CURRENCY;
   const existing = await ctx.prisma.job.findUnique({ where: { id } });
   if (!existing) throw httpErrors.createError(404, "Job not found");
+  assertJobBusiness(actor, existing.businessId);
 
   const fareMinor = body.fare === undefined ? existing.fare : body.fare == null ? null : minorOf(body.fare, cur);
   const feeMinor = body.fee === undefined ? existing.fee : body.fee == null ? null : minorOf(body.fee, cur);
@@ -214,7 +220,7 @@ export async function updateJob(
 
   let zoneId = existing.zoneId;
   if (body.point !== undefined) {
-    const zone = await new ZonesService(ctx).detect(body.point as GeoPoint | null);
+    const zone = await new ZonesService(ctx).detect(existing.businessId, body.point as GeoPoint | null);
     zoneId = zone.zoneId;
   }
 

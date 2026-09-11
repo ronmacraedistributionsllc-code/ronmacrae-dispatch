@@ -27,7 +27,7 @@ export async function trackingRoutes(app: FastifyInstance, ctx: AppCtx): Promise
   const staff = ctx.requireStaff("admin", "dispatcher");
 
   app.post<{ Params: { jobId: string } }>("/api/tracking/:jobId", { preHandler: staff }, async (req) => {
-    const link = await createTrackingLink(ctx, req.params.jobId);
+    const link = await createTrackingLink(ctx, req.params.jobId, { role: req.user!.role, businessId: req.user!.businessId });
     await ctx.audit.record(
       { id: req.user!.sub, role: req.user!.role },
       "tracking.create",
@@ -39,7 +39,7 @@ export async function trackingRoutes(app: FastifyInstance, ctx: AppCtx): Promise
   });
 
   app.post<{ Params: { token: string } }>("/api/tracking/:token/revoke", { preHandler: staff }, async (req) => {
-    const link = await revokeTrackingLinkByToken(ctx, req.params.token);
+    const link = await revokeTrackingLinkByToken(ctx, req.params.token, { role: req.user!.role, businessId: req.user!.businessId });
     await ctx.audit.record(
       { id: req.user!.sub, role: req.user!.role },
       "tracking.revoke",

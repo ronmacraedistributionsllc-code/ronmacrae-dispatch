@@ -45,8 +45,11 @@ export type RealtimeClientMessage =
   | { type: "ack"; messageIds: string[] }
   | { type: "bearer.tracking"; state: TrackingState; reason?: string };
 
-/** Rooms a client can join after auth (server validates membership). */
-export const ROOM_DISPATCH = "dispatch";
+/** Rooms a client can join after auth (server validates membership).
+ *  Dispatch is per-business — Business A's staff must never receive Business
+ *  B's job-state/offer/notification broadcasts, so there is deliberately no
+ *  bare global "dispatch" room any more. */
+export const roomForDispatch = (businessId: string): string => `dispatch:${businessId}`;
 export const roomForRider = (riderId: string): string => `rider:${riderId}`;
 export const roomForJob = (jobId: string): string => `job:${jobId}`;
 export const roomForCustomer = (customerId: string): string => `customer:${customerId}`;

@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { WebSocket } from "ws";
 import type { AccessTokenPayload, JwtIssuer } from "../lib/jwt.js";
-import { ACTIVE_JOB_STATUSES, ROOM_DISPATCH, roomForRider, roomForJob, type RealtimeMessage } from "@ronmacrae/contracts";
+import { ACTIVE_JOB_STATUSES, roomForDispatch, roomForRider, roomForJob, type RealtimeMessage } from "@ronmacrae/contracts";
 import type { Logger } from "../lib/log.js";
 import type { PrismaClient } from "@prisma/client";
 
@@ -65,7 +65,11 @@ export class RealtimeHub {
       rooms: new Set<string>(),
       lastAck: Date.now(),
     };
-    if (payload.role !== "rider") state.rooms.add(ROOM_DISPATCH);
+    // Owner sessions (platform-wide, no fixed businessId) don't join any
+    // per-business dispatch room — the owner console has its own,
+    // separate, cross-business endpoints rather than tapping into every
+    // business's live feed.
+    if (payload.role !== "rider" && payload.businessId) state.rooms.add(roomForDispatch(payload.businessId));
     if (riderId) {
       state.rooms.add(roomForRider(riderId));
       const jobs = await this.prisma.job.findMany({
@@ -112,7 +116,7 @@ export class RealtimeHub {
 
   private async mayJoin(state: ClientState, room: string): Promise<boolean> {
     if (state.user.role === "rider") {
-      if (room === ROOM_DISPATCH) return false;
+      if (room.startsWith("dispatch:")) return false;
       if (room === roomForRider(state.user.riderId ?? "")) return true;
       if (room.startsWith("job:")) {
         const job = await this.prisma.job.findFirst({
@@ -123,7 +127,19 @@ export class RealtimeHub {
       }
       return false;
     }
-    return true; // staff: dispatch, job and customer rooms
+    // Staff: only their own business's dispatch room, and only job/customer
+    // rooms belonging to a job in their own business — never another
+    // business's live feed, even on an explicit join request.
+    if (room.startsWith("dispatch:")) return room === roomForDispatch(state.user.businessId ?? "");
+    if (room.startsWith("job:")) {
+      const job = await this.prisma.job.findFirst({ where: { id: room.slice(4), businessId: state.user.businessId ?? "__none__" }, select: { id: true } });
+      return Boolean(job);
+    }
+    if (room.startsWith("customer:")) {
+      const customer = await this.prisma.customer.findFirst({ where: { id: room.slice(9), businessId: state.user.businessId ?? "__none__" }, select: { id: true } });
+      return Boolean(customer);
+    }
+    return false;
   }
 
   sendTo(client: ClientState, msg: AnyRtMessage): void {

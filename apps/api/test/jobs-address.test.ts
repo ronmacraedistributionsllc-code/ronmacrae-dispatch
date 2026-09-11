@@ -21,7 +21,7 @@ async function writerToken(h: TestHarness) {
 
 async function customer(h: TestHarness) {
   uniq += 1;
-  return h.prisma.customer.create({ data: { name: "Test Customer", phone: `+18765550${String(1000 + uniq)}` } });
+  return h.prisma.customer.create({ data: { businessId: h.business.id,  name: "Test Customer", phone: `+18765550${String(1000 + uniq)}` } });
 }
 
 beforeAll(async () => {

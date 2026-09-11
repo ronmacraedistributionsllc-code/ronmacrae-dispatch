@@ -11,7 +11,7 @@ import { AuditService } from "./modules/audit.js";
 import { NotifyService } from "./modules/notify.js";
 import { PushService } from "./modules/push.js";
 import { LocationSimulator } from "./rt/location-sim.js";
-import { makeRequireRider, makeRequireStaff, makeRequireAnyUser } from "./modules/guards.js";
+import { makeRequireRider, makeRequireStaff, makeRequireAnyUser, makeRequireOwner } from "./modules/guards.js";
 import type { StaffRole } from "@ronmacrae/contracts";
 
 export interface AppCtx {
@@ -33,6 +33,7 @@ export interface AppCtx {
   requireStaff: (...roles: StaffRole[]) => preHandlerAsyncHookHandler;
   requireRider: preHandlerAsyncHookHandler;
   requireAuth: preHandlerAsyncHookHandler;
+  requireOwner: preHandlerAsyncHookHandler;
 }
 
 declare module "fastify" {
@@ -74,6 +75,7 @@ export function buildCtx(
     requireStaff: (...roles: StaffRole[]) => makeRequireStaff(...roles),
     requireRider: makeRequireRider(),
     requireAuth: makeRequireAnyUser(),
+    requireOwner: makeRequireOwner(),
   };
 }
 

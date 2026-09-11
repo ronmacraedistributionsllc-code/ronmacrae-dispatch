@@ -30,9 +30,10 @@ const ReportQuery = z.object({
 });
 type ReportQueryInput = z.infer<typeof ReportQuery>;
 
-async function buildReport(ctx: AppCtx, q: ReportQueryInput): Promise<OperatingReportDto> {
+async function buildReport(ctx: AppCtx, businessId: string, q: ReportQueryInput): Promise<OperatingReportDto> {
   const cur = ctx.config.OPERATIONAL_CURRENCY;
   const where: Prisma.JobWhereInput = {
+    businessId,
     ...(q.from || q.to ? { createdAt: { ...(q.from ? { gte: new Date(q.from) } : {}), ...(q.to ? { lte: new Date(q.to) } : {}) } } : {}),
     ...(q.riderId ? { riderId: q.riderId } : {}),
     ...(q.zoneId ? { zoneId: q.zoneId } : {}),
@@ -214,12 +215,12 @@ export async function reportRoutes(app: FastifyInstance, ctx: AppCtx): Promise<v
 
   app.get("/api/reports/summary", { preHandler: authorized }, async (req) => {
     const q = ReportQuery.parse(req.query);
-    return buildReport(ctx, q);
+    return buildReport(ctx, req.user!.businessId!, q);
   });
 
   app.get("/api/reports/jobs.csv", { preHandler: authorized }, async (req, reply) => {
     const q = ReportQuery.parse(req.query);
-    const report = await buildReport(ctx, q);
+    const report = await buildReport(ctx, req.user!.businessId!, q);
     await ctx.audit.record({ id: req.user!.sub, role: req.user!.role }, "report.export_csv", "report", "operating", { filters: report.filters });
     reply.header("content-type", "text/csv; charset=utf-8");
     reply.header("content-disposition", `attachment; filename="operating-report-${new Date().toISOString().slice(0, 10)}.csv"`);

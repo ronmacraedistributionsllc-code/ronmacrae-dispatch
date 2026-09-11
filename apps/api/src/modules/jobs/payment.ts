@@ -3,7 +3,7 @@ import { httpErrors } from "@fastify/sensible";
 import type { AppCtx } from "../../ctx.js";
 import { majorOf, minorOf, money } from "@ronmacrae/money";
 import type { JobDto, JobStatus, PaymentStatus } from "@ronmacrae/contracts";
-import { actorType, jobInclude, jobToDto, type Actor, type JobRow, type Viewer } from "./dto.js";
+import { actorType, assertJobBusiness, jobInclude, jobToDto, type Actor, type JobRow, type Viewer } from "./dto.js";
 import { getJobRow } from "./repository.js";
 
 /** Statuses where a rider can (re)record collected cash. */
@@ -80,6 +80,7 @@ export async function recordCollection(
   if (actor.role === "rider" && row.riderId !== actor.riderId) {
     throw httpErrors.createError(403, "You can only record collections for your own jobs");
   }
+  if (actor.role !== "rider") assertJobBusiness(actor, row.businessId);
   // Collecting/handing in is the rider's job (or, for late reconciliation,
   // dispatch/admin acting on their behalf) — never the accountant/viewer, who
   // monitor and approve/dispute what's already recorded, not record it themselves.

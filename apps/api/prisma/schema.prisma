@@ -22,13 +22,111 @@ enum Role {
   rider
 }
 
+/** Platform-level authority, separate from any single business's staff role.
+ *  A platform owner oversees every business on the network; they are not
+ *  necessarily an admin (or even a member) of any one of them. */
+enum PlatformRole {
+  owner
+}
+
+/** One participating store on the network. Every business-owned resource
+ *  (jobs, customers, zones, offers...) carries a businessId; a business
+ *  admin/dispatcher/accountant/viewer only ever sees their own business's
+ *  data. Settings that used to live in the old global `Setting("business")`
+ *  singleton now live directly on this row, per business. */
+model Business {
+  id                   String   @id @default(cuid())
+  name                 String
+  slug                 String?  @unique
+  active               Boolean  @default(true)
+  dispatchPhone        String?
+  dispatchWhatsApp     String?
+  operationalCurrency  String   @default("JMD")
+  usdToJmdRate         Float?
+  defaultZoneId        String?
+  pinLength            Int      @default(4)
+  trackingLinkTtlHours Float    @default(72)
+  nativeAppRecommended Boolean  @default(true)
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  staffMemberships StaffMembership[]
+  riderMemberships RiderMembership[]
+  jobs             Job[]
+  customers        Customer[]
+  zones            Zone[]
+  offers           JobOffer[]
+}
+
+/** A staff member's role at one specific business. A User is the global
+ *  identity (one login); their access at each business they work with is a
+ *  separate StaffMembership row, so the same person can be a dispatcher at
+ *  one business and, say, a viewer at another. */
+model StaffMembership {
+  id         String    @id @default(cuid())
+  userId     String
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  businessId String
+  business   Business  @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  role       Role
+  active     Boolean   @default(true)
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  @@unique([userId, businessId])
+  @@index([businessId, role])
+}
+
+/** Whether a rider is allowed on the open network at all — a platform-owner
+ *  controlled gate, independent of which specific businesses they're a
+ *  member of (see RiderMembership below). */
+enum PlatformRiderStatus {
+  pending
+  approved
+  suspended
+}
+
+enum RiderMembershipStatus {
+  pending
+  active
+  suspended
+  removed
+}
+
+/** A rider's relationship with one specific business. A Rider is the global
+ *  profile (one login, one location stream, one vehicle); which businesses
+ *  they actually carry jobs for is tracked here, and a membership can only
+ *  be `active` once the rider also holds platform-level approval. */
+model RiderMembership {
+  id           String                 @id @default(cuid())
+  riderId      String
+  rider        Rider                  @relation(fields: [riderId], references: [id], onDelete: Cascade)
+  businessId   String
+  business     Business               @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  status       RiderMembershipStatus  @default(pending)
+  invitedAt    DateTime               @default(now())
+  approvedAt   DateTime?
+  approvedById String?
+  approvedBy   User?                  @relation("riderMembershipApprover", fields: [approvedById], references: [id], onDelete: SetNull)
+
+  @@unique([riderId, businessId])
+  @@index([businessId, status])
+}
+
 model User {
   id           String   @id @default(cuid())
   email        String?  @unique
   phone        String?  @unique
   passwordHash String
   name         String
+  /** Legacy single-business role — kept for the pre-multi-tenancy demo staff
+   *  during migration; a user's real, current access at a given business is
+   *  their StaffMembership row there. Not read by any business-scoped route
+   *  once StaffMembership exists for that user. */
   role         Role     @default(viewer)
+  /** Platform-wide authority (the network's own owner/operator), independent
+   *  of — and not requiring — membership in any specific business. */
+  platformRole PlatformRole?
   totpSecret   String?
   totpEnabled  Boolean  @default(false)
   active       Boolean  @default(true)
@@ -37,6 +135,8 @@ model User {
   updatedAt    DateTime @updatedAt
 
   rider     Rider?
+  staffMemberships StaffMembership[]
+  riderMembershipApprovals RiderMembership[] @relation("riderMembershipApprover")
   sessions  Session[]
   audits    AuditLog[]
   payouts   Payout[]           @relation("payoutApprover")
@@ -65,6 +165,11 @@ model Session {
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   tokenHash String   @unique
   userAgent String?
+  /** The business this login session is scoped to — set once at login (from
+   *  the chosen StaffMembership) and carried forward on every refresh, so a
+   *  multi-business admin's session doesn't silently jump to a different
+   *  business mid-session. Null for a rider or platform-owner session. */
+  businessId String?
   expiresAt DateTime
   createdAt DateTime @default(now())
 }
@@ -100,6 +205,9 @@ model Rider {
   payRate            Int?
   payCurrency        String      @default("JMD")
   active             Boolean     @default(true)
+  /** Platform-wide gate: a membership can only go `active` at any business
+   *  once this is `approved`. Owner-controlled, not any one business's call. */
+  platformStatus     PlatformRiderStatus @default(pending)
   createdAt          DateTime    @default(now())
   updatedAt          DateTime    @updatedAt
 
@@ -111,14 +219,19 @@ model Rider {
   payouts     Payout[]
   alerts      SosAlert[]
   offers      JobOffer[]
+  memberships RiderMembership[]
 }
 
 // ---------- Geography / pricing ----------
 
 model Zone {
   id         String   @id @default(cuid())
+  /** Nullable only during the multi-tenancy migration's backfill window —
+   *  every zone belongs to exactly one business once backfilled. */
+  businessId String
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
   name       String
-  slug       String   @unique
+  slug       String
   parish     String?
   geometry   Json
   baseFee    Int      @default(0)
@@ -134,6 +247,8 @@ model Zone {
   customers Customer[] @relation("customerZone")
   jobs      Job[]      @relation("jobZone")
   homeRiders Rider[]   @relation("riderHomeZone")
+
+  @@unique([businessId, slug])
 }
 
 model FareRule {
@@ -154,8 +269,15 @@ model FareRule {
 
 model Customer {
   id               String    @id @default(cuid())
+  /** Nullable only during the multi-tenancy migration's backfill window. A
+   *  Customer row is one business's relationship with a person — the same
+   *  phone number can be a separate Customer row at a different business
+   *  (global cross-business identity is a later, additive layer on top of
+   *  this, not a replacement for it). */
+  businessId       String
+  business         Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
   name             String
-  phone            String    @unique
+  phone            String
   email            String?
   addressText      String?
   landmark         String?
@@ -172,6 +294,8 @@ model Customer {
 
   jobs    Job[]
   consents ConsentRecord[]
+
+  @@unique([businessId, phone])
 }
 
 // ---------- Jobs ----------
@@ -237,8 +361,14 @@ enum RiderStage {
 
 model Job {
   id               String        @id @default(cuid())
-  jobNumber        String?       @unique
-  externalRef      String?       @unique
+  /** Nullable only during the multi-tenancy migration's backfill window —
+   *  every job belongs to exactly one business once backfilled. This is the
+   *  single source of truth for order/offer/message/COD/report isolation:
+   *  everything else scopes off the job's businessId (directly or via it). */
+  businessId       String
+  business         Business     @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  jobNumber        String?
+  externalRef      String?
   source           String        @default("manual")
   originalJobId    String?
   customerId       String
@@ -319,6 +449,10 @@ model Job {
   codEvents CodEvent[]
   messages DeliveryMessage[]
   addressChangeRequests AddressChangeRequest[]
+
+  @@unique([businessId, jobNumber])
+  @@unique([businessId, externalRef])
+  @@index([businessId, status])
 }
 
 enum CodStatus {
@@ -365,6 +499,13 @@ enum OfferStatus {
 /// offers are an auditable, race-safe way to let an eligible rider claim it.
 model JobOffer {
   id        String      @id @default(cuid())
+  /** Denormalized from job.businessId — kept directly on the offer too so
+   *  "offers for my business" never needs a join, and so a rider's own
+   *  offer list can be filtered to businesses they're an active member of
+   *  without touching Job at all. Nullable only during the migration's
+   *  backfill window. */
+  businessId String
+  business  Business   @relation(fields: [businessId], references: [id], onDelete: Cascade)
   jobId     String
   job       Job         @relation(fields: [jobId], references: [id], onDelete: Cascade)
   riderId   String
@@ -377,6 +518,7 @@ model JobOffer {
 
   @@index([riderId, status, expiresAt])
   @@index([jobId, status])
+  @@index([businessId, status])
 }
 
 enum AssignmentStatus {

@@ -1,10 +1,17 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
+import { httpErrors } from "@fastify/sensible";
 import type { AppCtx } from "../ctx.js";
 import type { DeliveryRequestResultDto } from "@ronmacrae/contracts";
 import { CreateJobBody, createJob } from "./jobs/create.js";
 import { createTrackingLink } from "./jobs/history.js";
 import { CustomersService } from "./customers.js";
+
+/** The public booking form (`/book`) is not yet business-selectable — it's
+ *  one URL, not `/book/:businessSlug` — so it always books with this
+ *  business until the storefront gets a real per-business identity (a later,
+ *  customer-facing stage; out of this stage's isolation-only scope). */
+const DEFAULT_PUBLIC_BUSINESS_SLUG = "ronmacrae";
 
 const PointSchema = z.object({ lat: z.number().gte(-90).lte(90), lng: z.number().gte(-180).lte(180) });
 const MoneyMajor = z.number().min(0).max(10_000_000);
@@ -37,7 +44,9 @@ export const DeliveryRequestBody = z.object({
 export async function deliveryRequestRoutes(app: FastifyInstance, ctx: AppCtx): Promise<void> {
   app.post("/api/delivery-requests", { config: { rateLimit: { max: 20, timeWindow: "1 minute" } } }, async (req) => {
     const body = DeliveryRequestBody.parse(req.body);
-    const customer = await new CustomersService(ctx).upsertFromRequest({
+    const business = await ctx.prisma.business.findUnique({ where: { slug: DEFAULT_PUBLIC_BUSINESS_SLUG } });
+    if (!business) throw httpErrors.createError(503, "Booking is not available right now");
+    const customer = await new CustomersService(ctx).upsertFromRequest(business.id, {
       name: body.name,
       phone: body.phone,
       email: body.email || null,
@@ -65,11 +74,11 @@ export async function deliveryRequestRoutes(app: FastifyInstance, ctx: AppCtx): 
       scheduledAt: body.scheduledAt ? new Date(body.scheduledAt) : undefined,
       instructions: body.instructions,
     });
-    const actor = { id: null, name: body.name, role: "customer" };
-    const job = await createJob(ctx, jobBody, actor, { role: "anonymous", riderId: null });
+    const actor = { id: null, name: body.name, role: "customer", businessId: business.id };
+    const job = await createJob(ctx, jobBody, actor, { role: "anonymous", riderId: null, businessId: business.id });
 
     // the customer gets a tracking link immediately (idempotent per job)
-    const link = await createTrackingLink(ctx, job.id);
+    const link = await createTrackingLink(ctx, job.id, { role: "customer", businessId: business.id });
 
     const out: DeliveryRequestResultDto = {
       jobId: job.id,

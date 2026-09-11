@@ -64,6 +64,7 @@ export {
   assignmentToDto,
   linkToDto,
   actorType,
+  assertJobBusiness,
   jobInclude,
   type Actor,
   type Viewer,

@@ -18,7 +18,7 @@ let seq = 0;
 const uniq = () => `${Date.now()}${++seq}`;
 
 async function makeCustomer(h: TestHarness) {
-  return h.prisma.customer.create({ data: { name: "Transition Test Customer", phone: `+1876555${uniq()}` } });
+  return h.prisma.customer.create({ data: { businessId: h.business.id,  name: "Transition Test Customer", phone: `+1876555${uniq()}` } });
 }
 
 async function makeRider(h: TestHarness) {
@@ -34,8 +34,7 @@ async function dispatcherToken(h: TestHarness) {
 }
 
 async function makeAssignedJob(h: TestHarness, customerId: string, riderId: string) {
-  return h.prisma.job.create({
-    data: { customerId, riderId, status: "assigned", paymentMethod: "cod", amountExpected: 1000, currency: "JMD", pin: "1234" },
+  return h.prisma.job.create({ data: { businessId: h.business.id,  customerId, riderId, status: "assigned", paymentMethod: "cod", amountExpected: 1000, currency: "JMD", pin: "1234" },
   });
 }
 
@@ -113,8 +112,7 @@ describe("three-step rider flow: accepted -> picked_up -> in_transit -> delivere
     const customer = await makeCustomer(harness);
     const { rider, token } = await makeRider(harness);
     const { token: otherToken } = await makeRider(harness);
-    const job = await harness.prisma.job.create({
-      data: { customerId: customer.id, riderId: rider.id, status: "accepted", paymentMethod: "cod", amountExpected: 1000, currency: "JMD", pin: "1234" },
+    const job = await harness.prisma.job.create({ data: { businessId: harness.business.id,  customerId: customer.id, riderId: rider.id, status: "accepted", paymentMethod: "cod", amountExpected: 1000, currency: "JMD", pin: "1234" },
     });
 
     const skip = await harness.app.inject({
@@ -139,8 +137,7 @@ describe("duplicate-submit guard (backend, not just UI disabling)", () => {
   it("two concurrent requests for the same transition only apply once — the loser gets a 409, not a second event", async () => {
     const customer = await makeCustomer(harness);
     const { rider, token } = await makeRider(harness);
-    const job = await harness.prisma.job.create({
-      data: { customerId: customer.id, riderId: rider.id, status: "picked_up", paymentMethod: "cod", amountExpected: 1000, currency: "JMD", pin: "1234" },
+    const job = await harness.prisma.job.create({ data: { businessId: harness.business.id,  customerId: customer.id, riderId: rider.id, status: "picked_up", paymentMethod: "cod", amountExpected: 1000, currency: "JMD", pin: "1234" },
     });
 
     const send = () =>
@@ -165,8 +162,7 @@ describe("duplicate-submit guard (backend, not just UI disabling)", () => {
   it("a repeated identical rider-stage report (e.g. offline retry of 'heading to pickup') is a harmless no-op, not a duplicate audit event", async () => {
     const customer = await makeCustomer(harness);
     const { rider, token } = await makeRider(harness);
-    const job = await harness.prisma.job.create({
-      data: { customerId: customer.id, riderId: rider.id, status: "accepted", paymentMethod: "cod", amountExpected: 1000, currency: "JMD" },
+    const job = await harness.prisma.job.create({ data: { businessId: harness.business.id,  customerId: customer.id, riderId: rider.id, status: "accepted", paymentMethod: "cod", amountExpected: 1000, currency: "JMD" },
     });
 
     for (let i = 0; i < 2; i++) {

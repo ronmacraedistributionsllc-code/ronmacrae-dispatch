@@ -17,10 +17,10 @@ export class FareEngine {
     private readonly zones: ZonesService,
   ) {}
 
-  async quote(req: FareQuoteRequest): Promise<FareQuoteDto> {
+  async quote(businessId: string, req: FareQuoteRequest): Promise<FareQuoteDto> {
     const cur = this.app.config.OPERATIONAL_CURRENCY;
-    const fromZone = await this.zones.detect(req.fromPoint);
-    const toZone = await this.zones.detect(req.toPoint);
+    const fromZone = await this.zones.detect(businessId, req.fromPoint);
+    const toZone = await this.zones.detect(businessId, req.toPoint);
 
     const route = await this.app.geo.route([req.fromPoint, req.toPoint], "car");
     const km = route.totalDistanceM / 1000;
@@ -40,7 +40,7 @@ export class FareEngine {
       if (rule.minFee != null && fee < rule.minFee) fee = rule.minFee;
       breakdown.push({ label: `Zone rate (${fromZone.zoneName ?? "?"} → ${toZone.zoneName ?? "?"})`, amount: money(fee, cur) });
     } else {
-      const zoneFees = await this.zones.zoneFees(toZone.zoneId, route.totalDistanceM || null, cur);
+      const zoneFees = await this.zones.zoneFees(businessId, toZone.zoneId, route.totalDistanceM || null, cur);
       if (zoneFees.fee != null) {
         fee = zoneFees.fee;
         breakdown.push({ label: `Zone base + distance (${toZone.zoneName ?? "outside zones"})`, amount: money(fee, cur) });
@@ -71,7 +71,7 @@ export class FareEngine {
     // on the destination zone. Applied after the percentage surcharges above, on
     // top of the (already-surcharged) fee, since it's a separate flat add-on.
     if (req.urgent && toZone.zoneId) {
-      const zone = await this.app.prisma.zone.findUnique({ where: { id: toZone.zoneId } });
+      const zone = await this.app.prisma.zone.findFirst({ where: { id: toZone.zoneId, businessId } });
       if (zone?.urgentSurchargeFee) {
         fee += zone.urgentSurchargeFee;
         breakdown.push({ label: "Urgent delivery", amount: money(zone.urgentSurchargeFee, cur) });
@@ -105,6 +105,6 @@ export async function quoteRoutes(app: FastifyInstance, ctx: AppCtx): Promise<vo
   const engine = new FareEngine(ctx, new ZonesService(ctx));
   app.post("/api/quotes", { preHandler: ctx.requireStaff("admin", "dispatcher") }, async (req) => {
     const body = QuoteBody.parse(req.body);
-    return engine.quote(body as FareQuoteRequest);
+    return engine.quote(req.user!.businessId!, body as FareQuoteRequest);
   });
 }

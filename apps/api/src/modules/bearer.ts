@@ -29,9 +29,16 @@ export async function bearerRoutes(app: FastifyInstance, ctx: AppCtx): Promise<v
   });
 
   /** "Contact dispatch" button (spec 5F) — only the owner-configured dispatch
-   *  contact, never any individual staff member's own phone number. */
-  app.get("/api/bearer/dispatch-contact", { preHandler: ctx.requireRider }, async () => {
-    const business = await getBusinessSettings(ctx);
+   *  contact, never any individual staff member's own phone number. A rider
+   *  can carry jobs from several businesses at once, so this always needs a
+   *  jobId to know which business's contact to show — the response for job
+   *  A must never be that of some other business the rider also works for. */
+  app.get<{ Querystring: { jobId?: string } }>("/api/bearer/dispatch-contact", { preHandler: ctx.requireRider }, async (req) => {
+    const jobId = req.query.jobId;
+    if (!jobId) throw httpErrors.createError(400, "jobId is required");
+    const job = await ctx.prisma.job.findFirst({ where: { id: jobId, riderId: req.user!.riderId! }, select: { businessId: true } });
+    if (!job) throw httpErrors.createError(404, "Job not found");
+    const business = await getBusinessSettings(ctx, job.businessId);
     const contact: DispatchContactDto = {
       businessName: business.businessName,
       dispatchPhone: business.dispatchPhone,
