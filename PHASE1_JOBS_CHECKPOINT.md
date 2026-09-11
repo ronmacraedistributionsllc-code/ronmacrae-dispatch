@@ -244,7 +244,7 @@ No GPS functionality was added.
   its availability label, which can legitimately be `on_job` when the rider e2e runs in a
   parallel browser worker.
 
-## Verification
+## Verification §0 — original Phase 1 GPS/jobs handoff (historical; superseded by `WORK_IN_PROGRESS.md`'s "Verification checklist (Stages 8–18)" for everything shipped since)
 
 Working directory: `ronmacrae-dispatch` (e2e commands run from `e2e/`).
 

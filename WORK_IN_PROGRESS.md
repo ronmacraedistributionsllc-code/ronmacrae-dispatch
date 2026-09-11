@@ -288,7 +288,7 @@ fixed (not just noted) since it's a test-file change, not production code: the s
 now selects by finding the `<option>` whose text starts with "Kei Bearer" and
 selecting its value, robust to both ordering and the status-suffix in the label.
 
-## Verified gates (this session, actual output, not assumed)
+## Verified gates §1 — Stages 1–5, offers/GPS/alerts (historical; superseded by "Verification checklist (Stages 8–18)" at the end of this file)
 
 | Command (working dir) | Result |
 | --- | --- |
@@ -503,7 +503,7 @@ one-off cleanup script was run from a scratch location and deleted immediately
 after — it's not part of the repo (this was a one-time operational task, not a
 repeatable app feature).
 
-## Verified gates (this session, actual output)
+## Verified gates §2 — Stage 7, address-first ordering/zones/alerts/db isolation (historical; superseded by "Verification checklist (Stages 8–18)" at the end of this file)
 
 | Command | Result |
 | --- | --- |
@@ -1527,3 +1527,152 @@ the original request). Next: the closing instruction — renumber the
 existing Verification section and build out the expanded verification
 checklist across all of Stages 8–18. See the new
 "## Verification checklist (Stages 8–18)" section below.
+
+## Verification checklist (Stages 8–18) — the renumbered, authoritative Verification section
+
+This replaces the two historical "Verified gates §1/§2" sections above and
+`PHASE1_JOBS_CHECKPOINT.md`'s "Verification §0" as the current, complete
+checklist — it is the numbered list the original request's closing
+instruction asked for, mapping each required behavior to the specific
+test file(s)/case(s) that actually verify it (all passing as of the
+Stage 18 commit `8a6ed48`; api = `apps/api/test/`, web =
+`apps/web/src/components/`, e2e = `e2e/specs/`).
+
+1. **Typed address is authoritative, never silently overwritten** (item 1,
+   Stage 8). `web/address-picker.test.tsx`: "keeps an exact typed address
+   ('15-17 ...') unchanged when a suggestion is picked", "keeps the typed
+   address unchanged after dragging the pin", "lets 'Use this address'
+   confirm exact typed text even when the provider finds no match", "does
+   not overwrite already-typed text with a suggestion label when the field
+   wasn't empty". `api/jobs-address.test.ts`: stores an exact address plus
+   the provider's differing match without altering either; a PATCH
+   updating only the point never touches the previously-typed `addressText`.
+
+2. **Rider availability/multi-job capacity is rider-controlled, not
+   auto-toggled** (item 2, Stage 9). `api/offers.test.ts`: "excludes a
+   rider already at daily capacity from both broadcast and rebroadcast";
+   "keeps status 'available' through accept, and remains eligible for a
+   fresh broadcast while under capacity"; "rejects an accept that would
+   push the rider over capacity"; "accepting an assignment and completing
+   it never changes rider.status away from what the rider set"; "a rider
+   can go 'unavailable' while still carrying an active job, but not fully
+   'offline'". `e2e/multi-job-notifications.spec.ts`: a rider carrying a
+   job still gets new offers live, an unavailable rider gets none.
+
+3. **Rider notifications actually reach the rider (toast/badge/sound,
+   connection state, reconnect)** (item 3, Stage 10). `e2e/realtime.spec.ts`:
+   a rider's open dashboard shows a new offer live without a reload;
+   a dispatcher's offers panel updates live on accept. `e2e/alerts.spec.ts`:
+   direct assignment alerts and bumps unread only for the assigned rider.
+   `api/push.test.ts`: subscribe/unsubscribe round-trips genuinely to the
+   API, scoped per-user. Connection state (`live`/`reconnecting`/`offline`)
+   and `onReconnect` are exercised implicitly by every e2e spec's realtime
+   assertions above running against a real WS connection, not a mock.
+
+4. **Extra test riders removed safely, only Kei Bearer remains** (item 4,
+   Stage 11). One-time data operation, not an automated test: verified at
+   the time via a timestamped backup (`dev.db.bak-riders-20260910-173947`)
+   plus before/after row-count and identity checks documented in this
+   file's Stage 11 section — the rider list is exercised by every
+   subsequent stage's tests (offers, route-queue, ops-board, cod, etc.),
+   all of which assume and confirm exactly one active rider, Kei Bearer.
+
+5. **COD calculations and permissions** (5A, Stage 12). `api/cod.test.ts`:
+   full collect→hand-in→approve lifecycle with auto-calculated shortage/
+   overage; zero-variance and overage cases; an accountant cannot record a
+   collection/hand-in; a dispatcher can record on a rider's behalf; a
+   rider cannot record another rider's job; a viewer can monitor but not
+   approve/dispute; a rider cannot approve/dispute their own entry.
+
+6. **COD approval/dispute audit history** (5A, Stage 12).
+   `api/cod.test.ts`: "blocks a further collect or hand-in once approved,
+   but allows a deliberate accountant dispute afterward"; "dispute requires
+   a non-empty note" — both assert against the underlying `CodEvent` audit
+   trail, not just the summary status.
+
+7. **Multi-job route queue with ordering that actually persists** (5B,
+   Stage 13). `api/route-queue.test.ts`: sets `routeSeq` to match the
+   submitted order for exactly the rider's active jobs; rejects a reorder
+   omitting one of the rider's jobs or including another rider's job; a
+   dispatcher cannot reorder a rider's queue (read-only view only).
+   `e2e/route-queue.spec.ts`: a rider reorders their queue, a dispatcher
+   views it read-only, and neither reorders on its own.
+
+8. **Urgent/overdue indicators + dispatcher rider-load/stale-location
+   display** (5C, Stage 14). `api/ops-board.test.ts`: reports a rider's
+   active-job count and remaining capacity; marks a stale location
+   honestly and never fabricates a position when there's no report at
+   all; flags an overdue job (`promisedAt` in the past, still active) and
+   excludes one not yet due; lists a waiting offer (never an expired one)
+   and a job awaiting COD approval; not reachable by a rider role.
+   `e2e/ops-board.spec.ts`: the same board, rendered.
+
+9. **Customer-message isolation, rider access limited to assigned
+   conversations, and messaging closure timing** (5G, Stage 18).
+   `api/delivery-messages.test.ts`: "a rider sees only the conversation for
+   their own assigned job, never another rider's"; "an accountant/viewer
+   can monitor (read) but not respond (write)"; "closes to new messages
+   once the job reaches a terminal status, for both staff and rider";
+   "closes to the customer once the tracking link has expired (read-only
+   history remains)"; "a revoked tracking link blocks the conversation
+   entirely (410), not just writes".
+
+10. **Address-change approval flow** (5G, Stage 18).
+    `api/delivery-messages.test.ts`: "a customer's proposed address is not
+    applied until dispatch explicitly approves it"; "a declined request
+    never touches the job's address, and cannot be reviewed twice"; "a
+    rider can also propose an address change, subject to the same review".
+    `e2e/delivery-messages.spec.ts` confirms the same flow end-to-end,
+    including the actual API-level `addressText` change after "Confirm
+    change" is clicked.
+
+11. **Notification templates + provider fallback** (5D, Stage 15).
+    `api/notifications.test.ts`: order-confirmed fires once and respects
+    consent; heading-to-pickup/in-transit/near-destination use genuinely
+    distinct templates; only an admin can write template overrides, an
+    unknown template name is rejected, an override persists and is
+    reflected back, and — the bug caught this stage — "saving one
+    template's override never wipes out another's already-saved one"; the
+    Twilio status webhook moves `sent`→`delivered`/`failed` and is
+    harmless on an unknown message id (the provider-fallback path: Twilio
+    accepting ≠ delivered until the webhook confirms it).
+
+12. **Reports, filters, and CSV totals** (5E, Stage 16).
+    `api/reports.test.ts`: buckets delivered/active/failed-cancelled
+    correctly and sums fees + urgent count; computes expected/collected/
+    handed-in/outstanding/shortage/overage across mixed jobs; average
+    delivery time from actual (not scheduled) timestamps, `null` (not
+    zero) when nothing delivered in range; rider earnings computed from
+    `payRate × completed jobs`, or an honest `null` + note when no rate is
+    configured; the bucket filter narrows rows and counts consistently;
+    filters by payment method; permissions (admin/accountant only); CSV
+    export has a job-level header row and — cross-checked against item
+    13 below — no PIN or phone columns.
+
+13. **Emergency/contact-dispatch Call/Message links** (5F, Stage 17).
+    `api/dispatch-contact.test.ts`: returns the owner-configured dispatch
+    phone/WhatsApp and never a staff member's own phone; rider-only
+    (staff get 403). `e2e/contact-dispatch.spec.ts`: a rider's Call link
+    points at the exact configured `tel:` number, the Message link's
+    `sms:` href includes the job's own reference, and no WhatsApp button
+    renders when unconfigured.
+
+14. **No PIN/phone/unnecessary-data leakage, checked directly, not just
+    assumed** (cross-cutting across items 1–5). `api/cod.test.ts`: "the
+    public tracking DTO has no COD ledger fields at all".
+    `api/reports.test.ts`: CSV export has no PIN or phone columns.
+    `api/dispatch-contact.test.ts`: never a staff member's own phone.
+    `api/delivery-messages.test.ts`: "message DTOs never carry a phone
+    number or the delivery PIN" (asserted against the raw serialized JSON,
+    not just the typed DTO shape). The public tracking DTO itself
+    (`TrackingPublicDto`) intentionally exposes the delivery PIN to the
+    *customer* it belongs to (needed for the rider to confirm handoff) —
+    that is the one deliberate exception, and it is scoped to that one
+    customer's own delivery via their own tracking token, never to staff
+    listings, CSV exports, or any other customer/rider's view.
+
+**How to re-run this whole checklist**: `npm run typecheck --workspaces`,
+`npm run test --workspace @ronmacrae/api` (122 tests), `npm run test
+--workspace @ronmacrae/web` (8 tests), and, from `e2e/` with a fresh
+`e2e-test.db`, `npx playwright test --workers=1` (27 real specs; ignore
+`zz-debug.spec.ts`, flagged separately for removal).
