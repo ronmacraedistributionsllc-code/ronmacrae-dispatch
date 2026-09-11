@@ -553,7 +553,7 @@ tracked here as Stages 8+ (Stages 1-7 above are the prior work, already shipped)
 | 13 | 5B — Rider route queue | DONE |
 | 14 | 5C — Dispatcher operations board | DONE |
 | 15 | 5D — Customer status message templates + notification log | DONE |
-| 16 | 5E — Operating reports + CSV export | NOT STARTED |
+| 16 | 5E — Operating reports + CSV export | DONE |
 | 17 | 5F — Emergency/contact-dispatch button | NOT STARTED |
 | 18 | 5G — Delivery messaging (customer/rider/dispatcher) | NOT STARTED |
 
@@ -1266,3 +1266,86 @@ WhatsApp/SMS provider was purchased, activated, or connected — `memory`
 remains the active provider; the Twilio path is fully built and tested with
 synthetic requests but stays dormant until real credentials are supplied
 later, exactly as documented in `twilio.ts`'s own activation-steps comment.
+
+## Stage 16 — 5E: Operating reports + CSV export (DONE)
+
+**Reused an existing scaffold rather than duplicating it**: `contracts/
+routes.ts` already had a `reports: { summary, csv }` entry pointing at
+`/api/reports/summary` and `/api/reports/jobs.csv` — pre-planned, never
+implemented anywhere (checked before writing anything). Built this stage's
+backend to those exact paths instead of inventing new ones.
+
+**Backend** (`apps/api/src/modules/reports.ts`, new; admin/accountant only,
+matching the spec's own stated audience): a single `buildReport()` computes
+everything from one `Job` query plus its `customer`/`rider`/`zone`
+relations —
+- **Three mutually-exclusive buckets** (every job falls into exactly one):
+  `completed` (delivered), `failed_cancelled` (failed/cancelled/returned),
+  `active` (everything else, including `new`/unassigned). The bucket counts
+  are always computed over the date/rider/zone/payment-method filters but
+  *not* narrowed by the bucket filter itself, so picking one bucket to
+  inspect never changes what the other two counts mean.
+- **COD math**: expected/collected/handed-in summed directly; outstanding
+  summed only from jobs where expected still exceeds collected; shortage/
+  overage summed from the same handed-in-vs-collected variance Stage 12
+  already computes per job, never estimated.
+- **Average delivery time**: `completedAt - createdAt`, only for jobs
+  actually `delivered` with a real `completedAt` — never a scheduled or
+  promised timestamp standing in for an actual one, per the spec's explicit
+  instruction. The sample size riding along with it (`averageDeliveryTimeSampleSize`)
+  means a single delivery's "average" can never be silently mistaken for a
+  stable figure.
+- **Rider earnings are explicitly an estimate** (`payRate x jobsCompleted`)
+  — there's no real payout-history feature in this app yet (the `Payout`/
+  `PayoutLine` models are unused scaffolding, checked before assuming
+  otherwise) — and a rider with no configured `payRate` gets `null`, never
+  `$0`, with a call-out in `notes` so a genuine zero can never be confused
+  with missing data.
+- **Off-currency jobs** (a job whose currency differs from the operational
+  one) are excluded from every money total but still listed in the rows/CSV,
+  with a note explaining why the totals don't include them — rather than
+  either silently mixing currencies into one number or silently dropping
+  the job from view.
+- **Filters**: `from`/`to` (on `createdAt`), `riderId`, `zoneId`, `bucket`,
+  `paymentMethod` — all combinable.
+- **CSV export** (`GET /api/reports/jobs.csv`) — job-level rows, no delivery
+  PIN and no customer phone number at all (only the customer's name, needed
+  to reconcile a specific delivery); every export is audit-logged (who, when,
+  which filters).
+
+**Frontend**: new `/reports` page (admin/accountant-only nav tab, matching
+the backend's own gating, plus a role-guarded fallback screen for anyone who
+navigates there directly) — filter controls, a `notes` warning banner shown
+above everything else when the data is incomplete in some way, summary
+cards for every metric the spec lists, a by-rider table showing "rate not
+set" (not "$0") where appropriate, and an "Export CSV" link using the exact
+same filters currently applied.
+
+**Tests**:
+- `apps/api/test/reports.test.ts` (10 new) — bucket counts and fee/urgent
+  totals; the full COD math (expected/collected/handed-in/outstanding/
+  shortage/overage) across a deliberately mixed set of jobs; average
+  delivery time computed only from real `completedAt` values (a job with
+  only a `promisedAt` contributes nothing) and reported as `null`/sample
+  size 0 when nothing's delivered yet; rider earnings computed correctly
+  when a rate exists and `null` with a note when it doesn't; the bucket and
+  payment-method filters; role gating (admin/accountant allowed, dispatcher/
+  viewer/rider rejected); the CSV export's headers and its explicit absence
+  of a job's PIN or the customer's phone number.
+- `e2e/specs/reports.spec.ts` (new) — an accountant filters the report to
+  one rider, sees "1" completed job and "rate not set" plus the
+  no-configured-pay-rate note, and confirms the CSV export link carries the
+  same filter; a dispatcher gets no "Reports" nav link at all and a
+  friendly not-authorized message if they navigate there directly.
+
+**Verification run**: `npm run typecheck --workspaces` clean; `apps/api`
+vitest 108/108 (98 prior + 10 new); `apps/web` vitest 8/8; clean web build;
+full e2e suite (25 tests, incl. 2 new) 25/25 serially, on a freshly-reseeded
+`e2e-test.db`.
+
+**Not done in this stage** (explicitly out of scope, tracked for later): no
+zone/city breakdown table (the zone *filter* works and narrows every number
+above; a dedicated "totals by zone" table wasn't built, since the spec's
+filter list and metric list don't actually require one together — worth
+adding if wanted). No real payout-run feature — "estimated earnings" stays
+exactly that until a real payout/payroll feature exists.

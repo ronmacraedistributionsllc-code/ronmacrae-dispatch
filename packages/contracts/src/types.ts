@@ -131,6 +131,87 @@ export interface OpsBoardDto {
   generatedAt: string;
 }
 
+/** Filters actually applied to an operating report — echoed back so the UI
+ *  (and anyone reading the CSV later) can see exactly what's included. */
+export interface OperatingReportFilters {
+  from: string | null;
+  to: string | null;
+  riderId: string | null;
+  zoneId: string | null;
+  /** one of the three report buckets, or omitted for all */
+  bucket: "completed" | "active" | "failed_cancelled" | null;
+  paymentMethod: string | null;
+}
+
+/** One job row in the report — deliberately excludes the delivery PIN and
+ *  the customer's phone number (spec 5E: "without exposing delivery PINs or
+ *  unnecessary customer information"); customer *name* is kept since it's
+ *  needed to reconcile a specific delivery, phone is not. */
+export interface OperatingReportRowDto {
+  jobId: string;
+  jobNumber: string | null;
+  createdAt: string;
+  completedAt: string | null;
+  status: JobStatus;
+  bucket: "completed" | "active" | "failed_cancelled";
+  urgent: boolean;
+  zoneName: string | null;
+  riderId: string | null;
+  riderName: string | null;
+  customerName: string;
+  paymentMethod: string;
+  deliveryFee: Money | null;
+  amountExpected: Money | null;
+  amountCollected: Money | null;
+  codHandedInAmount: Money | null;
+  /** completedAt - createdAt, ms — only ever computed from real recorded
+   *  timestamps, never a scheduled/promised target; null until delivered. */
+  deliveryTimeMs: number | null;
+}
+
+export interface OperatingReportRiderRowDto {
+  riderId: string;
+  riderName: string;
+  jobsCompleted: number;
+  /** payRate x jobsCompleted — an estimate from the rider's configured rate,
+   *  not a record of an actual payout (no payout run has happened); null,
+   *  never 0, when the rider has no rate configured, so a real "$0 earned"
+   *  can never be confused with "we don't know". */
+  estimatedEarnings: Money | null;
+}
+
+export interface OperatingReportSummaryDto {
+  deliveriesCompleted: number;
+  deliveriesActive: number;
+  deliveriesFailedCancelled: number;
+  urgentDeliveryCount: number;
+  deliveryFeesCharged: Money;
+  codExpected: Money;
+  codCollected: Money;
+  codHandedIn: Money;
+  /** expected - collected, summed only over jobs still short something */
+  codOutstanding: Money;
+  codShortageTotal: Money;
+  codOverageTotal: Money;
+  /** average of completed jobs' deliveryTimeMs; null if none completed in range */
+  averageDeliveryTimeMs: number | null;
+  /** how many completed jobs the average above is actually based on — shown
+   *  so a tiny sample doesn't get read as a stable average */
+  averageDeliveryTimeSampleSize: number;
+}
+
+export interface OperatingReportDto {
+  filters: OperatingReportFilters;
+  summary: OperatingReportSummaryDto;
+  byRider: OperatingReportRiderRowDto[];
+  rows: OperatingReportRowDto[];
+  /** plain-language call-outs for anything that makes a figure above
+   *  incomplete or approximate (e.g. riders with no configured pay rate) —
+   *  never silently swept under a total. */
+  notes: string[];
+  generatedAt: string;
+}
+
 export interface CustomerDto {
   id: string;
   name: string;

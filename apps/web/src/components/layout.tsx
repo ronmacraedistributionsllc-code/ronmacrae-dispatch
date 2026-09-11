@@ -12,9 +12,12 @@ const TABS = [
   { to: "/map", label: "Map" },
   { to: "/zones", label: "Zones & Fares" },
   { to: "/cod", label: "COD" },
+  { to: "/reports", label: "Reports" },
   { to: "/notifications", label: "Notifications" },
 ];
-const STAFF_ONLY_TABS = new Set(["/ops", "/jobs", "/jobs/new", "/map", "/cod"]);
+const STAFF_ONLY_TABS = new Set(["/ops", "/jobs", "/jobs/new", "/map", "/cod", "/reports"]);
+/** Owner/accountant only — matches the backend's own gating on /api/reports/*. */
+const ADMIN_ACCOUNTANT_ONLY_TABS = new Set(["/reports"]);
 
 const CONNECTION_LABEL: Record<ConnectionStatus, string> = {
   live: "Live",
@@ -38,7 +41,11 @@ export function Layout({ children }: { children: React.ReactNode }): React.JSX.E
     // Only re-run on navigation, not on every unreadCount tick — otherwise a new
     // alert while sitting on the same page would clear itself immediately.
   }, [pathname]);
-  const tabs = user?.role === "rider" ? TABS.filter((t) => !STAFF_ONLY_TABS.has(t.to)) : TABS;
+  const tabs = TABS.filter((t) => {
+    if (user?.role === "rider" && STAFF_ONLY_TABS.has(t.to)) return false;
+    if (ADMIN_ACCOUNTANT_ONLY_TABS.has(t.to) && user?.role !== "admin" && user?.role !== "accountant") return false;
+    return true;
+  });
   return (
     <div className="flex h-full min-h-dvh flex-col md:flex-row">
       <AlertsToaster />

@@ -140,6 +140,9 @@ export const API = {
     resolve: (id: string) => `/api/sos/${id}/resolve`,
   },
 
+  /** owner/accountant operating reports — spec 5E. (This scaffold pre-dates
+   *  that stage; reused rather than duplicated once the routes were
+   *  actually implemented.) */
   reports: {
     summary: "/api/reports/summary",
     csv: "/api/reports/jobs.csv",

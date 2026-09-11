@@ -1332,13 +1332,54 @@ npm run test --workspace @ronmacrae/web
 rm -f apps/api/data/e2e-test.db && cd e2e && npx playwright test --workers=1
 ```
 
-## Next: Stage 16 (5E)
+---
 
-Operating reports for owner/accountant — deliveries completed/active/
-failed-cancelled, delivery fees, COD expected/collected/handed-in/
-outstanding/shortages/overages, rider earnings/jobs-completed/avg delivery
-time, urgent-delivery count; filterable by date range/rider/zone/status/
-payment method; honest labeling of missing/incomplete data; CSV export
-without exposing PINs or unnecessary customer data. See
-`WORK_IN_PROGRESS.md`'s Stage plan table for the full remaining Stage
-16–18 sequence.
+# Stage 16 — 5E: Operating reports (pre-production hardening, 2026-09-10)
+
+Full detail in `WORK_IN_PROGRESS.md` under "Stage 16 — 5E: Operating reports
++ CSV export (DONE)". Summary for resuming agents:
+
+**Reused an existing route scaffold**: `/api/reports/summary` and
+`/api/reports/jobs.csv` were already planned in `contracts/routes.ts` but
+never implemented — built to those paths rather than inventing new ones.
+
+**Backend** (`apps/api/src/modules/reports.ts`, admin/accountant only):
+three mutually-exclusive buckets (completed/active/failed_cancelled) always
+computed over the non-bucket filters; full COD math reusing Stage 12's own
+variance definition; average delivery time from real `completedAt` only
+(never a scheduled/promised timestamp), with its sample size surfaced;
+rider earnings as an explicit estimate (`payRate x completed`, `null` —
+never `$0` — when no rate is set); off-currency jobs excluded from totals
+with a note but kept in the rows. CSV export excludes the PIN and the
+customer's phone number entirely, and is audit-logged.
+
+**Frontend**: new `/reports` page (admin/accountant-only nav tab + a
+role-guarded fallback), filters, a notes/warnings banner, summary cards,
+a by-rider table, and a CSV export link carrying the current filters.
+
+## Commands run and results (Stage 16)
+
+| # | Command | Result |
+| --- | --- | --- |
+| 1 | `npm run typecheck --workspaces` (root) | **PASS** — 0 errors |
+| 2 | `npx vitest run` (apps/api) | **PASS** — 108/108 (98 prior + 10 new) |
+| 3 | `npx vitest run` / `npm run build` (apps/web) | **PASS** — 8/8, clean build |
+| 4 | Full e2e suite (25 tests, incl. 2 new), serial, fresh `e2e-test.db` | **PASS** — 25/25 |
+
+## Re-verify (Stage 16)
+
+```bash
+npm run typecheck --workspaces
+npm run test --workspace @ronmacrae/api
+npm run test --workspace @ronmacrae/web
+rm -f apps/api/data/e2e-test.db && cd e2e && npx playwright test --workers=1
+```
+
+## Next: Stage 17 (5F)
+
+Emergency/contact-dispatch button on every active rider job — Call and
+Message actions using the configured dispatch phone (owner-configurable,
+already exists as `BusinessSettings.dispatchPhone`/`dispatchWhatsApp` from
+earlier stages), showing the job reference, never exposing personal staff
+phone numbers unless explicitly configured. See `WORK_IN_PROGRESS.md`'s
+Stage plan table for the full remaining Stage 17–18 sequence.
