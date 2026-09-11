@@ -127,7 +127,18 @@ export async function findDuplicateCandidates(ctx: AppCtx): Promise<DuplicateCan
  *  already established never downgrades (verified wins over provisional),
  *  and the whole thing is one audited action. 404s (not the entities' real
  *  state) on an unknown id — this route is owner-only, but a not-found is
- *  still cheaper to reason about than leaking which ids exist. */
+ *  still cheaper to reason about than leaking which ids exist.
+ *
+ *  Found in Stage 28's cross-stage review: this function predates
+ *  CustomerAccount (Stage 25) — CustomerAccount.identityId is unique and
+ *  `onDelete: Cascade`, so deleting the source identity without first
+ *  re-pointing its account would have silently deleted a real customer's
+ *  login credentials the moment their identity got merged. Fixed by
+ *  re-pointing the source's account to the target (same as
+ *  MergedPhoneAlias/Customer above) when the target doesn't already have
+ *  one of its own; refuses the merge outright, before touching anything,
+ *  if both sides independently claimed an account — there's no automatic
+ *  way to decide which email/password survives, so this needs a human. */
 export async function mergeCustomerIdentities(
   ctx: AppCtx,
   actor: { id: string | null; role: string | null },
@@ -136,11 +147,19 @@ export async function mergeCustomerIdentities(
   reason?: string,
 ): Promise<void> {
   if (sourceId === targetId) throw httpErrors.createError(400, "Can't merge an identity into itself");
-  const [source, target] = await Promise.all([
+  const [source, target, sourceAccount, targetAccount] = await Promise.all([
     ctx.prisma.customerIdentity.findUnique({ where: { id: sourceId } }),
     ctx.prisma.customerIdentity.findUnique({ where: { id: targetId } }),
+    ctx.prisma.customerAccount.findUnique({ where: { identityId: sourceId }, select: { id: true, email: true } }),
+    ctx.prisma.customerAccount.findUnique({ where: { identityId: targetId }, select: { id: true } }),
   ]);
   if (!source || !target) throw httpErrors.createError(404, "Customer identity not found");
+  if (sourceAccount && targetAccount) {
+    throw httpErrors.createError(
+      409,
+      "Both identities have their own account (email + password) — this can't be resolved automatically. Ask the customer which email to keep, or drop one account first.",
+    );
+  }
 
   const mergedStatus = source.status === "verified" || target.status === "verified" ? "verified" : target.status;
   const mergedVerifiedAt = target.verifiedAt ?? source.verifiedAt ?? null;
@@ -152,6 +171,9 @@ export async function mergeCustomerIdentities(
     // target instead — a chain of merges must all resolve to one place.
     ctx.prisma.mergedPhoneAlias.updateMany({ where: { identityId: sourceId }, data: { identityId: targetId } }),
     ctx.prisma.mergedPhoneAlias.create({ data: { normalizedPhone: source.normalizedPhone, identityId: targetId } }),
+    // Re-point the source's own account (if any) *before* the source
+    // identity is deleted below — otherwise the cascade takes it with it.
+    ...(sourceAccount ? [ctx.prisma.customerAccount.update({ where: { id: sourceAccount.id }, data: { identityId: targetId } })] : []),
     ctx.prisma.customerIdentity.update({
       where: { id: targetId },
       data: { status: mergedStatus, verifiedAt: mergedVerifiedAt, normalizedEmail: mergedEmail },
@@ -163,6 +185,7 @@ export async function mergeCustomerIdentities(
     mergedFromId: sourceId,
     mergedFromPhone: source.normalizedPhone,
     intoPhone: target.normalizedPhone,
+    accountCarriedOver: sourceAccount ? sourceAccount.email : null,
     reason: reason ?? null,
   });
 }

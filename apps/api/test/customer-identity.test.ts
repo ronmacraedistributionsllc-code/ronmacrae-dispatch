@@ -40,12 +40,16 @@ async function latestCode(phone: string): Promise<string> {
   return (row.params as { code: string }).code;
 }
 
-async function verifyPhone(rawPhone: string): Promise<void> {
+/** Returns the dashboard session token — most callers just discard it
+ *  (they only care that the phone ends up verified), a couple need it to
+ *  claim an account (Stage 25) afterward. */
+async function verifyPhone(rawPhone: string): Promise<string> {
   const phone = normalizePhone(rawPhone)!;
   await harness.app.inject({ method: "POST", url: "/api/customer-dashboard/request-code", payload: { phone: rawPhone } });
   const code = await latestCode(phone);
   const res = await harness.app.inject({ method: "POST", url: "/api/customer-dashboard/verify", payload: { phone: rawPhone, code } });
   expect(res.statusCode).toBe(200);
+  return (res.json() as { token: string }).token;
 }
 
 beforeAll(async () => {
@@ -297,6 +301,82 @@ describe("audited duplicate resolution (owner-only)", () => {
       payload: { intoId: "does-not-exist" },
     });
     expect(unknown.statusCode).toBe(404);
+  });
+
+  // Stage 28's cross-stage review: CustomerAccount (Stage 25) didn't exist
+  // when the merge logic above was written (Stage 23), and its
+  // identityId relation cascade-deletes on the identity it points to —
+  // merging away an identity that had a real account would have silently
+  // destroyed that customer's login credentials with no warning at all.
+  it("carries a claimed account over to the surviving identity on merge, rather than losing it to the cascade", async () => {
+    const owner = await ownerToken();
+    const sourcePhone = freshPhone();
+    const targetPhone = freshPhone();
+    const sourceToken = await verifyPhone(sourcePhone);
+    await verifyPhone(targetPhone);
+    const email = `merge-account-${uniq()}@example.com`;
+    const claim = await harness.app.inject({
+      method: "POST",
+      url: "/api/customer-account/claim",
+      headers: { authorization: `Bearer ${sourceToken}` },
+      payload: { email, password: "correcthorsebattery" },
+    });
+    expect(claim.statusCode).toBe(200);
+
+    const sourceIdentity = await harness.prisma.customerIdentity.findUnique({ where: { normalizedPhone: normalizePhone(sourcePhone)! } });
+    const targetIdentity = await harness.prisma.customerIdentity.findUnique({ where: { normalizedPhone: normalizePhone(targetPhone)! } });
+
+    const merge = await harness.app.inject({
+      method: "POST",
+      url: `/api/owner/customer-identities/${sourceIdentity!.id}/merge`,
+      headers: { authorization: `Bearer ${owner}` },
+      payload: { intoId: targetIdentity!.id },
+    });
+    expect(merge.statusCode).toBe(200);
+
+    // The account still exists, still logs in, and now belongs to the
+    // surviving identity — never cascade-deleted with the source.
+    const account = await harness.prisma.customerAccount.findUnique({ where: { email } });
+    expect(account).toBeTruthy();
+    expect(account!.identityId).toBe(targetIdentity!.id);
+    const login = await harness.app.inject({ method: "POST", url: "/api/customer-account/login", payload: { email, password: "correcthorsebattery" } });
+    expect(login.statusCode).toBe(200);
+  });
+
+  it("refuses to merge two identities that each independently claimed their own account", async () => {
+    const owner = await ownerToken();
+    const phoneA = freshPhone();
+    const phoneB = freshPhone();
+    const tokenA = await verifyPhone(phoneA);
+    const tokenB = await verifyPhone(phoneB);
+    await harness.app.inject({
+      method: "POST",
+      url: "/api/customer-account/claim",
+      headers: { authorization: `Bearer ${tokenA}` },
+      payload: { email: `merge-conflict-a-${uniq()}@example.com`, password: "correcthorsebattery" },
+    });
+    await harness.app.inject({
+      method: "POST",
+      url: "/api/customer-account/claim",
+      headers: { authorization: `Bearer ${tokenB}` },
+      payload: { email: `merge-conflict-b-${uniq()}@example.com`, password: "correcthorsebattery" },
+    });
+    const identityA = await harness.prisma.customerIdentity.findUnique({ where: { normalizedPhone: normalizePhone(phoneA)! } });
+    const identityB = await harness.prisma.customerIdentity.findUnique({ where: { normalizedPhone: normalizePhone(phoneB)! } });
+
+    const merge = await harness.app.inject({
+      method: "POST",
+      url: `/api/owner/customer-identities/${identityA!.id}/merge`,
+      headers: { authorization: `Bearer ${owner}` },
+      payload: { intoId: identityB!.id },
+    });
+    expect(merge.statusCode).toBe(409);
+
+    // Nothing was touched — both identities and both accounts still exist, untouched.
+    expect(await harness.prisma.customerIdentity.findUnique({ where: { id: identityA!.id } })).toBeTruthy();
+    expect(await harness.prisma.customerIdentity.findUnique({ where: { id: identityB!.id } })).toBeTruthy();
+    expect(await harness.prisma.customerAccount.findUnique({ where: { identityId: identityA!.id } })).toBeTruthy();
+    expect(await harness.prisma.customerAccount.findUnique({ where: { identityId: identityB!.id } })).toBeTruthy();
   });
 });
 

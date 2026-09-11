@@ -1727,7 +1727,7 @@ everything from Stage 20 on, not just as a footnote:
 | 25 | Sign-in/account linking: email verification, password reset, account-claim flow, expiring/single-use codes; Instagram login feasibility investigation (implement only if genuinely supported for this use case; otherwise document why it's disabled) | 7 | DONE |
 | 26 | Deleted-orders trash: soft-delete + 30-day restore window + scheduled purge job, preserving ledger/dispute/audit records, scoped per business | 8 | DONE |
 | 27 | Rider cash-profile corrections: separate collected / awaiting handover / handed-in-unconfirmed / confirmed / disputed / earnings-payable, snapshot money components, fix "handed in" prematurely clearing confirmed-owed amount, per business a rider works for | 9 | DONE |
-| 28 | Full verification + handoff pass across all of 19–27 | 10 | NOT STARTED |
+| 28 | Full verification + handoff pass across all of 19–27 | 10 | DONE |
 
 Each stage: implement, typecheck, run meaningful tests (new + full existing
 suite), update this file with what was actually found/built/tested, update
@@ -2930,3 +2930,150 @@ this new aggregation). This was the last of the ten feature sections
 (1-9 plus verification/handoff) from the original request — Stage 28
 is the final cross-cutting verification and handoff pass across
 everything built in Stages 19-27.
+
+## Stage 28 — Section 10: final verification and handoff (DONE)
+
+Not a rerun of each stage's own tests (already green, individually,
+after every one of Stages 19-27) — this pass specifically went looking
+for the *seams between* stages, the kind of gap a feature built later
+can leave in something built earlier without either stage's own test
+suite ever noticing, because neither one was looking at the other.
+
+**A real bug found and fixed**: `mergeCustomerIdentities` (Stage 23)
+predates `CustomerAccount` (Stage 25) entirely. `CustomerAccount.
+identityId` is unique and `onDelete: Cascade` back to `CustomerIdentity`
+— so merging away an identity that had a real, claimed account (email +
+password) would have silently cascade-deleted that customer's login
+credentials the moment an owner merged a duplicate, with no warning to
+anyone. Nothing in either stage's own test suite ever exercised this,
+because Stage 23's tests were written before CustomerAccount existed,
+and Stage 25's tests never touched merge. Fixed in `customer-identity.ts`:
+the source's account (if any) is re-pointed to the surviving identity
+*before* the source is deleted, the same way `MergedPhoneAlias` and
+`Customer` rows already were; if *both* identities independently claimed
+their own account, the merge is refused outright (409, nothing touched)
+rather than guessing which email/password should survive — that's a
+real judgment call for a human, not something to automate. Two new
+tests in `customer-identity.test.ts` cover both paths: the account
+survives and keeps working post-merge, and a genuine two-account
+conflict is refused cleanly with both sides left completely untouched.
+
+**Two more seams checked and confirmed correct** (nothing was broken —
+worth pinning down with a real test rather than leaving it as
+reasoning), in the new `apps/api/test/stage28-integration.test.ts`:
+
+- **Trash (26) + customer dashboard (22)**: a job trashed by staff
+  disappears from the customer's own cross-business package dashboard
+  immediately, and restoring it brings it straight back — confirmed
+  with a real customer-dashboard session end to end, not just inferred
+  from the `deletedAt: null` filter added back in Stage 26.
+- **Trash (26) + rider cash profile (27)**: a job's already-*approved*
+  COD (settled, historical) keeps counting in the rider's `confirmed`
+  cash bucket even after the underlying order is trashed — the same
+  "reports/ledger views never filter by deletedAt" rule Stage 26
+  established for `/api/reports` and `/api/cod`, now proven true for
+  the cash profile too, which didn't exist yet when that rule was
+  written.
+
+**Full clean re-verification, everything together**: `npm run
+typecheck --workspaces` clean across all 6 workspaces; `apps/api`
+vitest 197/197 (193 prior + 4 new: 2 identity-merge/account tests + 2
+stage28-integration tests); `apps/web` vitest 8/8 + clean build; full
+e2e suite, fresh `e2e-test.db`, on the dedicated `:3900` port, **35/35**
+— every spec from every stage of this entire session, run together, in
+one clean pass.
+
+**Data-preservation audit — the whole Stage 20-27 arc, not just one
+stage**: compared the real `dev.db` against `dev.db.bak-multitenancy-
+20260910-235645`, the backup taken immediately before Stage 20's
+multi-tenancy migration (the very first schema change of this whole
+arc, and the moment the user explicitly asked for a backup first).
+Every real table's row count either stayed the same or grew — never
+shrank:
+
+| Table | Before Stage 20 | Now | 
+| --- | --- | --- |
+| Job | 65 | 67 |
+| Customer | 76 | 77 |
+| Rider | 1 | 1 |
+| User | 6 | 7 |
+| DeliveryMessage | 0 | 5 |
+| CodEvent | 15 | 21 |
+| AuditLog | 1264 | 1329 |
+| TrackingLink | 24 | 25 |
+| Zone | 3 | 3 |
+| JobOffer | 17 | 20 |
+| RiderAssignment | 21 | 24 |
+| JobEvent | 175 | 220 |
+
+Growth throughout is consistent with genuine real usage over the
+session (the LAN and Cloudflare-tunnel demos being actually used, by
+the user and the friend given tunnel access, the whole time this work
+was happening) — never a reset, never a reseed, exactly as instructed.
+All 5 original demo staff accounts, the one real rider (Kei Bearer),
+and the one real business (Ronmacrae Distributions, still the only row
+in `Business`) are all still exactly as they were.
+
+**Live demo, verified visually, not just by health check**: logged
+into the running Cloudflare-tunnel demo (still on `https://expense-
+lines-courses-diet.trycloudflare.com` — the tunnel restarted once
+mid-session after cloudflared died independently; see Stage 23's
+notes) as the real admin account and confirmed, by eye, against real
+production-shaped data: the Trash page (correct empty state, real
+copy); the Ops board's new "Cash" panel, expanded, showing genuinely
+computed figures — J$35,000 handed-in-unconfirmed across 8 real jobs
+(cross-checked against the COD-awaiting-approval list showing the same
+8 jobs), and a real J$-4,850 shortage on past handovers, both derived
+live from real `CodEvent`/`Job` data, not fixtures; and `/my-packages`'
+phone-entry step plus its "Sign in with email" form, both rendering
+correctly.
+
+**Stray-code sweep**: no `TODO`/`FIXME`/stray `console.log`/`debugger`
+anywhere in `apps/api/src`, `apps/web/src`, or any package's `src` —
+the only `console.log` calls in the whole tree are `seed.ts`'s
+intentional CLI output.
+
+**The original ten-section request, in full**: sections 1-2 (Stage 19),
+3 (21), 4 (22), 5 (24), 6 (23), 7 (25), 8 (26), 9 (27), plus the
+multi-tenancy foundation (20) the user explicitly asked to build first
+once it became clear sections 4/6/7/9 needed it, and this stage (10,
+the verification/handoff itself) — every section from the original
+request has now shipped, been tested, and been documented.
+
+**Honestly, what remains unverified or deliberately not built —
+collected in one place**:
+- **Real SMS and real email delivery** — every OTP/verification/
+  password-reset code in this system has only ever been exercised
+  through the dev memory providers (logged in-process, read back via
+  Prisma/the provider's own `sent` log in tests). Nothing has been sent
+  to, or received by, a real phone or a real inbox. This is the single
+  most important thing to verify before any of the phone-OTP or
+  email-account flows are relied on with real customers.
+- **Instagram login** — investigated (Stage 25), not implemented: needs
+  a real registered Meta Developer App, App Review, only works for
+  Business/Creator Instagram accounts, and doesn't reliably return an
+  email even when it works. No placeholder button exists.
+- **No owner-console UI** — `requireOwner`-gated routes exist (business
+  creation is still API-only, rider platform-approval is still
+  API-only, the identity-duplicates/merge routes from Stage 23 have no
+  frontend). The owner can do everything via the API today; nothing
+  has a screen yet.
+- **No real payout-approval workflow** — `Payout`/`PayoutLine` (Stage
+  27) remain real, unused models; `earningsPayable` is an honest
+  estimate that never decreases as money is actually paid out.
+- **`modules/auth.ts`'s separate, older phone normalizer** was never
+  unified with `lib/phone.ts`'s real one (Stage 23) — flagged as a
+  background task at the time (`task_c0c94e29`), not attempted, since
+  it would mean re-migrating User/Rider/Customer phone storage and
+  login-by-phone lookup for a cleanup outside any single stage's scope.
+- **No billing anywhere**, per the user's own standing instruction —
+  never touched.
+- **Not deployed** — the LAN demo (`https://192.168.183.146:8443`) and
+  the Cloudflare tunnel demo are both still running, per the user's own
+  "keep it running until I tell you to stop" instructions from earlier
+  in this session; neither has been stopped or cleaned up.
+
+**Nine commits landed this session's multi-tenancy arc**, each
+independently verified and documented before the next began: the
+infra port-separation fix, then Stages 20 through 27. This stage adds
+a tenth.

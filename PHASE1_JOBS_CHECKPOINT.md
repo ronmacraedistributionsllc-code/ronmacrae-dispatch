@@ -2062,6 +2062,98 @@ This was the last of the ten feature sections from the original
 request. Stage 28 is the final cross-cutting verification and handoff
 pass across everything built in Stages 19-27.
 
-## Next: Stage 28 — final verification and handoff (section 10)
+## Stage 28 (section 10) — final verification and handoff
 
-Now proceeding on top of Stages 19-27. No open questions blocking it.
+Not a rerun of each stage's own suite (already green after every one
+of Stages 19-27) — a deliberate cross-stage review, looking
+specifically for gaps at the seams *between* stages that no single
+stage's own tests would ever exercise, because neither stage was
+written looking at the other.
+
+**Real bug found and fixed**: `mergeCustomerIdentities()`
+(`apps/api/src/modules/customer-identity.ts`, Stage 23) predates
+`CustomerAccount` (Stage 25). `CustomerAccount.identityId` is `@unique`
+with `onDelete: Cascade` back to `CustomerIdentity` — so merging away a
+duplicate identity that had a real, claimed account (email + password)
+would have silently cascade-deleted that customer's login credentials,
+with no warning to anyone, the first time an owner used the merge tool
+on a customer who'd signed up for the Stage 25 account system under
+the identity being merged away. Fixed by re-pointing the source's
+account to the surviving identity in the same transaction, before the
+source identity delete (same pattern already used for `Customer` and
+`MergedPhoneAlias` rows); if *both* identities independently claimed
+their own account, the merge is now refused outright (409, nothing
+touched) rather than guessing which email/password should win — a
+real judgment call for a human. Two new tests in
+`customer-identity.test.ts` (now 12) cover both paths.
+
+**Two more cross-stage seams checked and confirmed correct** (nothing
+broken, worth a real test rather than just reasoning), new file
+`apps/api/test/stage28-integration.test.ts` (2 tests): a job trashed
+(Stage 26) disappears from the customer's own cross-business dashboard
+(Stage 22) and restoring brings it back; a trashed job's
+already-approved COD still counts in the rider's cash profile (Stage
+27) — the same "ledger/report views never filter by deletedAt" rule
+Stage 26 established for `/api/reports`/`/api/cod`, now proven true for
+the cash profile, which didn't exist yet when that rule was written.
+
+**Data-preservation audit, the whole Stage 20-27 arc**: compared
+`dev.db` against `dev.db.bak-multitenancy-20260910-235645` (the backup
+taken immediately before Stage 20's multi-tenancy migration, the very
+first schema change of this entire arc). Every table's row count
+stayed the same or grew, never shrank: Job 65→67, Customer 76→77,
+Rider 1→1, User 6→7, DeliveryMessage 0→5, CodEvent 15→21, AuditLog
+1264→1329, TrackingLink 24→25, Zone 3→3, JobOffer 17→20, RiderAssignment
+21→24, JobEvent 175→220. `Business` is still exactly 1 row; all 6
+original demo accounts (admin/dispatcher/accountant/viewer/owner/
+external-test-viewer staff, plus rider Kei Bearer) are unchanged.
+
+**Live visual verification** against the running Cloudflare-tunnel
+demo, logged in as the real admin account: Trash page (correct empty
+state), Ops board's new Cash panel (real computed figures — J$35,000
+handed-in-unconfirmed across 8 jobs, cross-checked against the live
+COD-awaiting-approval list showing the same 8; J$-4,850 shortage on
+past handovers), `/my-packages`'s phone-entry and email-login forms —
+all rendering correctly against real production-shaped data, not
+fixtures.
+
+**Stray-code sweep**: no `TODO`/`FIXME`/`XXX`/stray `console.log`/
+`debugger` anywhere in `apps/api/src`, `apps/web/src`, or any
+package's `src` (seed.ts's console.log is intentional CLI output;
+money package's "XXX" is a legitimate ISO 4217 fallback code).
+
+## Commands run and results (Stage 28)
+
+| # | Command | Result |
+| --- | --- | --- |
+| 1 | `npm run typecheck --workspaces` (root) | **PASS** — 0 errors, all workspaces |
+| 2 | `npx vitest run` (apps/api) | **PASS** — 197/197 (193 prior + 4 new: 2 in customer-identity.test.ts, 2 in new stage28-integration.test.ts) |
+| 3 | `npx vitest run` / `npm run build` (apps/web) | **PASS** — 8/8, clean build |
+| 4 | Full e2e suite (35 specs), serial, fresh `e2e-test.db`, on :3900 | **PASS** — 35/35 |
+| 5 | Data-preservation audit (12 tables, dev.db vs pre-Stage-20 backup) | **PASS** — every count non-decreasing, Business=1, all demo accounts intact |
+| 6 | Live visual check (Browser tool, tunnel demo, real admin login) | **PASS** — Trash, Cash panel (real figures), my-packages forms all render correctly |
+| 7 | Stray TODO/debug sweep, whole src tree | **PASS** — nothing found |
+
+## Re-verify (Stage 28)
+
+```bash
+npm run typecheck --workspaces
+npm run test --workspace @ronmacrae/api
+npm run test --workspace @ronmacrae/web
+npm run build --workspace @ronmacrae/web
+rm -f apps/api/data/e2e-test.db && cd e2e && npx playwright test --workers=1
+```
+
+**Honestly unverified / deliberately deferred** (collected in one
+place — see `WORK_IN_PROGRESS.md`'s Stage 28 section for the full
+list): real SMS/email delivery (dev memory providers only, end to
+end); Instagram login (investigated, not implemented — needs a
+registered Meta app + App Review); no owner-console UI (API-only);
+no real payout-approval workflow (`Payout`/`PayoutLine` unused);
+`modules/auth.ts`'s older phone normalizer never unified with
+`lib/phone.ts` (flagged as a background task, `task_c0c94e29`); no
+billing; not deployed (both dev demos still running by design).
+
+This is the last stage. All ten sections of the original request
+(1-9 plus this verification/handoff pass) are now complete across
+Stages 19-28. There is no Stage 29 in the plan.
