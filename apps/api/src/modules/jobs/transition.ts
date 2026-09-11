@@ -90,9 +90,19 @@ export async function recordRiderStage(
   if (!row) throw httpErrors.createError(404, "Job not found");
   if (actor.role === "rider" && row.riderId !== actor.riderId) throw httpErrors.createError(403, "Not your job");
   if (TERMINAL_JOB_STATUSES.includes(row.status)) throw httpErrors.createError(409, "Cannot update a closed job");
+  // Duplicate-submit guard: a repeated tap of the same stage (double-click,
+  // retried offline action) is a harmless no-op rather than a second audit
+  // event and a second customer notification for the same progress update.
+  if (row.stage === stage) return jobToDto(row, viewer, ctx.config.APP_ORIGIN);
 
   const updated = await ctx.prisma.$transaction(async (tx) => {
-    const job = await tx.job.update({ where: { id: jobId }, data: { stage }, include: jobInclude });
+    // Same optimistic guard as transitionJob: only apply if the job's stage
+    // hasn't already moved on since we read `row` above.
+    const guarded = await tx.job.updateMany({ where: { id: jobId, stage: row.stage }, data: { stage } });
+    if (guarded.count === 0) {
+      throw httpErrors.createError(409, "This job's progress already moved on — refresh and try again");
+    }
+    const job = await tx.job.findUniqueOrThrow({ where: { id: jobId }, include: jobInclude });
     const event = await tx.jobEvent.create({
       data: {
         jobId,
@@ -203,9 +213,15 @@ export async function transitionJob(
       : undefined;
 
   const updated = await ctx.prisma.$transaction(async (tx) => {
-    const job = await tx.job.update({
-      where: { id: jobId },
-      include: jobInclude,
+    // Guard against a double-submit/race (two requests for the same job
+    // arriving concurrently, e.g. a double-tap before the button disables):
+    // the WHERE clause only matches if the job is STILL in `from` at write
+    // time. updateMany (rather than update-by-id) lets us filter on the
+    // non-unique `status` column; a count of 0 means someone else already
+    // moved this job, so this request must not silently double-apply cash,
+    // notifications, or a second JobEvent on top of it.
+    const guarded = await tx.job.updateMany({
+      where: { id: jobId, status: from },
       data: {
         status: to,
         stage: stageFor(to, row.stage, input.stage),
@@ -223,6 +239,10 @@ export async function transitionJob(
         ...(eta ? { routeEta: eta } : {}),
       },
     });
+    if (guarded.count === 0) {
+      throw httpErrors.createError(409, `This job already moved on from '${from}' — refresh and try again`);
+    }
+    const job = await tx.job.findUniqueOrThrow({ where: { id: jobId }, include: jobInclude });
     const event = await tx.jobEvent.create({
       data: {
         jobId,

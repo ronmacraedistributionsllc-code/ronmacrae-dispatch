@@ -66,7 +66,12 @@ test("dispatcher broadcasts an offer and the rider accepts it from their dashboa
   const offerCard = riderPage.locator("section.card").filter({ hasText: "Offer flow test parcel" });
   await expect(offerCard).toBeVisible();
   await offerCard.getByRole("button", { name: "Accept" }).click();
-  await expect(riderPage.getByRole("heading", { name: "Job offers" })).not.toBeVisible();
+  // The "Job offers" section itself stays visible (always-shown, with a
+  // count) and the accepted job's card keeps the same item-summary text —
+  // so the real signal that the *offer* is gone (not just any card with
+  // this text) is that there's no more "Decline" button anywhere: only an
+  // open offer card renders one.
+  await expect(riderPage.getByRole("button", { name: "Decline" })).toHaveCount(0);
   await expect(riderPage.getByRole("heading", { name: label })).toBeVisible();
   await riderContext.close();
 

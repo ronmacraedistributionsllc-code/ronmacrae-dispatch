@@ -34,8 +34,9 @@ test("a rider's already-open dashboard shows a new offer live, without a page re
   await page.getByLabel("Password").fill(riderPassword);
   await page.getByRole("button", { name: "Sign in" }).click();
   await expect(page.getByRole("heading", { name: "My deliveries" })).toBeVisible();
-  // No "Job offers" section yet — nothing has been broadcast.
-  await expect(page.getByRole("heading", { name: "Job offers" })).not.toBeVisible();
+  // The "Job offers" section is always shown (with a count); nothing has
+  // been broadcast yet, so it should read as empty.
+  await expect(page.getByText("No offers waiting right now")).toBeVisible();
 
   // Now (only after the page is already sitting there) broadcast an offer.
   const customers = ((await (await request.get("/api/customers", { headers: auth })).json()) as { customers: { id: string; phone: string }[] }).customers;

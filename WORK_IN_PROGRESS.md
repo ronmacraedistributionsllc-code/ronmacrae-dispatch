@@ -1676,3 +1676,168 @@ Stage 18 commit `8a6ed48`; api = `apps/api/test/`, web =
 --workspace @ronmacrae/web` (8 tests), and, from `e2e/` with a fresh
 `e2e-test.db`, `npx playwright test --workers=1` (27 real specs; ignore
 `zz-debug.spec.ts`, flagged separately for removal).
+
+---
+
+# Second mega-request — delivery experience, customer identity, messaging
+# and cancelled-order management (Claude Code, 2026-09-11)
+
+This refines the existing marketplace scope (preserve business model + all
+completed Stage 8–18 features). Ten numbered requirement sections; the user's
+own closing instruction is the same as before: bounded stages, checkpoint +
+`WORK_IN_PROGRESS.md` after each, commit only after verification.
+
+## Two findings that change how several later sections must be scoped
+
+Surfaced while starting Stage 19 — worth recording here since they affect
+sections 4/5/6/7/9 specifically, not just as a footnote:
+
+1. **No multi-business data model exists today.** The whole schema is
+   single-tenant: one `Setting`-backed `BusinessSettings` singleton, one
+   `Customer` table, one `Rider` table, no `Business` model at all. Several
+   of the new sections' own wording presupposes a multi-business "network"
+   (section 4: "across participating businesses"; section 6: "business-
+   specific customer relationships", "a business must not discover another
+   business's orders"; section 9: "Business → Riders → Rider profile → Cash
+   held for **my** business"). Building true multi-tenancy (a `Business`
+   model, and re-scoping Job/Customer/Rider/User/Zone/Settings/reports to
+   it, plus rewriting cross-cutting authorization) is a foundational,
+   architecture-level change — arguably as large as the rest of this
+   request combined. **Flagged to the user; not started without direction.**
+   Sections 1/2/3/8 do not depend on the answer and are proceeding now.
+2. **The Stage 18 delivery-messaging model is one shared thread per job**,
+   not the three distinct pairwise conversations this request's section 5
+   describes (customer↔dispatch, customer↔rider, rider↔dispatch). Today,
+   customer/rider/dispatcher all read and write the same `DeliveryMessage`
+   rows for a job — which is exactly the "accidentally create a group chat"
+   failure mode section 5 explicitly warns against. Fixing this properly
+   needs a real thread-scoping change (a `conversationKind` dimension, or
+   separate models), not just additive read-receipts/retry work. **Deferred
+   to the dedicated Stage 23 (section 5) rather than patched hastily now.**
+
+## Stage plan
+
+| # | Stage | Section(s) | Status |
+| - | ----- | ---------- | ------ |
+| 19 | Three-step rider flow + rider dashboard (Offers / To pick up / In my possession / History) | 1, 2 | DONE |
+| 20 | UI/UX refresh pass (typography, contrast, empty/loading/error states, mobile bottom nav) across rider/customer/dispatcher screens + verified screenshots | 3 | NOT STARTED |
+| 21 | Customer package dashboard + restricted rider-location display post-collection | 4 | NOT STARTED (partly blocked on the multi-business question for "across participating businesses") |
+| 22 | Global customer identity: phone normalization (libphonenumber, JM default), safe email normalization, verified-vs-provisional records, duplicate-resolution audit trail, rate limiting | 6 | NOT STARTED (partly blocked on the multi-business question) |
+| 23 | Messaging redesign: split the one shared thread into the three real pairwise conversations, add delivered/read receipts, retry-without-duplicate, reassignment access revocation | 5 | NOT STARTED (needs the thread-model redesign above) |
+| 24 | Sign-in/account linking: email verification, password reset, account-claim flow, expiring/single-use codes; Instagram login feasibility investigation (implement only if genuinely supported for this use case; otherwise document why it's disabled) | 7 | NOT STARTED |
+| 25 | Deleted-orders trash: soft-delete + 30-day restore window + scheduled purge job, preserving ledger/dispute/audit records | 8 | NOT STARTED |
+| 26 | Rider cash-profile corrections: separate collected / awaiting handover / handed-in-unconfirmed / confirmed / disputed / earnings-payable, snapshot money components, fix "handed in" prematurely clearing confirmed-owed amount | 9 | NOT STARTED |
+| 27 | Full verification + handoff pass across all of 19–26 | 10 | NOT STARTED |
+
+Each stage: implement, typecheck, run meaningful tests (new + full existing
+suite), update this file with what was actually found/built/tested, update
+`PHASE1_JOBS_CHECKPOINT.md`, then one commit — same discipline as Stages
+8–18. Isolated test data only; real dev accounts/orders (Kei Bearer, the
+seeded staff logins, the current `dev.db`) are left untouched.
+
+## Stage 19 — Sections 1+2: three-step rider flow + rider dashboard (DONE)
+
+**What existed already**: the `JobStatus` state machine already separates
+acceptance (`assigned → accepted`) from collection (`accepted → picked_up`)
+— the schema needed **no migration** for this. The gap was entirely at the
+rider-facing UI layer: the old dashboard exposed 4–6 buttons per job status
+(`Heading to Pickup`, `Arrived at Pickup`, `Collected`, `Not Answering`,
+`Customer Changed Location`, `Failed`, all as equal-weight buttons opening
+one generic form), and the job list was one flat, unsectioned feed mixing
+active and completed jobs together.
+
+**A real backend bug found and fixed**: `transitionJob`'s DB write used
+`tx.job.update({ where: { id: jobId }, ... })` — keyed only by id, with no
+guard against the job's status having already moved on since the read at
+the top of the function. Two concurrent requests for the same transition
+(a double-tap before a button visually disables, or a retried offline
+action) could **both** pass the state-machine check and both write —
+double `JobEvent`, double cash-collection application, double customer
+notification. Fixed by switching to a guarded `tx.job.updateMany({ where:
+{ id: jobId, status: from }, ... })` + count check inside the same
+transaction: the loser gets a clean 409, not a silent double-apply. Applied
+the same guard to `recordRiderStage` (rider sub-progress reports), plus a
+fast no-op path when the reported stage hasn't actually changed.
+
+**Backend**: `apps/api/src/modules/jobs/transition.ts` — the guard above;
+no schema or route changes.
+
+**Frontend** (`apps/web/src/pages/rider-dashboard.tsx`, rewritten):
+- `primaryActionFor(job)` / `secondaryActionsFor(job)` replace the old flat
+  `actionsFor` — every job status now has exactly one primary next step
+  (Accept → Confirm collection → Start delivery → Mark delivered) and the
+  exception paths (Not Answering / Customer Changed Location / Failed)
+  are tucked behind an explicit "Other options" disclosure, never shown as
+  equal-weight buttons.
+- New `ActionSheet` component — a dismissible bottom sheet (mobile) /
+  centered modal (desktop) for every action, primary and secondary alike.
+  Shows business name, job reference, item summary and destination; the
+  collection step explicitly asks the rider to confirm it's the right
+  package; the delivered step keeps the existing PIN requirement. Entered
+  note/PIN/address text lives in the parent card's state, not the sheet
+  itself, so dismissing (backdrop click, Escape, or Cancel) and reopening
+  never loses what was typed.
+- Dashboard restructured into counted sections: **Offers**, **To pick up**
+  (`assigned`/`accepted`), **In my possession** (`picked_up`/`in_transit`/
+  `delivering`/`location_changed`/`no_answer`/`failed` — the rider still
+  physically holds the package in all of these), and a collapsed
+  **Completed history** (`delivered`/`cancelled`/`returned`) — previously
+  all jobs rendered in one undifferentiated list regardless of status.
+- Card fields aligned to the spec list: business name, job reference,
+  product/quantity/size/colour, pickup + destination, urgent badge, "Cash
+  to collect" clearly separated from "Your delivery fee" (COD amount was
+  previously labeled ambiguously as just "COD amount"), a Navigate button
+  (opens the destination in the device's own maps app via a universal
+  Google Maps deep link), and the existing Message-customer (chat) /
+  Message-business (`ContactDispatch`) actions made into visible buttons
+  rather than a single collapsed "Messages" disclosure.
+- **Removed the customer's raw phone number from the rider card entirely**
+  (it showed `name · phone` before) — replaced with just the customer's
+  name. This matches the project's own existing "no phone-number exposure,
+  in-app only" rule (established in Stage 18) that the old card violated.
+- The old `heading_to_pickup`/`at_pickup` rider-stage buttons were removed
+  from the primary/secondary action set (they're not part of the 3-step
+  flow the spec asks for) — the backend endpoint (`POST
+  /api/bearer/jobs/:id/stage`) is untouched and still callable (e.g. by a
+  future richer client), so nothing that previously recorded that
+  sub-progress is broken, it's just no longer surfaced as rider buttons.
+
+**Tests**:
+- `apps/api/test/jobs-transition.test.ts` (new, 4 tests): the full
+  accepted→picked_up→in_transit→delivered path with PIN enforcement and a
+  full JobEvent audit trail; skipping a step and moving another rider's
+  job are both rejected; **the duplicate-submit race** — two concurrent
+  identical transition requests — asserted to produce exactly one 200 +
+  one 409 and exactly one JobEvent, not two; a repeated identical
+  rider-stage report is a no-op, not a second audit event.
+- `e2e/specs/rider-dashboard.spec.ts` (rewritten for the new UI): the full
+  accept → confirm-collection → start-delivery flow through the actual
+  bottom-sheet UI, a live duplicate-submit race fired at the API while the
+  UI is mid-flow, and a check that a delivered job moves out of the active
+  card list into the collapsed completed-history section.
+- `e2e/specs/delivery-messages.spec.ts` updated for the renamed
+  "Message customer" button (was a "Messages" disclosure summary).
+
+**Verification run**: `npm run typecheck --workspaces` clean; `apps/api`
+vitest 126/126 (122 prior + 4 new); `apps/web` vitest 8/8 + clean build;
+full e2e suite, fresh `e2e-test.db`, 27/27 passing serially.
+
+Three other specs needed a small update, not because anything they cover
+regressed, but because the dashboard's own behavior deliberately changed:
+`offers.spec.ts`, `multi-job-notifications.spec.ts` and `realtime.spec.ts`
+all asserted the old "Job offers" section heading disappears when there
+are no offers — the new dashboard shows all three sections (Offers / To
+pick up / In my possession) permanently, with a count badge, rather than
+appearing/disappearing (matching the spec's "three clearly separated
+sections with counts" wording). Updated each to assert on the actual
+signal they cared about instead (the empty-state copy, the specific offer
+card, or the count) rather than the heading's visibility. Also fixed a
+locator that matched both an offer card and the now-accepted job's card
+(same item-summary text) — scoped to the "Decline" button instead, which
+only an open offer renders.
+
+**Not done in this stage**: dashboard visual/typography refresh (Stage 20);
+customer/dispatcher screen changes (Stage 20/21); the rider-earnings figure
+still uses the existing `job.fee` field as a stand-in for "your delivery
+fee" — Stage 26 (section 9) is where money components get properly
+snapshotted per order to avoid any double-counting against the COD total.

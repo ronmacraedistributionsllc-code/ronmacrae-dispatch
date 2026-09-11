@@ -74,7 +74,7 @@ test("customer, rider, and dispatcher exchange messages on one delivery, and a c
   await login(page, "+8765550001", "rider1234");
   await expect(page.getByRole("heading", { name: "My deliveries" })).toBeVisible();
   const card = page.locator("section.card").filter({ has: page.getByRole("heading", { name: jobNumber }) });
-  await card.getByText("Messages").click();
+  await card.getByRole("button", { name: "Message customer" }).click();
   await expect(card.getByText("On it — sending our fastest rider!")).toBeVisible();
   await card.getByRole("button", { name: "Heading to you" }).click();
   await expect(card.locator("p.whitespace-pre-wrap", { hasText: "Heading to you" })).toBeVisible();

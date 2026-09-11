@@ -42,28 +42,53 @@ test("rider sees only assigned delivery details and completes the PIN-protected 
   await login(page, "+8765550001", "rider1234");
   await expect(page.getByRole("heading", { name: "My deliveries" })).toBeVisible();
   const card = page.locator("section.card").filter({ has: page.getByRole("heading", { name: createdJob.job.jobNumber }) });
-  await expect(card.getByText("+8765551234")).toBeVisible();
+  await expect(card.getByText(customer.phone ?? "+8765551234")).toHaveCount(0); // no raw phone number on the rider card — in-app messaging only
   await expect(card.getByText("10 Duke Street")).toBeVisible();
   await expect(card.getByText("School shoes")).toBeVisible();
   await expect(card.getByText("Black")).toBeVisible();
   // Urgent priority is now shown as a prominent badge, not a plain "Priority" field.
   await expect(card.getByText("Urgent", { exact: true })).toBeVisible();
-  await card.getByRole("button", { name: "Accept" }).click();
-  await card.getByRole("button", { name: "Confirm" }).click();
-  await expect(card.getByRole("button", { name: "Heading to Pickup" })).toBeVisible();
 
-  // Advance through the remaining API workflow as the same rider, then use
-  // the browser to prove the delivery PIN gate on the final action.
+  // Step 0 (separate from collection): Accept, via the job-specific
+  // confirmation sheet — not a bare, unconfirmed tap.
+  await card.getByRole("button", { name: "Accept job" }).click();
+  const sheet = page.getByRole("dialog");
+  await expect(sheet.getByText(createdJob.job.jobNumber)).toBeVisible();
+  await sheet.getByRole("button", { name: "Accept", exact: true }).click();
+  await expect(sheet).not.toBeVisible();
+  await expect(card.getByText("accepted")).toBeVisible();
+  // Acceptance never silently advances further — still needs an explicit collect.
+  await expect(card.getByRole("button", { name: "Confirm collection" })).toBeVisible();
+
+  // Step 1: Collected (the popup asks the rider to confirm the right package).
+  await card.getByRole("button", { name: "Confirm collection" }).click();
+  await expect(sheet.getByText(/correct package/i)).toBeVisible();
+  await sheet.getByRole("button", { name: "Yes, mark collected" }).click();
+  await expect(card.getByText("picked up")).toBeVisible();
+
+  // Step 2: In transit.
+  await card.getByRole("button", { name: "Start delivery" }).click();
+  await sheet.getByRole("button", { name: "Start delivery", exact: true }).click();
+  await expect(card.getByText("in transit")).toBeVisible();
+
+  // A rider double-tapping the same primary action (e.g. a slow connection,
+  // tapping again before the first request returns) must not silently apply
+  // twice — the backend's duplicate-submit guard is exercised directly here
+  // since the UI already disables the button once pending.
   const riderHeaders = await riderAuth(request);
-  for (const body of [
-    { stage: "heading_to_pickup" }, { stage: "at_pickup" },
-  ]) expect((await request.post(`/api/bearer/jobs/${jobId}/stage`, { headers: riderHeaders, data: body })).ok()).toBe(true);
-  for (const to of ["picked_up", "in_transit", "delivering"]) expect((await request.post(`/api/bearer/jobs/${jobId}/transition`, { headers: riderHeaders, data: { to } })).ok()).toBe(true);
+  const [dup1, dup2] = await Promise.all([
+    request.post(`/api/bearer/jobs/${jobId}/transition`, { headers: riderHeaders, data: { to: "delivered", pin } }),
+    request.post(`/api/bearer/jobs/${jobId}/transition`, { headers: riderHeaders, data: { to: "delivered", pin } }),
+  ]);
+  expect([dup1.status(), dup2.status()].sort()).toEqual([200, 409]);
   await page.reload();
-  await card.getByRole("button", { name: "Delivered" }).click();
-  await card.getByLabel("Delivery PIN").fill(pin);
-  await card.getByLabel("Proof / action notes").fill("Delivered at customer gate");
-  await card.getByRole("button", { name: "Confirm" }).click();
-  await expect(card.getByRole("button", { name: "Confirm" })).not.toBeVisible();
-  await expect(card.locator("p").filter({ hasText: "delivered ·" })).toBeVisible();
+
+  const finalDetail = (await (await request.get(`/api/jobs/${jobId}`, { headers: await dispatcherAuth(request) })).json()) as { job: { status: string } };
+  expect(finalDetail.job.status).toBe("delivered");
+
+  // A delivered job moves into the separate completed-history section — not
+  // mixed in with the still-active "To pick up" / "In my possession" cards.
+  await expect(page.locator("section.card").filter({ has: page.getByRole("heading", { name: createdJob.job.jobNumber }) })).toHaveCount(0);
+  await page.getByText(/Completed history/).click();
+  await expect(page.getByText(createdJob.job.jobNumber)).toBeVisible();
 });

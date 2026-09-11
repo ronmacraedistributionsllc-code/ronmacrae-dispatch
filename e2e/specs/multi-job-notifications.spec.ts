@@ -87,7 +87,11 @@ test("a rider carrying a job still gets new offers live, while an unavailable ri
   // (wrongly) received it, then assert it never did.
   await unavailablePage.waitForTimeout(2_000);
   await expect(unavailablePage.getByText("Multi-job second parcel — offer test")).not.toBeVisible();
-  await expect(unavailablePage.getByRole("heading", { name: "Job offers" })).not.toBeVisible();
+  // The "Job offers" section itself is always shown (with a count), per the
+  // dashboard's three-always-visible-sections design — so the real signal
+  // that this rider never received it is the empty-state copy, not the
+  // section heading disappearing.
+  await expect(unavailablePage.getByText("No offers waiting right now")).toBeVisible();
 
   // busyRider accepts the second offer too, going to exactly capacity (2/2), and
   // the dashboard reflects it without a reload. Scoped to the offer card itself —

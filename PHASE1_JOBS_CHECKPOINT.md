@@ -1486,3 +1486,66 @@ approval flow, notification templates/provider fallback, reports/filters/
 CSV totals, emergency Call/Message links, and no PIN/phone/unnecessary-data
 leakage. See `WORK_IN_PROGRESS.md`'s new "## Verification checklist (Stages
 8–18)" section for the actual mapping.
+
+---
+
+# Stage 19 — sections 1+2: three-step rider flow + rider dashboard
+# (second mega-request: delivery experience / identity / messaging / trash, 2026-09-11)
+
+Full detail in `WORK_IN_PROGRESS.md` under "Stage 19 — Sections 1+2:
+three-step rider flow + rider dashboard (DONE)", including two findings
+recorded there that affect how later stages (4/5/6/7/9) must be scoped:
+**no multi-business data model exists yet** (single-tenant schema
+throughout), and **the Stage 18 messaging model is one shared thread per
+job**, not the three distinct pairwise conversations this request's
+section 5 wants. Neither blocks this stage; both are flagged for the
+user before Stages 21–23 start.
+
+**Found and fixed a real backend bug**: `transitionJob`/`recordRiderStage`
+wrote via `update({where:{id}})` with no guard against the status having
+already moved on — a double-tap or retried offline action could double-
+apply cash/notifications/audit events. Fixed with a guarded `updateMany`
++ count check (loser gets 409, not a silent double-write).
+
+**Frontend**: `rider-dashboard.tsx` rewritten — one primary action per job
+(Accept → Confirm collection → Start delivery → Mark delivered) behind a
+dismissible confirmation bottom sheet/modal (business, job ref, item,
+destination shown; collection step asks the rider to confirm the right
+package; PIN kept for delivery); exception actions (not answering/location
+changed/failed) tucked behind "Other options"; dashboard restructured into
+counted Offers / To pick up / In my possession sections + a collapsed
+Completed history; customer's raw phone number removed from the rider card
+(name only — in-app messaging instead, matching the existing Stage 18
+no-phone-exposure rule); added a Navigate (maps deep link) button;
+"Cash to collect" vs "Your delivery fee" now clearly separated.
+
+## Commands run and results (Stage 19)
+
+| # | Command | Result |
+| --- | --- | --- |
+| 1 | `npm run typecheck --workspaces` (root) | **PASS** — 0 errors |
+| 2 | `npx vitest run` (apps/api) | **PASS** — 126/126 (122 prior + 4 new) |
+| 3 | `npx vitest run` / `npm run build` (apps/web) | **PASS** — 8/8, clean build |
+| 4 | Full e2e suite (27 specs), serial, fresh `e2e-test.db` | **PASS** — 27/27 (3 pre-existing specs updated for the dashboard's intentionally-changed behavior — sections now always visible with counts, not appearing/disappearing) |
+
+## Re-verify (Stage 19)
+
+```bash
+npm run typecheck --workspaces
+npm run test --workspace @ronmacrae/api
+npm run test --workspace @ronmacrae/web
+npm run build --workspace @ronmacrae/web   # rebuild dist before e2e — the
+                                            # e2e webServer serves the static
+                                            # build (WEB_DIST), not vite dev
+rm -f apps/api/data/e2e-test.db && cd e2e && npx playwright test --workers=1
+```
+
+## Next: Stage 20 (section 3) — UI/UX refresh pass, then the multi-business question
+
+Before Stages 21/22/23 (customer package dashboard, global customer
+identity, messaging redesign) can be scoped correctly, the user needs to
+answer: build true multi-tenancy (a real `Business` model, re-scoping
+Job/Customer/Rider/User/Zone/reports to it) now, or keep treating "the
+business" as the single existing store for these sections and revisit
+multi-tenancy later? See `WORK_IN_PROGRESS.md`'s "Two findings..." note
+under the new mega-request heading for the full reasoning.
