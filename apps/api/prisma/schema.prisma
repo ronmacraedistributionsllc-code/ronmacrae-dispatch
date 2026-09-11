@@ -540,6 +540,21 @@ model Job {
   createdAt        DateTime      @default(now())
   updatedAt        DateTime      @updatedAt
 
+  /** Soft-delete only (Stage 26, spec 8) — trash, never a real DELETE. Every
+   *  child row below (CodEvent, JobEvent, Proof, etc.) keeps its
+   *  `onDelete: Cascade` relation to this row, which is exactly why this
+   *  row itself must never actually be removed: a hard delete would take
+   *  the cash ledger and audit trail with it. Restorable for 30 days from
+   *  `deletedAt`; past that, `jobs/trash.ts`'s purge-eligibility check
+   *  (computed from the date, not a separate stored flag) makes restore
+   *  refuse — but the row, and everything referencing it, stays exactly
+   *  as it was. Reports/COD-reconciliation/audit views never filter this
+   *  out; only the ordinary operational views (Jobs list, ops board,
+   *  offers, route queue) do. */
+  deletedAt        DateTime?
+  deletedById      String?
+  deleteReason     String?
+
   assignments RiderAssignment[]
   events    JobEvent[]
   proofs    Proof[]
@@ -555,6 +570,7 @@ model Job {
   @@unique([businessId, jobNumber])
   @@unique([businessId, externalRef])
   @@index([businessId, status])
+  @@index([businessId, deletedAt])
 }
 
 enum CodStatus {

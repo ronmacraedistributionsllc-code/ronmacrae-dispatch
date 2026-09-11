@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { API, JOB_SOURCES, JOB_STATUSES, RIDER_STAGE_LABELS, allowedTransitions } from "@ronmacrae/contracts";
+import { ACTIVE_JOB_STATUSES, API, JOB_SOURCES, JOB_STATUSES, RIDER_STAGE_LABELS, allowedTransitions } from "@ronmacrae/contracts";
 import type { AddressChangeRequestDto, ConversationsDto, DeliveryMessagesDto, JobSource, JobStatus, JobSummaryDto, RiderDto } from "@ronmacrae/contracts";
 import { ApiError, apiFetch, formatMoney } from "../lib/api.js";
 import { useAuth } from "../lib/auth.js";
@@ -44,14 +44,19 @@ interface RowProps {
   onToggleOffers: (jobId: string) => void;
   onToggleQueue: () => void;
   onToggleChat: () => void;
+  onDelete: (jobId: string, reason: string | null) => void;
 }
 
-function JobRow({ job, riders, canWrite, busy, offersOpen, queueOpen, chatOpen, onAssign, onUnassign, onMove, onToggleOffers, onToggleQueue, onToggleChat }: RowProps): React.JSX.Element {
+function JobRow({ job, riders, canWrite, busy, offersOpen, queueOpen, chatOpen, onAssign, onUnassign, onMove, onToggleOffers, onToggleQueue, onToggleChat, onDelete }: RowProps): React.JSX.Element {
   const [riderId, setRiderId] = useState(job.riderId ?? "");
   const [moveTo, setMoveTo] = useState<JobStatus | "">("");
   const assignable = job.status === "new" || job.status === "assigned";
   const unassignable = job.status === "assigned" || job.status === "accepted";
   const moves = moveOptions(job.status);
+  // Mirrors the backend's own rule (jobs/trash.ts's assertDeletable) — only
+  // offer the button when it would actually succeed, rather than showing
+  // it everywhere and surfacing a 409 on click.
+  const deletable = !ACTIVE_JOB_STATUSES.includes(job.status);
 
   return (
     <tr className={`border-t align-top ${job.priority === "urgent" ? "border-red-900/40 bg-red-950/20" : "border-zinc-800"}`}>
@@ -167,6 +172,19 @@ function JobRow({ job, riders, canWrite, busy, offersOpen, queueOpen, chatOpen, 
             <button className="btn !px-3 !py-1 text-xs" disabled={busy} onClick={() => onToggleChat()}>
               {chatOpen ? "Hide messages" : "Messages"}
             </button>
+            {deletable ? (
+              <button
+                className="btn !px-3 !py-1 text-xs text-red-300 hover:!bg-red-950/40"
+                disabled={busy}
+                onClick={() => {
+                  if (!window.confirm(`Delete order ${job.jobNumber ?? job.id.slice(0, 8)}? It moves to Trash and can be restored within 30 days.`)) return;
+                  const reason = window.prompt("Reason (optional):") ?? "";
+                  onDelete(job.id, reason.trim() || null);
+                }}
+              >
+                Delete
+              </button>
+            ) : null}
           </div>
         </td>
       ) : null}
@@ -230,9 +248,14 @@ export function Jobs(): React.JSX.Element {
       apiFetch(`/jobs/${jobId}/transition`, { method: "POST", body: JSON.stringify({ to }) }),
     onSettled: invalidate,
   });
+  const deleteJob = useMutation({
+    mutationFn: ({ jobId, reason }: { jobId: string; reason: string | null }) =>
+      apiFetch(API.jobs.delete(jobId), { method: "POST", body: JSON.stringify({ reason }) }),
+    onSettled: invalidate,
+  });
 
-  const busy = assign.isPending || unassign.isPending || move.isPending;
-  const error = assign.error ?? unassign.error ?? move.error;
+  const busy = assign.isPending || unassign.isPending || move.isPending || deleteJob.isPending;
+  const error = assign.error ?? unassign.error ?? move.error ?? deleteJob.error;
 
   return (
     <div className="space-y-4">
@@ -337,6 +360,7 @@ export function Jobs(): React.JSX.Element {
                     onToggleOffers={(id) => setOffersJobId((cur) => (cur === id ? null : id))}
                     onToggleQueue={() => setQueueJobId((cur) => (cur === job.id ? null : job.id))}
                     onToggleChat={() => setChatJobId((cur) => (cur === job.id ? null : job.id))}
+                    onDelete={(id, reason) => void deleteJob.mutate({ jobId: id, reason })}
                   />
                   {offersJobId === job.id ? (
                     <tr className="border-t border-zinc-800" data-testid={`offers-panel-${job.id}`}>

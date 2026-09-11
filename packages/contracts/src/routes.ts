@@ -27,6 +27,11 @@ export const API = {
     return: (id: string) => `/api/jobs/${id}/return`,
     /** rider/staff records cash collected from the customer */
     collect: (id: string) => `/api/jobs/${id}/collect`,
+    /** deleted-orders trash (spec 8, Stage 26) — soft-delete only, ever;
+     *  see schema.prisma's own note on Job.deletedAt for why. */
+    trash: "/api/jobs/trash",
+    delete: (id: string) => `/api/jobs/${id}/delete`,
+    restore: (id: string) => `/api/jobs/${id}/restore`,
   },
 
   /** COD reconciliation ledger (Stage 12 / spec item 5A) */

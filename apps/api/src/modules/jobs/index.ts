@@ -13,6 +13,7 @@
  */
 export { jobRoutes } from "./routes.js";
 export { proofRoutes } from "./proofs.js";
+export { trashRoutes, deleteJob, restoreJob, isPurged, purgeEligibleAt, PURGE_DAYS } from "./trash.js";
 
 export { CreateJobBody, UpdateJobBody, createJob, updateJob, viewerFor, type CreateJobInput, type UpdateJobInput } from "./create.js";
 export { AssignBody, assignJob, unassignJob, type AssignInput } from "./assign.js";

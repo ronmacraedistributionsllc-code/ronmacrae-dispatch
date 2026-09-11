@@ -134,7 +134,9 @@ async function buildDashboard(ctx: AppCtx, phone: string): Promise<CustomerPacka
   }
 
   const jobs = await ctx.prisma.job.findMany({
-    where: { customerId: { in: customerIds } },
+    // A trashed job (Stage 26) drops off the customer's own dashboard too
+    // — restoring it brings it straight back, nothing about it changed.
+    where: { customerId: { in: customerIds }, deletedAt: null },
     orderBy: { createdAt: "desc" },
   });
   if (jobs.length === 0) {

@@ -13,9 +13,10 @@ const TABS = [
   { to: "/zones", label: "Zones & Fares", icon: "📍" },
   { to: "/cod", label: "COD", icon: "💵" },
   { to: "/reports", label: "Reports", icon: "📊" },
+  { to: "/trash", label: "Trash", icon: "🗑️" },
   { to: "/notifications", label: "Notifications", icon: "🔔" },
 ];
-const STAFF_ONLY_TABS = new Set(["/ops", "/jobs", "/jobs/new", "/map", "/zones", "/cod", "/reports"]);
+const STAFF_ONLY_TABS = new Set(["/ops", "/jobs", "/jobs/new", "/map", "/zones", "/cod", "/reports", "/trash"]);
 /** Owner/accountant only — matches the backend's own gating on /api/reports/*. */
 const ADMIN_ACCOUNTANT_ONLY_TABS = new Set(["/reports"]);
 /** Primary bottom-nav slots on mobile (thumb-reachable, at most 4 so a 5th

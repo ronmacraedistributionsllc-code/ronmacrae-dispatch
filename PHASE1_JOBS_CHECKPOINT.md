@@ -1938,6 +1938,66 @@ forgot-password-via-email-code anyone uses (deliberate — one fewer form
 for the same outcome); no account deletion; no Instagram (see above);
 no billing (not requested).
 
-## Next: Stage 26 — deleted-orders trash (section 8)
+## Stage 26 (section 8) — deleted-orders trash
 
-Now proceeding on top of Stages 20-25. No open questions blocking it.
+Soft-delete only, ever — no order-deletion capability existed before
+this stage at all. `Job` gained `deletedAt`/`deletedById`/`deleteReason`
+(nullable) and nothing else changed; every child row (CodEvent, JobEvent,
+DeliveryMessage, Proof, etc.) uses `onDelete: Cascade` back to Job, which
+is exactly why a real delete was never an option — it would take the
+cash ledger and audit trail with it.
+
+**30-day restore window, computed not stored**: `isPurged()` compares
+`deletedAt` to now, always correct regardless of whether any scheduler
+ever runs. `scripts/purge-deleted-jobs.mjs` is the "scheduled purge" in
+spirit — deletes nothing, records one audit entry the first time a job
+crosses 30 days, safe to run on any cadence or never.
+
+**Two safety rules**: can't delete a job that's actively in flight
+(`ACTIVE_JOB_STATUSES`), and can't delete one with unresolved COD
+(`collected`/`handed_in`/`disputed`) — deletion must never look like a
+way to make a cash discrepancy disappear.
+
+**Invisible to operational views, never to reports/COD/audit**: a single
+change to `getJobRow` (the function nearly every job action goes
+through) makes a trashed job uniformly 404 everywhere ordinary —
+messaging and tracking close entirely too. Reports, `/api/cod`, and the
+audit log deliberately never filter by `deletedAt` — verified directly:
+a trashed job's approved COD still shows up in both.
+
+**Frontend**: a "Delete" button on Jobs (admin/dispatcher, shown only
+when actually deletable), `window.confirm`+`window.prompt` (this
+codebase's established pattern from zone deletion); a new `/trash` page
+listing every trashed order with who/when/why and a days-remaining
+badge, restore for admin/dispatcher.
+
+## Commands run and results (Stage 26)
+
+| # | Command | Result |
+| --- | --- | --- |
+| 1 | `npm run typecheck --workspaces` (root) | **PASS** — 0 errors |
+| 2 | `npx vitest run` (apps/api) | **PASS** — 186/186 (173 prior + 13 new: jobs-trash.test.ts) |
+| 3 | `npx vitest run` / `npm run build` (apps/web) | **PASS** — 8/8, clean build |
+| 4 | Full e2e suite (34 specs), serial, fresh `e2e-test.db`, on :3900 | **PASS** — 34/34, both live demos confirmed undisturbed |
+| 5 | `dev.db` schema push (3 new nullable Job columns only) | **PASS** — 77 customers/67 jobs untouched |
+| 6 | `scripts/purge-deleted-jobs.mjs` dry run against real `dev.db` | **PASS** — nothing past 30 days yet, as expected |
+
+## Re-verify (Stage 26)
+
+```bash
+npm run typecheck --workspaces
+npm run test --workspace @ronmacrae/api
+npm run test --workspace @ronmacrae/web
+npm run build --workspace @ronmacrae/web
+rm -f apps/api/data/e2e-test.db && cd e2e && npx playwright test --workers=1
+```
+
+**Not done**: no bulk delete/restore (one order at a time); no
+dedicated detail view for a trashed job (the ordinary job-detail route
+404s for one, by the same exclusion that makes trash work everywhere
+else — disclosed trade-off, not a bug); no configurable retention
+window (fixed at 30 days, matching the spec).
+
+## Next: Stage 27 — rider cash-profile corrections (section 9)
+
+Now proceeding on top of Stages 20-26. No open questions blocking it.

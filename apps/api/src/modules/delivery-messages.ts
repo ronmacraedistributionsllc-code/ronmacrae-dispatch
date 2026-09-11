@@ -142,7 +142,9 @@ async function assertNotRateLimited(ctx: AppCtx, jobId: string, kind: Conversati
 }
 
 async function loadJobForMessaging(ctx: AppCtx, jobId: string) {
-  const job = await ctx.prisma.job.findUnique({ where: { id: jobId }, select: { id: true, status: true, riderId: true, addressText: true, businessId: true } });
+  // A trashed job (Stage 26) closes messaging entirely, for every side —
+  // restoring it reopens exactly what was there before, untouched.
+  const job = await ctx.prisma.job.findUnique({ where: { id: jobId, deletedAt: null }, select: { id: true, status: true, riderId: true, addressText: true, businessId: true } });
   if (!job) throw httpErrors.createError(404, "Job not found");
   return job;
 }
@@ -290,7 +292,9 @@ export async function deliveryMessageRoutes(app: FastifyInstance, ctx: AppCtx): 
     const link = await ctx.prisma.trackingLink.findUnique({ where: { token } });
     if (!link) throw httpErrors.createError(410, "This tracking link is no longer valid");
     if (link.revoked) throw httpErrors.createError(410, "This tracking link has been revoked");
-    const job = await ctx.prisma.job.findUnique({ where: { id: link.jobId }, select: { status: true, businessId: true, riderId: true } });
+    // Same "no longer valid" response for a trashed job as any other
+    // unreachable link — see tracking.ts's matching comment.
+    const job = await ctx.prisma.job.findUnique({ where: { id: link.jobId, deletedAt: null }, select: { status: true, businessId: true, riderId: true } });
     if (!job) throw httpErrors.createError(410, "This tracking link is no longer valid");
     const linkOpen = link.expiresAt > new Date();
     const jobOpen = !TERMINAL_JOB_STATUSES.includes(job.status);
@@ -385,7 +389,8 @@ export async function deliveryMessageRoutes(app: FastifyInstance, ctx: AppCtx): 
     const request = await ctx.prisma.addressChangeRequest.findUnique({ where: { id: req.params.reqId } });
     if (!request || request.jobId !== req.params.id) throw httpErrors.createError(404, "Address change request not found");
     if (request.status !== "pending") throw httpErrors.createError(409, "This request has already been reviewed");
-    const job = await ctx.prisma.job.findUniqueOrThrow({ where: { id: req.params.id } });
+    const job = await ctx.prisma.job.findUnique({ where: { id: req.params.id, deletedAt: null } });
+    if (!job) throw httpErrors.createError(404, "Job not found");
     assertMessagingBusiness({ role: req.user!.role, businessId: req.user!.businessId }, job.businessId);
 
     const updated = await ctx.prisma.$transaction(async (tx) => {

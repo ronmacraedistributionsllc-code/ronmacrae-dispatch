@@ -79,7 +79,11 @@ export async function trackingRoutes(app: FastifyInstance, ctx: AppCtx): Promise
       throw httpErrors.createError(410, "This tracking link has been revoked");
     }
 
-    const job = await ctx.prisma.job.findUnique({ where: { id: link.jobId } });
+    // Same "no longer valid" response as any other unreachable link — a
+    // trashed job (Stage 26) isn't staff's to expose to the customer
+    // anymore, but this is never the customer's own signal to notice
+    // ("deleted" vs. "expired" look identical from here).
+    const job = await ctx.prisma.job.findUnique({ where: { id: link.jobId, deletedAt: null } });
     if (!job) {
       throw httpErrors.createError(410, "This tracking link is no longer valid");
     }

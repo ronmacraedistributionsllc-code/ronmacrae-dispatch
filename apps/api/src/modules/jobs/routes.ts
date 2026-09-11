@@ -12,6 +12,7 @@ import { CollectBody, recordCollection } from "./payment.js";
 import { cancelJob, createReturnJob, transitionJob, TransitionBody } from "./transition.js";
 import { createTrackingLink, jobEventHistory, revokeTrackingLinkByToken } from "./history.js";
 import { proofRoutes } from "./proofs.js";
+import { trashRoutes } from "./trash.js";
 
 function actorFor(req: FastifyRequest): Actor {
   return {
@@ -182,4 +183,5 @@ export async function jobRoutes(app: FastifyInstance, ctx: AppCtx): Promise<void
   });
 
   await proofRoutes(app, ctx);
+  await trashRoutes(app, ctx);
 }

@@ -435,6 +435,18 @@ export interface JobSummaryDto {
   createdAt: string;
 }
 
+/** One entry in the deleted-orders trash (spec 8, Stage 26) — a soft-
+ *  deleted job, restorable for 30 days from `deletedAt`. Nothing about the
+ *  underlying job (or its ledger/dispute/audit records) was ever actually
+ *  removed; `purged` just means the restore window has passed. */
+export interface TrashedJobDto extends JobSummaryDto {
+  deletedAt: string;
+  deletedByName: string | null;
+  deleteReason: string | null;
+  purged: boolean;
+  daysRemaining: number;
+}
+
 export interface JobOfferDto {
   id: string;
   jobId: string;

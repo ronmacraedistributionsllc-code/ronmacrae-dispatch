@@ -1725,7 +1725,7 @@ everything from Stage 20 on, not just as a footnote:
 | 23 | Global customer identity: phone normalization (libphonenumber, JM default), safe email normalization, verified-vs-provisional records, duplicate-resolution audit trail, rate limiting, per-business customer relationships on top of Stage 20's Business model | 6 | DONE |
 | 24 | Messaging redesign: split the one shared thread into the three real pairwise conversations, add delivered/read receipts, retry-without-duplicate, reassignment access revocation | 5 | DONE |
 | 25 | Sign-in/account linking: email verification, password reset, account-claim flow, expiring/single-use codes; Instagram login feasibility investigation (implement only if genuinely supported for this use case; otherwise document why it's disabled) | 7 | DONE |
-| 26 | Deleted-orders trash: soft-delete + 30-day restore window + scheduled purge job, preserving ledger/dispute/audit records, scoped per business | 8 | NOT STARTED |
+| 26 | Deleted-orders trash: soft-delete + 30-day restore window + scheduled purge job, preserving ledger/dispute/audit records, scoped per business | 8 | DONE |
 | 27 | Rider cash-profile corrections: separate collected / awaiting handover / handed-in-unconfirmed / confirmed / disputed / earnings-payable, snapshot money components, fix "handed in" prematurely clearing confirmed-owed amount, per business a rider works for | 9 | NOT STARTED |
 | 28 | Full verification + handoff pass across all of 19–27 | 10 | NOT STARTED |
 
@@ -2704,3 +2704,119 @@ same outcome). No account deletion/deactivation. No Instagram
 implementation, for the concrete reasons above. No billing anywhere
 (not requested for this stage). Deleted-orders trash and rider cash-
 profile corrections are Stages 26-27, next.
+
+## Stage 26 — Section 8: deleted-orders trash (DONE)
+
+Soft-delete only, ever. There was no order-deletion capability of any
+kind in the product before this stage — no route, no button, nothing;
+"delete" always meant a status transition (cancelled) that keeps the
+order visible forever. This stage adds a real trash, and deliberately
+never a real `DELETE`.
+
+**Why "never" isn't a simplification, it's the actual safety property**:
+every row referencing a job — `CodEvent` (the cash ledger), `JobEvent`
+(the audit trail), `DeliveryMessage`, `AddressChangeRequest`, `Proof`,
+`TrackingLink`, `JobOffer`, `RiderAssignment`, `RouteStop` — uses
+`onDelete: Cascade` back to `Job`. A real delete would take the entire
+financial and audit trail with it. So `Job` gained `deletedAt`/
+`deletedById`/`deleteReason` (all nullable) and nothing else changed;
+the row, and everything pointing at it, stays exactly as it was,
+forever, whether restored or not.
+
+**30-day restore window, computed rather than stored**: instead of a
+`purgedAt` flag some background job has to remember to set,
+`jobs/trash.ts`'s `isPurged()` just compares `deletedAt` to now. This is
+always correct — immune to a missed cron tick, a process that never runs
+for 30 days straight (this dev setup's own `QUEUE_DRIVER=memory` would
+lose an in-memory delayed job on every restart), or no scheduler at all.
+`scripts/purge-deleted-jobs.mjs` is the "scheduled purge" the spec asks
+for in spirit: it deletes nothing (there's nothing to delete) — it
+records one `AuditLog` entry ("job.purged") the first time each job
+crosses the 30-day mark, a real, idempotent, permanent compliance record
+of exactly when restore stopped being offered. Safe to run from any real
+scheduler on any cadence, or never — restore-window enforcement doesn't
+depend on it either way.
+
+**Two real safety rules beyond "just soft-delete it"**, both found while
+thinking through what "trash" should actually allow:
+
+- **An actively in-flight job can't be trashed.** `assertDeletable`
+  blocks deletion while the job is in any of `ACTIVE_JOB_STATUSES`
+  (assigned/accepted/picked_up/in_transit/delivering/location_changed/
+  no_answer) — cancel or let it resolve first. A rider mid-delivery, or
+  a customer expecting a package, must never have their order silently
+  vanish from staff's working view.
+- **Unresolved cash blocks deletion too.** `assertNoOutstandingCod`
+  refuses to delete a job whose `codStatus` is `collected`, `handed_in`,
+  or `disputed` — cash that's changed hands but isn't reconciled yet, or
+  is under active dispute. Deleting an order must never look like a way
+  to make an outstanding COD discrepancy quietly disappear from the
+  ordinary working view. `pending_collection` (nothing collected — the
+  default for every non-COD job too) and `approved` (already
+  reconciled) are both fine.
+
+**Trash is invisible to ordinary operational views, on purpose exactly
+this narrowly**: `getJobRow` — the one function nearly every job action
+(assign, transition, messages, proofs, the job detail route) goes
+through — now excludes a deleted job by default, a single change that
+makes it uniformly a 404 everywhere without touching each of those call
+sites individually. The public tracking page and delivery messaging
+(customer/rider/staff, all three conversations) close entirely for a
+trashed job too — same "no longer valid" response a customer would see
+for an expired link, so "deleted" and "expired" look identical from
+their side, never a customer-visible signal that staff trashed their
+order. Restoring undoes all of this immediately; nothing about the
+messages, tracking link, or job state was ever touched.
+
+**Reports, COD reconciliation, and the audit log deliberately never
+filter by `deletedAt`** — the entire point of the spec's "preserve
+ledger/dispute/audit records." An accountant reconciling COD, or running
+an operating report, sees a trashed job's real financial history exactly
+as if it had never been trashed. Verified directly: a job trashed after
+its COD was approved still appears in `/api/cod` and
+`/api/reports/summary` for an accountant, and its `CodEvent` rows are
+still there in the database, untouched.
+
+**Frontend**: a "Delete" button on the Jobs screen (admin/dispatcher
+only, and only shown when the job is actually deletable — mirrors the
+backend rule so it never offers an action that would just 409), gated
+by `window.confirm` (this codebase's own established pattern, already
+used for zone deletion) plus an optional reason via `window.prompt`. A
+new `/trash` page (all four staff roles can view; only admin/dispatcher
+can restore) lists every trashed order with who deleted it, when, why,
+and a "N days left" / "restore window closed" badge.
+
+**Tests**: `apps/api/test/jobs-trash.test.ts` (new, 13 tests) — delete
+removes it from the normal list/detail while keeping the trash entry
+and the underlying row; both safety rules (active-status block,
+each of the three cash-still-outstanding statuses); double-delete and
+non-admin/dispatcher rejection; audited with the reason in `meta`;
+restore brings it back everywhere and clears the trash entry; restore
+rejects a job that was never deleted, and rejects (410) one whose
+30-day window has already passed — while confirming the row itself
+was never actually removed and the trash listing still shows it,
+correctly marked `purged`; trash is business-scoped (a second business
+can neither see nor restore another's trashed job); and the two
+"never filtered" guarantees (COD board + reports; messaging/tracking
+close entirely). `e2e/specs/jobs-trash.spec.ts` (new) drives a real
+browser through the whole loop — delete via the confirm+prompt dialogs,
+confirm it vanishes from Jobs, find it in Trash with the reason and
+"30 days left," restore it, confirm it's back in Jobs.
+
+**Verification**: `npm run typecheck --workspaces` clean; `apps/api`
+vitest 186/186 (173 prior + 13 new); `apps/web` vitest 8/8 + clean
+build; full e2e suite 34/34 (33 prior + 1 new), both live demos
+confirmed undisturbed. `dev.db` schema push was purely additive
+(three new nullable columns on Job, no changes to anything else) —
+confirmed by row count: all 77 customers/67 jobs untouched.
+`scripts/purge-deleted-jobs.mjs` dry-run verified clean against the
+real `dev.db` (nothing past 30 days yet, as expected).
+
+**Not done in this stage**: no bulk delete/restore (one order at a
+time); no dedicated detail view for a trashed job beyond the trash
+list's own summary card (clicking through to the ordinary job-detail
+route 404s for a deleted job, by the same `getJobRow` exclusion that
+makes trash work everywhere else — a deliberate, disclosed trade-off
+given the time this stage had, not a bug); no configurable retention
+window (30 days is fixed, matching the spec). Rider cash-profile
+corrections are Stage 27, next.

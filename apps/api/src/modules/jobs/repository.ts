@@ -25,6 +25,13 @@ export interface JobListFilter {
   take?: number;
   skip?: number;
   sort?: JobSort;
+  /** Trash (Stage 26, spec 8). Every ordinary caller leaves this unset,
+   *  which excludes soft-deleted jobs — the default, and the only mode
+   *  every existing call site before this stage ever used. `true` is the
+   *  opposite: only soft-deleted jobs (the trash view itself). There is
+   *  deliberately no "include everything" mode — a caller that wants both
+   *  makes that an explicit choice, not an easy-to-forget default. */
+  deleted?: boolean;
 }
 
 export function jobListWhere(f: JobListFilter): Prisma.JobWhereInput {
@@ -50,6 +57,7 @@ export function jobListWhere(f: JobListFilter): Prisma.JobWhereInput {
     ...(f.from || f.to
       ? { createdAt: { ...(f.from ? { gte: new Date(f.from) } : {}), ...(f.to ? { lte: new Date(f.to) } : {}) } }
       : {}),
+    deletedAt: f.deleted ? { not: null } : null,
     ...(or.length > 0 ? { OR: or } : {}),
   };
 }
@@ -73,7 +81,23 @@ export async function countJobs(db: Db, f: JobListFilter): Promise<number> {
   return db.prisma.job.count({ where: jobListWhere(f) });
 }
 
+/** Every ordinary job action (assign, transition, messages, proofs,
+ *  offers, COD collection, tracking...) goes through this — excluding a
+ *  soft-deleted job here, once, makes it uniformly invisible to all of
+ *  them (a 404, same as any other missing job) without touching each of
+ *  those call sites individually. Trash-specific code (restore, the trash
+ *  list itself) uses getJobRowAnyDeletionState instead, and reports/COD-
+ *  reconciliation/audit never go through either of these — they query
+ *  Job/CodEvent/AuditLog directly, deliberately unfiltered by deletedAt
+ *  (see schema.prisma's own note on Job.deletedAt for why). */
 export async function getJobRow(db: Db, id: string): Promise<JobRow | null> {
+  return db.prisma.job.findUnique({ where: { id, deletedAt: null }, include: jobInclude });
+}
+
+/** The one exception to getJobRow's deleted-is-invisible rule — used only
+ *  by jobs/trash.ts, which by definition needs to find a job regardless
+ *  of its deletion state (to restore it, or to show it in the trash). */
+export async function getJobRowAnyDeletionState(db: Db, id: string): Promise<JobRow | null> {
   return db.prisma.job.findUnique({ where: { id }, include: jobInclude });
 }
 
