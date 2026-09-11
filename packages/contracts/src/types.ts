@@ -689,6 +689,16 @@ export interface SettingsDto {
 }
 
 /** Business settings blob stored under key `business` */
+/** What a rider's "Contact dispatch" button (spec 5F) is allowed to see —
+ *  deliberately narrower than the full BusinessSettings blob: only the
+ *  owner-configured dispatch contact info, never any individual staff
+ *  member's own phone number. */
+export interface DispatchContactDto {
+  businessName: string;
+  dispatchPhone: string;
+  dispatchWhatsApp: string;
+}
+
 export interface BusinessSettings {
   businessName: string;
   dispatchPhone: string;

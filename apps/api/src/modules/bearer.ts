@@ -3,6 +3,8 @@ import { z } from "zod";
 import { httpErrors } from "@fastify/sensible";
 import type { AppCtx } from "../ctx.js";
 import { ACTIVE_JOB_STATUSES } from "@ronmacrae/contracts";
+import type { DispatchContactDto } from "@ronmacrae/contracts";
+import { getBusinessSettings } from "./settings.js";
 import { jobToDto, listJobs, recordRiderStage, transitionJob, TransitionBody, type Actor, type Viewer } from "./jobs/index.js";
 
 function actorFor(req: FastifyRequest): Actor {
@@ -24,6 +26,18 @@ export async function bearerRoutes(app: FastifyInstance, ctx: AppCtx): Promise<v
     const riderId = req.user!.riderId!;
     const jobs = await listJobs(ctx, { riderId, take: 100, sort: "scheduled" });
     return { jobs: jobs.map((job) => jobToDto(job, viewerFor(req), ctx.config.APP_ORIGIN)) };
+  });
+
+  /** "Contact dispatch" button (spec 5F) — only the owner-configured dispatch
+   *  contact, never any individual staff member's own phone number. */
+  app.get("/api/bearer/dispatch-contact", { preHandler: ctx.requireRider }, async () => {
+    const business = await getBusinessSettings(ctx);
+    const contact: DispatchContactDto = {
+      businessName: business.businessName,
+      dispatchPhone: business.dispatchPhone,
+      dispatchWhatsApp: business.dispatchWhatsApp,
+    };
+    return contact;
   });
 
   app.post<{ Params: { id: string } }>("/api/bearer/jobs/:id/accept", { preHandler: ctx.requireRider }, async (req) => {

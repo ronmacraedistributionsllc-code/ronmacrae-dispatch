@@ -554,7 +554,7 @@ tracked here as Stages 8+ (Stages 1-7 above are the prior work, already shipped)
 | 14 | 5C — Dispatcher operations board | DONE |
 | 15 | 5D — Customer status message templates + notification log | DONE |
 | 16 | 5E — Operating reports + CSV export | DONE |
-| 17 | 5F — Emergency/contact-dispatch button | NOT STARTED |
+| 17 | 5F — Emergency/contact-dispatch button | DONE |
 | 18 | 5G — Delivery messaging (customer/rider/dispatcher) | NOT STARTED |
 
 Each stage: implement, typecheck, run meaningful tests (new + full existing suite),
@@ -1349,3 +1349,56 @@ above; a dedicated "totals by zone" table wasn't built, since the spec's
 filter list and metric list don't actually require one together — worth
 adding if wanted). No real payout-run feature — "estimated earnings" stays
 exactly that until a real payout/payroll feature exists.
+
+## Stage 17 — 5F: Emergency/contact-dispatch button (DONE)
+
+**What existed already**: `BusinessSettings.dispatchPhone`/`dispatchWhatsApp`
+(owner-configurable via the existing admin-only `PUT /api/settings/business`,
+built in an earlier stage) — this stage just needed to *surface* that
+configured number to the rider, since the rider had no way to fetch it at
+all: `GET /api/settings/business` is staff-only (admin/dispatcher/
+accountant/viewer), and riders aren't any of those roles.
+
+**Backend**: one new endpoint, `GET /api/bearer/dispatch-contact`
+(rider-only), returning a deliberately narrow `DispatchContactDto`
+(`businessName`/`dispatchPhone`/`dispatchWhatsApp` only) rather than opening
+up the full `BusinessSettings` object to riders (which also carries
+currency/PIN-length/zone config that's none of a rider's concern) — and,
+per the spec's own wording, this is *only* ever the owner-configured
+dispatch contact, never any individual staff member's own phone number
+(there is no code path here that could expose one).
+
+**Frontend**: new shared `ContactDispatch` component, rendered on every
+active job card on the rider dashboard (gated to `ACTIVE_JOB_STATUSES`,
+matching "every active rider job" — not shown on completed/failed ones).
+Call and Message links use the device's own `tel:`/`sms:` handlers; a
+WhatsApp link (`wa.me`) appears only if `dispatchWhatsApp` is configured.
+The job reference is included in the prefilled SMS/WhatsApp message text
+(a phone call can't carry text, so the label next to the buttons names the
+job instead: "Contact dispatch about RM-000123"). If no dispatch number is
+configured at all yet, shows a plain "not configured yet" note instead of a
+dead link.
+
+**Tests**:
+- `apps/api/test/dispatch-contact.test.ts` (2 new) — returns exactly the
+  configured phone/WhatsApp/business name and nothing else from
+  `BusinessSettings`; rejected for a staff token (rider-only).
+- `e2e/specs/contact-dispatch.spec.ts` (new) — a real rider session shows
+  the Call link pointing at the exact configured `tel:` number, the Message
+  link's `sms:` href decodes to include the job's own reference, and no
+  WhatsApp button appears when `dispatchWhatsApp` was left blank.
+
+**Verification run**: `npm run typecheck --workspaces` clean; `apps/api`
+vitest 110/110 (108 prior + 2 new); `apps/web` vitest 8/8; clean web build;
+full e2e suite (26 tests, incl. 1 new) 26/26 serially, on a
+freshly-reseeded `e2e-test.db`.
+
+**Not done in this stage** (small, deliberate scope cuts): no equivalent
+button was added for staff-side "contact rider" — that already exists from
+Stage 14's operations board (Call/Message per rider row, using the rider's
+own phone, which staff are already authorized to see). No feature-detection
+of which contact methods a specific device supports beyond what `tel:`/
+`sms:`/`wa.me` links already defer to the OS — a desktop browser with no
+phone/SMS handler configured will simply do nothing on click, which is the
+inherent, correct behavior of that link type rather than something to work
+around.

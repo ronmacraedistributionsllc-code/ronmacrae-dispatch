@@ -1375,11 +1375,57 @@ npm run test --workspace @ronmacrae/web
 rm -f apps/api/data/e2e-test.db && cd e2e && npx playwright test --workers=1
 ```
 
-## Next: Stage 17 (5F)
+---
 
-Emergency/contact-dispatch button on every active rider job — Call and
-Message actions using the configured dispatch phone (owner-configurable,
-already exists as `BusinessSettings.dispatchPhone`/`dispatchWhatsApp` from
-earlier stages), showing the job reference, never exposing personal staff
-phone numbers unless explicitly configured. See `WORK_IN_PROGRESS.md`'s
-Stage plan table for the full remaining Stage 17–18 sequence.
+# Stage 17 — 5F: Emergency/contact-dispatch button (pre-production hardening, 2026-09-10)
+
+Full detail in `WORK_IN_PROGRESS.md` under "Stage 17 — 5F: Emergency/
+contact-dispatch button (DONE)". Summary for resuming agents:
+
+**Found**: `BusinessSettings.dispatchPhone`/`dispatchWhatsApp` already
+existed and were owner-configurable, but riders had no way to fetch them
+(`GET /api/settings/business` is staff-only).
+
+**Backend**: new `GET /api/bearer/dispatch-contact` (rider-only), returns a
+narrow `DispatchContactDto` (business name + dispatch phone/WhatsApp only —
+never any individual staff member's own number, and never the rest of
+`BusinessSettings`).
+
+**Frontend**: new `ContactDispatch` component on every active job card on
+the rider dashboard — Call/Message (`tel:`/`sms:`) and an optional WhatsApp
+(`wa.me`) link, with the job reference prefilled into the message text; a
+plain "not configured yet" note if no dispatch number is set at all.
+
+## Commands run and results (Stage 17)
+
+| # | Command | Result |
+| --- | --- | --- |
+| 1 | `npm run typecheck --workspaces` (root) | **PASS** — 0 errors |
+| 2 | `npx vitest run` (apps/api) | **PASS** — 110/110 (108 prior + 2 new) |
+| 3 | `npx vitest run` / `npm run build` (apps/web) | **PASS** — 8/8, clean build |
+| 4 | Full e2e suite (26 tests, incl. 1 new), serial, fresh `e2e-test.db` | **PASS** — 26/26 |
+
+## Re-verify (Stage 17)
+
+```bash
+npm run typecheck --workspaces
+npm run test --workspace @ronmacrae/api
+npm run test --workspace @ronmacrae/web
+rm -f apps/api/data/e2e-test.db && cd e2e && npx playwright test --workers=1
+```
+
+## Next: Stage 18 (5G) — the last of the numbered stages
+
+Delivery messaging — customer↔dispatch always, customer↔assigned-rider once
+assigned; conversation tied to one delivery, tracking-link-gated for the
+customer; rider sees only conversations for jobs assigned to them;
+dispatcher/owner can monitor/respond; live updates; no phone-number exposure;
+no PIN/internal-note leakage; closes on completion/cancellation/link
+expiry while retaining an audit record; abuse protection + message-length
+limits, text-only; quick-reply templates for both customer and rider;
+address-change requests in chat require dispatcher review/confirmation
+with an audit entry, never a silent destination change. After this stage:
+renumber the Verification section (per the original instruction) and make
+sure the full expanded verification checklist is actually covered by tests/
+documentation, per the original request's closing instructions. See
+`WORK_IN_PROGRESS.md`'s Stage plan table for the final stage's full detail.

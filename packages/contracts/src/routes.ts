@@ -184,6 +184,8 @@ export const API = {
     declineOffer: (id: string) => `/api/bearer/offers/${id}/decline`,
     /** rider sets their own intended work order for their active jobs (spec 5B) */
     reorder: "/api/bearer/jobs/reorder",
+    /** "Contact dispatch" button — spec 5F */
+    dispatchContact: "/api/bearer/dispatch-contact",
   },
 
   offers: {
