@@ -5,7 +5,8 @@ import type { JwtIssuer, AccessTokenPayload } from "./lib/jwt.js";
 import type { QueueDriver } from "./queue/index.js";
 import type { RealtimeHub } from "./rt/hub.js";
 import type { CompositeGeoProvider } from "@ronmacrae/geo";
-import type { NotificationProvider } from "@ronmacrae/notifications";
+import type { NotificationProvider, EmailProvider } from "@ronmacrae/notifications";
+import { createEmailProvider } from "@ronmacrae/notifications";
 import type { Logger } from "./lib/log.js";
 import { AuditService } from "./modules/audit.js";
 import { NotifyService } from "./modules/notify.js";
@@ -22,6 +23,10 @@ export interface AppCtx {
   hub: RealtimeHub;
   geo: CompositeGeoProvider;
   notifier: NotificationProvider;
+  /** Transactional email only (verification/password-reset codes, Stage
+   *  25) — memory/dev-log provider only, see @ronmacrae/notifications'
+   *  email.ts for why no real provider exists yet. */
+  email: EmailProvider;
   audit: AuditService;
   notify: NotifyService;
   /** opt-in Web Push (VAPID); see modules/push.ts */
@@ -59,6 +64,9 @@ export function buildCtx(
   const notify = new NotifyService(prisma, notifier, queue, hub, config, log, audit);
   const push = new PushService(prisma, config, log);
   const sim = new LocationSimulator(prisma, hub, log);
+  // Only "memory" ever exists (see email.ts) — no config knob to wire up,
+  // since there's nothing real to select between.
+  const email = createEmailProvider({ provider: "memory", log: (line) => log.info({ line }, "outbound email") });
   return {
     prisma,
     config,
@@ -67,6 +75,7 @@ export function buildCtx(
     hub,
     geo,
     notifier,
+    email,
     audit,
     notify,
     push,

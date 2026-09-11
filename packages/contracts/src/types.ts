@@ -612,6 +612,15 @@ export interface DuplicateCandidateDto {
   }[];
 }
 
+/** Whether the phone-verified session behind this request already has an
+ *  optional email+password account (Stage 25, spec 7), and its
+ *  verification state. `GET /api/customer-account/status`. */
+export interface CustomerAccountStatusDto {
+  hasAccount: boolean;
+  email: string | null;
+  emailVerified: boolean;
+}
+
 /** One delivery-chat message, scoped to one of the three real pairwise
  *  conversations (Stage 24, spec 5) — `conversationKind: null` means a
  *  "legacy" message from before this stage's redesign, when every party

@@ -45,6 +45,37 @@ test("an invalid phone number shows an inline error instead of advancing", async
   await expect(page.getByLabel("Your phone number")).toBeVisible();
 });
 
+/**
+ * Optional email+password account (Stage 25 / spec 7) — same constraint as
+ * above: the email verification/reset code is never exposed to a browser
+ * test, so this covers the real-browser navigation and validation only.
+ * The full claim -> verify -> login and reset round trips are covered at
+ * the API-integration level (apps/api/test/customer-account.test.ts),
+ * which can read the code off the memory email provider's own log.
+ */
+test("a customer can navigate to email sign-in, sees a generic error on the wrong credentials, and can reach password reset", async ({ page }) => {
+  await page.goto("/my-packages");
+  await page.getByRole("button", { name: "Have an account? Sign in with email" }).click();
+  await expect(page.getByLabel("Email")).toBeVisible();
+
+  await page.getByLabel("Email").fill("nobody-e2e@example.com");
+  await page.getByLabel("Password").fill("wrongpassword1");
+  await page.getByRole("button", { name: "Sign in" }).click();
+  await expect(page.getByText("Incorrect email or password.")).toBeVisible();
+
+  await page.getByRole("button", { name: "Forgot password?" }).click();
+  await expect(page.getByText("We'll email a reset code if that address has an account.")).toBeVisible();
+  await page.getByLabel("Email").fill("nobody-e2e@example.com");
+  await page.getByRole("button", { name: "Send reset code" }).click();
+  await expect(page.getByLabel("6-digit code")).toBeVisible();
+  await expect(page.getByLabel("New password")).toBeVisible();
+
+  await page.getByRole("button", { name: "Back to sign in" }).click();
+  await expect(page.getByLabel("Password")).toBeVisible();
+  await page.getByRole("button", { name: "Use my phone number instead" }).click();
+  await expect(page.getByLabel("Your phone number")).toBeVisible();
+});
+
 test("the per-job tracking page links through to the cross-business dashboard", async ({ page, request }) => {
   const res = await request.post("/api/delivery-requests", {
     data: {

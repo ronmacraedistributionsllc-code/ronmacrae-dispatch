@@ -123,6 +123,20 @@ export const API = {
     get: "/api/customer-dashboard",
   },
 
+  /** Optional email+password account, additive on top of the phone-OTP
+   *  dashboard session above (spec 7, Stage 25). claim/resendVerification
+   *  require a customer-dashboard Bearer token; the rest are public,
+   *  gated by the email code or password presented. */
+  customerAccount: {
+    status: "/api/customer-account/status",
+    claim: "/api/customer-account/claim",
+    resendVerification: "/api/customer-account/resend-verification",
+    verifyEmail: "/api/customer-account/verify-email",
+    login: "/api/customer-account/login",
+    requestPasswordReset: "/api/customer-account/request-password-reset",
+    resetPassword: "/api/customer-account/reset-password",
+  },
+
   /** delivery messaging (spec 5) — staff side. Staff may read all three
    *  ConversationKinds (customer_rider is monitor-only, see
    *  ConversationSummaryDto.canWrite) but only ever writes into

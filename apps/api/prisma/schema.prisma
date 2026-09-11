@@ -341,8 +341,50 @@ model CustomerIdentity {
 
   customers      Customer[]
   mergedAliases  MergedPhoneAlias[]
+  account        CustomerAccount?
 
   @@index([normalizedEmail])
+}
+
+/**
+ * Optional email+password sign-in for a CustomerIdentity (Stage 25, spec
+ * section 7) — "account-claim": a customer who already has real order
+ * history under a phone-verified identity (Stage 22/23) can additionally
+ * set up persistent credentials for it, so they don't need a fresh SMS
+ * code every visit. The phone-OTP dashboard flow stays available
+ * regardless — this is an additive upgrade, never a replacement, and
+ * claiming one requires already holding a phone-verified session (see
+ * customer-account.ts's claim route), so creating an account can never
+ * itself be used to guess or take over somebody else's identity.
+ */
+model CustomerAccount {
+  id              String           @id @default(cuid())
+  identityId      String           @unique
+  identity        CustomerIdentity @relation(fields: [identityId], references: [id], onDelete: Cascade)
+  email           String           @unique
+  passwordHash    String
+  emailVerifiedAt DateTime?
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+}
+
+/** Short-lived, single-use email codes (verify-email / password-reset) —
+ *  the email-channel counterpart to CustomerAccessCode's phone-channel
+ *  ones (Stage 22), same shape and same reasoning, kept as a separate
+ *  model since the two channels' targets and purposes differ enough that
+ *  forcing one shared table would need an awkward nullable-either-way
+ *  design for no real benefit. */
+model CustomerEmailCode {
+  id         String    @id @default(cuid())
+  email      String
+  purpose    String
+  codeHash   String
+  expiresAt  DateTime
+  consumedAt DateTime?
+  attempts   Int       @default(0)
+  createdAt  DateTime  @default(now())
+
+  @@index([email, purpose, createdAt])
 }
 
 /** Once a CustomerIdentity is merged away (the owner-only, audited merge

@@ -1724,7 +1724,7 @@ everything from Stage 20 on, not just as a footnote:
 | 22 | Customer package dashboard + restricted rider-location display post-collection, across participating businesses | 4 | DONE |
 | 23 | Global customer identity: phone normalization (libphonenumber, JM default), safe email normalization, verified-vs-provisional records, duplicate-resolution audit trail, rate limiting, per-business customer relationships on top of Stage 20's Business model | 6 | DONE |
 | 24 | Messaging redesign: split the one shared thread into the three real pairwise conversations, add delivered/read receipts, retry-without-duplicate, reassignment access revocation | 5 | DONE |
-| 25 | Sign-in/account linking: email verification, password reset, account-claim flow, expiring/single-use codes; Instagram login feasibility investigation (implement only if genuinely supported for this use case; otherwise document why it's disabled) | 7 | NOT STARTED |
+| 25 | Sign-in/account linking: email verification, password reset, account-claim flow, expiring/single-use codes; Instagram login feasibility investigation (implement only if genuinely supported for this use case; otherwise document why it's disabled) | 7 | DONE |
 | 26 | Deleted-orders trash: soft-delete + 30-day restore window + scheduled purge job, preserving ledger/dispute/audit records, scoped per business | 8 | NOT STARTED |
 | 27 | Rider cash-profile corrections: separate collected / awaiting handover / handed-in-unconfirmed / confirmed / disputed / earnings-payable, snapshot money components, fix "handed in" prematurely clearing confirmed-owed amount, per business a rider works for | 9 | NOT STARTED |
 | 28 | Full verification + handoff pass across all of 19–27 | 10 | NOT STARTED |
@@ -2559,3 +2559,148 @@ not a per-conversation artifact. No UI affordance was added to browse the
 legacy archive from the new tabbed interface beyond the raw `/legacy`
 endpoint (no route in this session's scope needed it — the archive holds
 5 messages total in `dev.db`).
+
+## Stage 25 — Section 7: sign-in / account linking (DONE)
+
+Optional email+password account for a customer, additive on top of the
+phone-OTP dashboard session (Stage 22) and the CustomerIdentity it's
+built on (Stage 23) — never a replacement for the phone flow, which stays
+fully available regardless of whether someone claims an account.
+
+**Account-claim, deliberately gated by an already-proven phone**:
+creating an account (`POST /api/customer-account/claim`) requires holding
+a valid customer-dashboard Bearer token — i.e. you must have already
+completed the phone-OTP flow for that phone number. This means claiming
+credentials can never itself be used to take over somebody else's
+identity by guessing an email; the hard part (proving phone ownership)
+was already done by Stage 22's own mechanism. Login afterward
+(`POST /api/customer-account/login`) issues the *exact same* token type
+(`CustomerDashboardTokenPayload`) the OTP flow does, scoped to the
+account's own identity — every existing dashboard route (including the
+whole customer-dashboard aggregation from Stage 22) works completely
+unchanged for an account-based session, no special-casing anywhere else
+in the system.
+
+**Data model**: `CustomerAccount` (one per CustomerIdentity, unique
+email, scrypt password hash via the existing `lib/password.ts` — the same
+one User accounts already use), `CustomerEmailCode` (the email-channel
+counterpart to Stage 22's phone-channel `CustomerAccessCode` — same
+shape, same 10-minute expiry / 30-second resend cooldown / 5-attempt cap,
+factored into a shared `lib/verification-code.ts` both now import from,
+rather than duplicating the hashing/generation logic a second time).
+
+**A real, previously-nonexistent capability had to be built first: email
+sending.** This codebase had no email provider at all — only SMS/
+WhatsApp (`@ronmacrae/notifications`'s core.ts). Added a small, separate
+`email.ts` in the same package: an `EmailProvider` interface and a
+`MemoryEmailProvider` (dev-log only, same zero-external-credentials
+philosophy as the SMS memory provider) — deliberately NOT wired to any
+real SMTP/SES/SendGrid/Postmark integration, since none of those
+credentials exist in this environment and faking one would misrepresent
+what's actually been tested. The `EmailConfig.provider` type is a single
+literal (`"memory"`), not an open string, so it's structurally impossible
+to configure a provider that doesn't actually exist — an honest
+constraint, not just a comment. These verification/reset emails are
+simple, synchronous, immediate-feedback sends — deliberately NOT run
+through the async outbox+queue machinery built for delivery-status
+blast notifications, which is a different shape of problem.
+
+**Anti-enumeration, consistently applied**: login gives the exact same
+generic "Incorrect email or password" for a wrong password and for an
+email with no account at all (verified by asserting the two JSON
+responses are byte-identical, not just same status code). Requesting a
+password-reset code always returns `{ok:true}` and never actually sends
+anything for an unknown email — verified by asserting nothing was added
+to the email provider's sent log for an unrecognized address.
+
+**Frontend** (`pages/my-packages.tsx`, extended): the phone-entry step
+gained a "Have an account? Sign in with email" link into a real email+
+password form, with its own "Forgot password?" → request-code → reset
+flow. Inside the dashboard itself, a new `AccountPanel` component shows
+account status (fetched via the new `GET /api/customer-account/status`)
+— collapsed to a single low-key link for someone with no account yet
+("Create an account so you don't need a text code next time"), an
+inline claim form when opened, an email-verification prompt if claimed
+but unverified, and a quiet "Signed in as X" line once verified. All of
+it optional, all of it out of the way of the actual packages list.
+
+**Instagram login — investigated honestly, not implemented, not faked**:
+genuinely infeasible to build in this session, for concrete reasons, not
+just "out of scope":
+- A real Meta Developer App (with the Instagram product configured) is
+  required, plus **App Review** from Meta for any non-trivial scope — an
+  external, human-gated approval process this session cannot complete
+  (no registered Meta developer account exists here, and one would need
+  to belong to the actual business, not this session).
+- Instagram's current login flow (Instagram Business Login — the older
+  Instagram Basic Display API was deprecated Dec 2024) **requires the
+  logging-in account to be a Business or Creator account**. A regular
+  personal Instagram account — what most real customers would have —
+  cannot authenticate this way at all. That alone makes it a poor fit
+  for a general customer-facing "log in with Instagram" button, not
+  just an implementation detail.
+- Even with a working OAuth flow, the scopes available don't reliably
+  return an **email address** — only a user id and basic profile. Since
+  this whole identity system (Stage 23) is built around phone+email,
+  that would mean still prompting for an email anyway, undercutting
+  much of the convenience the feature would supposedly add.
+- OAuth needs a real, permanent, registered HTTPS redirect URI — this
+  session's LAN/tunnel URLs are ephemeral dev previews, not something
+  Meta's app config could point at durably.
+- Real client credentials (an Instagram/Meta App ID + Secret) would be
+  needed, the same way `TWILIO_ACCOUNT_SID`/`TWILIO_AUTH_TOKEN` are for
+  SMS — none exist in this environment, and, as with SMS, faking the
+  integration to *look* implemented would misrepresent what's verified.
+
+**What a real implementation would need**, if the business later wants
+to pursue it: register a Meta Developer App with the Instagram product,
+complete App Review for the needed scope, add
+`INSTAGRAM_CLIENT_ID`/`INSTAGRAM_CLIENT_SECRET` config (mirroring the
+`TWILIO_*` pattern already established in `config.ts`), implement the
+OAuth redirect+callback routes, and handle the no-guaranteed-email case
+by still collecting one on first login. None of that exists yet, and no
+placeholder UI button was added pointing at it — a disabled-looking
+button that does nothing on click would be worse than no button at all.
+
+**Tests**: `apps/api/test/customer-account.test.ts` (new, 8 tests) —
+claim requires a valid dashboard token, duplicate-account and duplicate-
+email rejection, email-code wrong/reuse/cooldown handling, login issuing
+a token that genuinely works against the existing dashboard route, the
+byte-identical generic error for wrong-password vs. no-such-account,
+and the full password-reset round trip (old password stops working, new
+one works) plus the no-enumeration guarantee (nothing sent for an
+unknown email). `e2e/specs/my-packages.spec.ts` (extended, 1 new test)
+covers the real-browser navigation: reaching email sign-in from the
+phone step, the generic wrong-credentials error, reaching the reset-
+code-entry step, and both "back" paths — deliberately stopping short of
+completing a real send/verify round trip in the browser, for the same
+reason the phone-OTP e2e coverage does (no legitimate way for a
+black-box browser test to read a real email/SMS code; the full round
+trip is covered at the API-integration level instead, which can read it
+off the memory provider's own log the way a real inbox would have shown
+it).
+
+**Verification**: `npm run typecheck --workspaces` clean; `apps/api`
+vitest 173/173 (165 prior + 8 new); `apps/web` vitest 8/8 + clean build;
+full e2e suite 33/33 (32 prior + 1 new), both live demos confirmed
+undisturbed before and after. `dev.db` schema push was purely additive
+(two brand-new tables, no column changes to anything existing) —
+confirmed by row count: all 77 customers, 67 jobs, 75 identities
+untouched.
+
+**Honestly unverified**: real email delivery through any actual provider
+— only the dev memory provider (in-process log) has been exercised;
+nothing has been sent to a real inbox. Combined with Stage 22/23's own
+still-unverified real-SMS caveat, this app's entire "prove you own this
+contact channel" story remains dev/memory-provider-only end to end —
+worth real-device/real-inbox testing before this is relied on in
+production.
+
+**Not done in this stage**: no "change password while already signed
+in" flow beyond reset-via-email-code (a logged-in customer who wants a
+new password today uses the same forgot-password flow as anyone else —
+a deliberate scope cut, not an oversight: it's one fewer form for the
+same outcome). No account deletion/deactivation. No Instagram
+implementation, for the concrete reasons above. No billing anywhere
+(not requested for this stage). Deleted-orders trash and rider cash-
+profile corrections are Stages 26-27, next.

@@ -1,5 +1,4 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
-import { createHash, randomInt } from "node:crypto";
 import { z } from "zod";
 import { httpErrors } from "@fastify/sensible";
 import type { AppCtx } from "../ctx.js";
@@ -10,20 +9,12 @@ import { pointFromJson, moneyField } from "../geo-mappers.js";
 import { PIN_VISIBLE_STATUSES, LOCATION_VISIBLE_STATUSES } from "./tracking.js";
 import { CUSTOMER_DASHBOARD_TTL_S } from "../lib/jwt.js";
 import { verifyCustomerIdentity, findIdentityId } from "./customer-identity.js";
-
-const CODE_TTL_MS = 10 * 60_000;
-const REQUEST_COOLDOWN_MS = 30_000;
-const MAX_VERIFY_ATTEMPTS = 5;
+import { CODE_TTL_MS, REQUEST_COOLDOWN_MS, MAX_VERIFY_ATTEMPTS, hashVerificationCode, generateVerificationCode } from "../lib/verification-code.js";
 
 const TERMINAL_CUSTOMER_STATUSES = new Set(["delivered", "failed", "returned", "cancelled"]);
 
-function hashCode(phone: string, code: string): string {
-  return createHash("sha256").update(`${phone}:${code}`).digest("hex");
-}
-
-function generateCode(): string {
-  return String(randomInt(0, 1_000_000)).padStart(6, "0");
-}
+const hashCode = hashVerificationCode;
+const generateCode = generateVerificationCode;
 
 const RequestCodeBody = z.object({ phone: z.string().min(4).max(30) });
 const VerifyBody = z.object({ phone: z.string().min(4).max(30), code: z.string().min(4).max(10) });

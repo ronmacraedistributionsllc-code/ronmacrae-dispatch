@@ -276,6 +276,11 @@ export function registerAuthHook(app: FastifyInstance, ctx: AppCtx): void {
     if (url === "/api/customer-dashboard/request-code" && method === "POST") return true;
     if (url === "/api/customer-dashboard/verify" && method === "POST") return true;
     if (url === "/api/customer-dashboard" && method === "GET") return true;
+    // Customer account-claim / sign-in (spec 7, Stage 25) — same "checked
+    // inside the route" convention: status/claim/resend-verification are
+    // gated by the customer-dashboard Bearer token itself, the rest by the
+    // email code or password they present.
+    if (url.startsWith("/api/customer-account/") && (method === "POST" || method === "GET")) return true;
     // public customer-facing endpoints (rate limited)
     if (url === "/api/delivery-requests" && method === "POST") return true;
     if (url === "/api/quotes/public" && method === "POST") return true;

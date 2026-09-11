@@ -1874,6 +1874,70 @@ customer-side realtime channel at all yet, not a gap introduced here).
 `AddressChangeRequest` stays job-level, correctly (one job-wide fact
 under review, not a per-conversation artifact).
 
-## Next: Stage 25 — sign-in / account linking (section 7)
+## Stage 25 (section 7) — sign-in / account linking
 
-Now proceeding on top of Stages 20-24. No open questions blocking it.
+Optional email+password account for a customer, additive on top of the
+phone-OTP dashboard session (Stage 22) — never a replacement. Claiming
+one (`POST /api/customer-account/claim`) requires already holding a
+valid customer-dashboard Bearer token, so it can never be used to take
+over somebody else's identity by guessing an email; login afterward
+issues the exact same token type the OTP flow does, so every existing
+dashboard route works unchanged for an account-based session.
+
+**New capability built first**: this codebase had no email-sending at
+all. Added `@ronmacrae/notifications`'s `email.ts` — an `EmailProvider`
+interface + `MemoryEmailProvider` (dev-log only; no real SMTP/SES/
+SendGrid wired up, since no such credentials exist here and faking one
+would misrepresent what's verified). `CustomerEmailCode` mirrors Stage
+22's phone-channel `CustomerAccessCode` (same 10min/30s/5-attempt
+shape, now factored into a shared `lib/verification-code.ts`).
+
+**Anti-enumeration**: login gives byte-identical generic errors for
+wrong-password vs. no-such-account; password-reset requests always
+return `{ok:true}` and never actually send for an unknown email.
+
+**Instagram login — investigated, not implemented, not faked**:
+genuinely infeasible here — requires a real registered Meta Developer
+App + App Review (external, human-gated), only works for Business/
+Creator Instagram accounts (excludes ordinary personal accounts, i.e.
+most customers), doesn't reliably return an email address even when it
+works, and needs a permanent registered HTTPS redirect URI this
+session's ephemeral dev previews can't provide. Full reasoning and what
+a real implementation would need (Meta App, `INSTAGRAM_CLIENT_ID/
+SECRET` config mirroring `TWILIO_*`, OAuth routes) is in
+WORK_IN_PROGRESS.md's Stage 25 section. No placeholder button added.
+
+## Commands run and results (Stage 25)
+
+| # | Command | Result |
+| --- | --- | --- |
+| 1 | `npm run typecheck --workspaces` (root) | **PASS** — 0 errors |
+| 2 | `npx vitest run` (apps/api) | **PASS** — 173/173 (165 prior + 8 new: customer-account.test.ts) |
+| 3 | `npx vitest run` / `npm run build` (apps/web) | **PASS** — 8/8, clean build |
+| 4 | Full e2e suite (33 specs), serial, fresh `e2e-test.db`, on :3900 | **PASS** — 33/33, both live demos confirmed undisturbed |
+| 5 | `dev.db` schema push (CustomerAccount, CustomerEmailCode — new tables only) | **PASS** — 77 customers/67 jobs/75 identities untouched |
+
+## Re-verify (Stage 25)
+
+```bash
+npm run typecheck --workspaces
+npm run test --workspace @ronmacrae/api
+npm run test --workspace @ronmacrae/web
+npm run build --workspace @ronmacrae/web
+rm -f apps/api/data/e2e-test.db && cd e2e && npx playwright test --workers=1
+```
+
+**Honestly unverified**: real email delivery through any actual
+provider — only the dev memory provider has been exercised. Combined
+with Stages 22/23's own unverified real-SMS caveat, this app's whole
+"prove you own this contact channel" story is dev/memory-provider-only
+end to end.
+
+**Not done**: no logged-in "change password" flow beyond the same
+forgot-password-via-email-code anyone uses (deliberate — one fewer form
+for the same outcome); no account deletion; no Instagram (see above);
+no billing (not requested).
+
+## Next: Stage 26 — deleted-orders trash (section 8)
+
+Now proceeding on top of Stages 20-25. No open questions blocking it.
