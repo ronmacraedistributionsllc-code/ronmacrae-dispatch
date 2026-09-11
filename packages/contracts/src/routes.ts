@@ -104,6 +104,22 @@ export const API = {
     get: (token: string) => `/api/tracking/${token}`,
     create: (jobId: string) => `/api/tracking/${jobId}`,
     revoke: (token: string) => `/api/tracking/${token}/revoke`,
+    /** delivery messaging, customer side — spec 5G, tracking-link-gated */
+    messages: (token: string) => `/api/tracking/${token}/messages`,
+    addressChange: (token: string) => `/api/tracking/${token}/address-change`,
+  },
+
+  /** delivery messaging (spec 5G) — staff side */
+  messages: {
+    list: (jobId: string) => `/api/jobs/${jobId}/messages`,
+    send: (jobId: string) => `/api/jobs/${jobId}/messages`,
+    addressChangeRequests: (jobId: string) => `/api/jobs/${jobId}/address-change-requests`,
+    approveAddressChange: (jobId: string, reqId: string) => `/api/jobs/${jobId}/address-change-requests/${reqId}/approve`,
+    declineAddressChange: (jobId: string, reqId: string) => `/api/jobs/${jobId}/address-change-requests/${reqId}/decline`,
+    /** rider side — same shape, own job only */
+    bearerList: (jobId: string) => `/api/bearer/jobs/${jobId}/messages`,
+    bearerSend: (jobId: string) => `/api/bearer/jobs/${jobId}/messages`,
+    bearerAddressChange: (jobId: string) => `/api/bearer/jobs/${jobId}/address-change`,
   },
 
   proofs: {

@@ -1,11 +1,13 @@
 import React, { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { JOB_SOURCES, JOB_STATUSES, RIDER_STAGE_LABELS, allowedTransitions } from "@ronmacrae/contracts";
-import type { JobSource, JobStatus, JobSummaryDto, RiderDto } from "@ronmacrae/contracts";
+import { API, JOB_SOURCES, JOB_STATUSES, RIDER_STAGE_LABELS, allowedTransitions } from "@ronmacrae/contracts";
+import type { AddressChangeRequestDto, DeliveryMessagesDto, JobSource, JobStatus, JobSummaryDto, RiderDto } from "@ronmacrae/contracts";
 import { ApiError, apiFetch, formatMoney } from "../lib/api.js";
 import { useAuth } from "../lib/auth.js";
 import { JobOffersPanel } from "../components/job-offers-panel.js";
 import { ReadOnlyRiderQueue } from "../components/route-queue.js";
+import { DeliveryChat } from "../components/delivery-chat.js";
+import { useRealtime } from "../lib/realtime.js";
 
 const STATUS_BADGE: Record<JobStatus, string> = {
   new: "bg-zinc-800 text-zinc-300",
@@ -34,14 +36,16 @@ interface RowProps {
   busy: boolean;
   offersOpen: boolean;
   queueOpen: boolean;
+  chatOpen: boolean;
   onAssign: (jobId: string, riderId: string) => void;
   onUnassign: (jobId: string) => void;
   onMove: (jobId: string, to: JobStatus) => void;
   onToggleOffers: (jobId: string) => void;
   onToggleQueue: () => void;
+  onToggleChat: () => void;
 }
 
-function JobRow({ job, riders, canWrite, busy, offersOpen, queueOpen, onAssign, onUnassign, onMove, onToggleOffers, onToggleQueue }: RowProps): React.JSX.Element {
+function JobRow({ job, riders, canWrite, busy, offersOpen, queueOpen, chatOpen, onAssign, onUnassign, onMove, onToggleOffers, onToggleQueue, onToggleChat }: RowProps): React.JSX.Element {
   const [riderId, setRiderId] = useState(job.riderId ?? "");
   const [moveTo, setMoveTo] = useState<JobStatus | "">("");
   const assignable = job.status === "new" || job.status === "assigned";
@@ -159,6 +163,9 @@ function JobRow({ job, riders, canWrite, busy, offersOpen, queueOpen, onAssign, 
                 {queueOpen ? "Hide route queue" : "Route queue"}
               </button>
             ) : null}
+            <button className="btn !px-3 !py-1 text-xs" disabled={busy} onClick={() => onToggleChat()}>
+              {chatOpen ? "Hide messages" : "Messages"}
+            </button>
           </div>
         </td>
       ) : null}
@@ -173,6 +180,7 @@ export function Jobs(): React.JSX.Element {
   const canWrite = user?.role === "admin" || user?.role === "dispatcher";
   const [offersJobId, setOffersJobId] = useState<string | null>(null);
   const [queueJobId, setQueueJobId] = useState<string | null>(null);
+  const [chatJobId, setChatJobId] = useState<string | null>(null);
 
   const [status, setStatus] = useState<JobStatus | "">("");
   const [source, setSource] = useState<JobSource | "">("");
@@ -321,11 +329,13 @@ export function Jobs(): React.JSX.Element {
                     busy={busy}
                     offersOpen={offersJobId === job.id}
                     queueOpen={queueJobId === job.id}
+                    chatOpen={chatJobId === job.id}
                     onAssign={(id, rid) => void assign.mutate({ jobId: id, riderId: rid })}
                     onUnassign={(id) => void unassign.mutate(id)}
                     onMove={(id, to) => void move.mutate({ jobId: id, to })}
                     onToggleOffers={(id) => setOffersJobId((cur) => (cur === id ? null : id))}
                     onToggleQueue={() => setQueueJobId((cur) => (cur === job.id ? null : job.id))}
+                    onToggleChat={() => setChatJobId((cur) => (cur === job.id ? null : job.id))}
                   />
                   {offersJobId === job.id ? (
                     <tr className="border-t border-zinc-800" data-testid={`offers-panel-${job.id}`}>
@@ -338,6 +348,13 @@ export function Jobs(): React.JSX.Element {
                     <tr className="border-t border-zinc-800" data-testid={`queue-panel-${job.riderId}`}>
                       <td colSpan={canWrite ? 8 : 7} className="py-2">
                         <ReadOnlyRiderQueue riderId={job.riderId} />
+                      </td>
+                    </tr>
+                  ) : null}
+                  {chatJobId === job.id ? (
+                    <tr className="border-t border-zinc-800" data-testid={`chat-panel-${job.id}`}>
+                      <td colSpan={canWrite ? 8 : 7} className="py-2">
+                        <DispatcherJobChat jobId={job.id} canWrite={canWrite} />
                       </td>
                     </tr>
                   ) : null}
@@ -355,6 +372,67 @@ export function Jobs(): React.JSX.Element {
           <p className="mt-2 text-sm text-red-400">{error instanceof ApiError ? error.message : "Request failed"}</p>
         ) : null}
       </section>
+    </div>
+  );
+}
+
+/** Dispatcher/owner view of one job's conversation (spec 5G) — monitor for
+ *  every staff role that can see the Jobs screen; respond, and approve/
+ *  decline address-change requests, for admin/dispatcher only. */
+function DispatcherJobChat({ jobId, canWrite }: { jobId: string; canWrite: boolean }): React.JSX.Element {
+  const qc = useQueryClient();
+  const { subscribe } = useRealtime();
+  const requests = useQuery({
+    queryKey: ["address-change-requests", jobId],
+    queryFn: () => apiFetch<{ requests: AddressChangeRequestDto[] }>(API.messages.addressChangeRequests(jobId)),
+    refetchInterval: 15_000,
+  });
+  const decide = useMutation({
+    mutationFn: ({ reqId, decision, note }: { reqId: string; decision: "approve" | "decline"; note?: string }) =>
+      apiFetch(decision === "approve" ? API.messages.approveAddressChange(jobId, reqId) : API.messages.declineAddressChange(jobId, reqId), {
+        method: "POST",
+        body: JSON.stringify(decision === "decline" ? { note } : {}),
+      }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["address-change-requests", jobId] });
+      void qc.invalidateQueries({ queryKey: ["delivery-chat", `staff-${jobId}`] });
+    },
+  });
+  const pending = (requests.data?.requests ?? []).filter((r) => r.status === "pending");
+
+  return (
+    <div className="space-y-3">
+      {pending.length > 0 ? (
+        <div className="space-y-2 rounded-lg border border-amber-800/50 bg-amber-950/10 p-3">
+          <p className="text-sm font-medium text-amber-200">Address change requested — review before it takes effect</p>
+          {pending.map((r) => (
+            <div key={r.id} className="rounded bg-zinc-900/40 p-2 text-sm">
+              <p className="text-zinc-200">
+                {r.requestedByRole === "customer" ? "Customer" : "Rider"} proposed: <span className="font-medium">{r.proposedAddressText}</span>
+              </p>
+              {r.note ? <p className="text-xs text-zinc-500">Note: {r.note}</p> : null}
+              {canWrite ? (
+                <div className="mt-1 flex gap-2">
+                  <button className="btn-accent !px-2 !py-0.5 text-xs" disabled={decide.isPending} onClick={() => decide.mutate({ reqId: r.id, decision: "approve" })}>
+                    Confirm change
+                  </button>
+                  <button className="btn !px-2 !py-0.5 text-xs" disabled={decide.isPending} onClick={() => decide.mutate({ reqId: r.id, decision: "decline", note: "Not confirmed by dispatch" })}>
+                    Decline
+                  </button>
+                </div>
+              ) : null}
+            </div>
+          ))}
+        </div>
+      ) : null}
+      <DeliveryChat
+        queryKey={`staff-${jobId}`}
+        quickReplies={[]}
+        readOnly={!canWrite}
+        fetchMessages={() => apiFetch<DeliveryMessagesDto>(API.messages.list(jobId))}
+        sendMessage={(body) => apiFetch<DeliveryMessagesDto>(API.messages.send(jobId), { method: "POST", body: JSON.stringify({ body }) })}
+        onRealtimeNudge={(refetch) => subscribe(["delivery_message"], (msg) => { if (msg.type === "delivery_message" && msg.payload.jobId === jobId) refetch(); })}
+      />
     </div>
   );
 }

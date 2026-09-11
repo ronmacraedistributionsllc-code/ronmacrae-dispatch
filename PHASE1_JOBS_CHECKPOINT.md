@@ -1414,18 +1414,75 @@ npm run test --workspace @ronmacrae/web
 rm -f apps/api/data/e2e-test.db && cd e2e && npx playwright test --workers=1
 ```
 
-## Next: Stage 18 (5G) — the last of the numbered stages
+---
 
-Delivery messaging — customer↔dispatch always, customer↔assigned-rider once
-assigned; conversation tied to one delivery, tracking-link-gated for the
-customer; rider sees only conversations for jobs assigned to them;
-dispatcher/owner can monitor/respond; live updates; no phone-number exposure;
-no PIN/internal-note leakage; closes on completion/cancellation/link
-expiry while retaining an audit record; abuse protection + message-length
-limits, text-only; quick-reply templates for both customer and rider;
-address-change requests in chat require dispatcher review/confirmation
-with an audit entry, never a silent destination change. After this stage:
-renumber the Verification section (per the original instruction) and make
-sure the full expanded verification checklist is actually covered by tests/
-documentation, per the original request's closing instructions. See
-`WORK_IN_PROGRESS.md`'s Stage plan table for the final stage's full detail.
+# Stage 18 — 5G: Delivery messaging (pre-production hardening, 2026-09-10)
+
+Full detail in `WORK_IN_PROGRESS.md` under "Stage 18 — 5G: Delivery
+messaging (DONE)". Summary for resuming agents:
+
+**Found**: tracking links, the realtime hub, and `JobEvent` audit trail all
+already existed; nothing for in-app chat or a reviewable address-change
+request.
+
+**Schema** (additive; backed up `dev.db` first as
+`dev.db.bak-messaging-20260910-190823`): `DeliveryMessage` (per-job chat,
+per-role read flags) and `AddressChangeRequest` (pending/approved/declined;
+only an explicit staff approve writes `Job.addressText` + a `JobEvent`, in
+one transaction).
+
+**Backend**: new `apps/api/src/modules/delivery-messages.ts` — customer
+routes token-gated via the tracking link (`GET`/`POST
+/api/tracking/:token/messages`, `POST .../address-change`); staff routes
+(`GET`/`POST /api/jobs/:id/messages`, address-change-requests
+list/approve/decline, read = admin/dispatcher/accountant/viewer, write =
+admin/dispatcher only); rider routes (`GET`/`POST
+/api/bearer/jobs/:id/messages`, `.../address-change`, 403'd off jobs not
+assigned to them). 1000-char message cap, 15-per-60s rate limit per
+sender role per job, no phone/PIN/internal-note exposure, closes on
+terminal job status (staff/rider) or link open-state (customer) while
+history stays readable. New `delivery_message` realtime event for
+live nudges.
+
+**Frontend**: shared `DeliveryChat` component
+(`apps/web/src/components/delivery-chat.tsx`) wired into `track.tsx`
+(customer, + address-change request form), `rider-dashboard.tsx` (rider,
+inside a collapsible "Messages" section per job card), and `jobs.tsx`
+(dispatcher, behind a "Messages" toggle per row, with pending
+address-change review — Confirm/Decline — above the chat).
+
+## Commands run and results (Stage 18)
+
+| # | Command | Result |
+| --- | --- | --- |
+| 1 | `npm run typecheck --workspaces` (root) | **PASS** — 0 errors |
+| 2 | `npx vitest run` (apps/api) | **PASS** — 122/122 (110 prior + 12 new) |
+| 3 | `npx vitest run` / `npm run build` (apps/web) | **PASS** — 8/8, clean build |
+| 4 | Full e2e suite (28 specs incl. 1 new), serial, fresh `e2e-test.db` | **PASS** — 27/27 real specs (28th failure is the pre-existing stray `zz-debug.spec.ts`, already flagged separately for removal, not a regression) |
+
+## Re-verify (Stage 18)
+
+```bash
+npm run typecheck --workspaces
+npm run test --workspace @ronmacrae/api
+npm run test --workspace @ronmacrae/web
+rm -f apps/api/data/e2e-test.db && cd e2e && npx playwright test --workers=1
+```
+
+---
+
+## Next: closing instruction — expanded verification checklist
+
+Stage 18 was the last of the numbered stages (8–18, covering items 1–5A–5G
+of the original request). What remains is the original request's own
+closing instruction: renumber the existing Verification section and build
+out an expanded verification checklist confirming, with a mapping back to
+specific test files/cases, that every one of items 1–5 is actually covered:
+COD calculations/permissions, approval/dispute audit history, multi-job
+route queue + ordering persistence, urgent/overdue indicators, dispatcher
+rider-load/stale-location display, customer-message isolation, rider access
+limited to assigned conversations, messaging closure timing, address-change
+approval flow, notification templates/provider fallback, reports/filters/
+CSV totals, emergency Call/Message links, and no PIN/phone/unnecessary-data
+leakage. See `WORK_IN_PROGRESS.md`'s new "## Verification checklist (Stages
+8–18)" section for the actual mapping.

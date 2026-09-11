@@ -23,7 +23,8 @@ export type RealtimeMessage =
   | { type: "bearer.tracking"; payload: { bearerId: string; state: TrackingState; reason: string | null } }
   | { type: "sos"; payload: SosAlertDto }
   | { type: "notification"; payload: OutboundNotificationEvent }
-  | { type: "offer"; payload: JobOfferDto };
+  | { type: "offer"; payload: JobOfferDto }
+  | { type: "delivery_message"; payload: { jobId: string; id: string; senderRole: string } };
 
 /** Server connection-management messages, outside the application message union above. */
 export type RealtimeSystemMessage =

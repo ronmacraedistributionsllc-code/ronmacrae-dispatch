@@ -10,6 +10,10 @@ import { PushOptIn } from "../components/push-opt-in.js";
 import { LocationSharing } from "../components/location-sharing.js";
 import { RouteQueue } from "../components/route-queue.js";
 import { ContactDispatch } from "../components/contact-dispatch.js";
+import { DeliveryChat } from "../components/delivery-chat.js";
+import type { DeliveryMessagesDto } from "@ronmacrae/contracts";
+
+const RIDER_QUICK_REPLIES = ["Heading to you", "I've arrived", "I cannot reach you", "Please contact dispatch"];
 
 type Action = { label: string; to?: JobStatus; stage?: "heading_to_pickup" | "at_pickup"; needsPin?: boolean; location?: boolean; failed?: boolean };
 
@@ -220,6 +224,12 @@ function RiderJobCard({ job, onChanged }: { job: JobDto; onChanged: () => void }
     {job.pin ? <p className="rounded-lg bg-amber-900/30 p-3 text-sm text-amber-200">Delivery PIN: <strong className="tracking-widest">{job.pin}</strong></p> : null}
     {job.paymentMethod === "cod" ? <CodPanel job={job} onChanged={onChanged} /> : null}
     {ACTIVE_JOB_STATUSES.includes(job.status) ? <ContactDispatch jobLabel={job.jobNumber ?? job.id.slice(0, 8)} /> : null}
+    <details className="rounded-lg border border-zinc-700">
+      <summary className="cursor-pointer px-3 py-2 text-sm font-medium text-zinc-300">Messages</summary>
+      <div className="border-t border-zinc-700 p-3">
+        <RiderJobChat jobId={job.id} />
+      </div>
+    </details>
     {action ? <div className="space-y-2 rounded-lg border border-zinc-700 p-3"><p className="text-sm font-medium">{action.label}</p><label className="label" htmlFor={`note-${job.id}`}>Proof / action notes</label><textarea id={`note-${job.id}`} className="input min-h-20" value={note} onChange={(e) => setNote(e.target.value)} placeholder="Optional delivery proof or action note" />
       {action.needsPin ? <><label className="label" htmlFor={`pin-${job.id}`}>Delivery PIN</label><input id={`pin-${job.id}`} className="input" inputMode="numeric" value={pin} onChange={(e) => setPin(e.target.value)} /></> : null}
       {action.location ? <><label className="label" htmlFor={`address-${job.id}`}>New destination</label><input id={`address-${job.id}`} className="input" value={addressText} onChange={(e) => setAddressText(e.target.value)} /><label className="label" htmlFor={`landmark-${job.id}`}>New landmark</label><input id={`landmark-${job.id}`} className="input" value={landmark} onChange={(e) => setLandmark(e.target.value)} /></> : null}
@@ -317,5 +327,23 @@ function CodPanel({ job, onChanged }: { job: JobDto; onChanged: () => void }): R
         </div>
       ) : null}
     </div>
+  );
+}
+
+function RiderJobChat({ jobId }: { jobId: string }): React.JSX.Element {
+  const { subscribe } = useRealtime();
+  return (
+    <DeliveryChat
+      queryKey={`rider-${jobId}`}
+      quickReplies={RIDER_QUICK_REPLIES}
+      fetchMessages={() => apiFetch<DeliveryMessagesDto>(API.messages.bearerList(jobId))}
+      sendMessage={(body) => apiFetch<DeliveryMessagesDto>(API.messages.bearerSend(jobId), { method: "POST", body: JSON.stringify({ body }) })}
+      onRealtimeNudge={(refetch) => subscribe(["delivery_message"], (msg) => { if (msg.type === "delivery_message" && msg.payload.jobId === jobId) refetch(); })}
+      addressChange={{
+        onPropose: async (proposedAddressText) => {
+          await apiFetch(API.messages.bearerAddressChange(jobId), { method: "POST", body: JSON.stringify({ proposedAddressText }) });
+        },
+      }}
+    />
   );
 }

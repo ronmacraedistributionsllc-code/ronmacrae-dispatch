@@ -129,6 +129,18 @@ export const NOTIFICATION_STATUSES = [
 ] as const;
 export type NotificationStatus = (typeof NOTIFICATION_STATUSES)[number];
 
+/** Who sent one delivery-chat message (spec 5G). "system" is a small set of
+ *  fixed announcements (e.g. an address-change decision) — never
+ *  user-composed text pretending to be automated, and never the other way
+ *  around. */
+export const MESSAGE_SENDER_ROLES = ["customer", "rider", "dispatcher", "system"] as const;
+export type MessageSenderRole = (typeof MESSAGE_SENDER_ROLES)[number];
+
+/** A customer/rider proposing a new destination in chat is never applied
+ *  automatically — dispatch reviews and approves/declines it explicitly. */
+export const ADDRESS_CHANGE_STATUSES = ["pending", "approved", "declined"] as const;
+export type AddressChangeStatus = (typeof ADDRESS_CHANGE_STATUSES)[number];
+
 export const PROOF_KINDS = [
   "pickup_photo",
   "delivery_photo",

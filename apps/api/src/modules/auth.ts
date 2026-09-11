@@ -201,6 +201,11 @@ export function registerAuthHook(app: FastifyInstance, ctx: AppCtx): void {
   const allow = (method: string, url: string): boolean => {
     if (url === "/api/health") return true;
     if (url.startsWith("/api/tracking/") && method === "GET") return true;
+    // customer-side delivery messaging (spec 5G) — gated by the tracking
+    // token itself (validated inside the route), not a login. Scoped to
+    // these exact suffixes so /api/tracking/:jobId (create link) and
+    // /api/tracking/:token/revoke (both staff-only) stay protected.
+    if (url.startsWith("/api/tracking/") && method === "POST" && (url.endsWith("/messages") || url.endsWith("/address-change"))) return true;
     if (url === "/api/auth/login" || url === "/api/auth/refresh") return true;
     // public customer-facing endpoints (rate limited)
     if (url === "/api/delivery-requests" && method === "POST") return true;

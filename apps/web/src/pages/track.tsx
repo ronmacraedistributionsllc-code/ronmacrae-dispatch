@@ -1,13 +1,18 @@
 import React from "react";
 import { useParams } from "react-router-dom";
 import {
+  API,
   CUSTOMER_JOB_STATUS_LABELS,
   TRACKING_STATE_LABELS,
   type CustomerJobStatus,
+  type DeliveryMessagesDto,
   type TrackingPublicDto,
 } from "@ronmacrae/contracts";
 import { ApiError, apiFetch, formatMoney } from "../lib/api.js";
 import { paymentLabel } from "./new-job.js";
+import { DeliveryChat } from "../components/delivery-chat.js";
+
+const CUSTOMER_QUICK_REPLIES = ["I'm here", "Please call me", "I need to change the landmark", "I'm unavailable"];
 
 // Code-split: maplibre-gl is large and most tracking-page views (before a courier
 // is en route) never need it.
@@ -134,6 +139,21 @@ export function Track(): React.JSX.Element {
             ) : (
               <p className="text-sm text-zinc-500">No updates yet.</p>
             )}
+          </section>
+
+          <section className="card">
+            <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-zinc-400">Messages</h2>
+            <DeliveryChat
+              queryKey={`customer-${token}`}
+              quickReplies={CUSTOMER_QUICK_REPLIES}
+              fetchMessages={() => apiFetch<DeliveryMessagesDto>(API.tracking.messages(token))}
+              sendMessage={(body) => apiFetch<DeliveryMessagesDto>(API.tracking.messages(token), { method: "POST", body: JSON.stringify({ body }) })}
+              addressChange={{
+                onPropose: async (proposedAddressText) => {
+                  await apiFetch(API.tracking.addressChange(token), { method: "POST", body: JSON.stringify({ proposedAddressText }) });
+                },
+              }}
+            />
           </section>
         </>
       )}

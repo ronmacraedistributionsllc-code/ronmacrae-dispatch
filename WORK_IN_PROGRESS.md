@@ -555,7 +555,7 @@ tracked here as Stages 8+ (Stages 1-7 above are the prior work, already shipped)
 | 15 | 5D — Customer status message templates + notification log | DONE |
 | 16 | 5E — Operating reports + CSV export | DONE |
 | 17 | 5F — Emergency/contact-dispatch button | DONE |
-| 18 | 5G — Delivery messaging (customer/rider/dispatcher) | NOT STARTED |
+| 18 | 5G — Delivery messaging (customer/rider/dispatcher) | DONE |
 
 Each stage: implement, typecheck, run meaningful tests (new + full existing suite),
 update this file with what was actually found/built/tested, update
@@ -1402,3 +1402,128 @@ of which contact methods a specific device supports beyond what `tel:`/
 phone/SMS handler configured will simply do nothing on click, which is the
 inherent, correct behavior of that link type rather than something to work
 around.
+
+## Stage 18 — 5G: Delivery messaging (DONE) — last of the numbered stages
+
+**What existed already**: per-job `TrackingLink` tokens (customer-facing,
+no login), the realtime hub (`RealtimeHub`, room-per-job/rider/dispatch
+broadcast), and `JobEvent` as the existing audit trail for job-lifecycle
+changes. Nothing for in-app chat, and nothing modeling an address-change
+request as a reviewable, auditable action distinct from just editing
+`Job.addressText` directly.
+
+**Schema** (additive only; backed up `dev.db` first as
+`dev.db.bak-messaging-20260910-190823`, verified Job=63/Rider=1 unchanged
+and both new tables at 0 rows after `db:prepare`):
+- `DeliveryMessage` — one row per chat message, `senderRole` (customer/
+  rider/dispatcher/system), optional `senderId`/`senderName`, `body`, and
+  three independent read flags (`readByCustomer`/`readByRider`/
+  `readByStaff`) so each side's unread state is tracked separately.
+- `AddressChangeRequest` — `requestedByRole`, `proposedAddressText`,
+  `status` (pending/approved/declined), `reviewedById`/`reviewedAt`. The
+  official `Job.addressText` is **never** touched by creating this row —
+  only an explicit staff approve action updates it, inside one transaction
+  with the new `JobEvent` audit entry.
+
+**Backend** (`apps/api/src/modules/delivery-messages.ts`, new): three
+parallel route groups sharing the same list/send/address-change logic —
+- Customer (public, via the tracking link token — no login): `GET`/`POST
+  /api/tracking/:token/messages`, `POST /api/tracking/:token/address-change`.
+  A revoked link is 410 for everything; an expired-but-not-revoked link
+  still allows reads (`open:false`) but returns 409 on writes — matching
+  the same "history stays visible, but you can't act on a dead link" rule
+  used for the tracking page itself.
+- Staff (`GET`/`POST /api/jobs/:id/messages`, plus
+  `GET /api/jobs/:id/address-change-requests` and per-request
+  `.../approve` / `.../decline`): read is admin/dispatcher/accountant/
+  viewer, write (send + approve/decline) is admin/dispatcher only.
+  Approve writes `Job.addressText` + a `JobEvent` + a confirming system
+  message, all inside one transaction; both approve/decline 409 if the
+  request isn't still `pending` (no double-review).
+- Rider (`GET`/`POST /api/bearer/jobs/:id/messages`,
+  `POST /api/bearer/jobs/:id/address-change`): 403 if the job isn't
+  assigned to that rider — checked on every request, not just the first.
+
+Shared safeguards: max message length 1000 chars (400 if exceeded); a
+sender-role rate limit of 15 messages per job per 60s (429 if exceeded);
+`open` is derived from the job's actual status
+(`!TERMINAL_JOB_STATUSES.includes(job.status)`) for staff/rider, and from
+`linkOpen && jobOpen` for the customer — history is always readable
+regardless, only sending closes. No phone numbers, PINs, or internal notes
+are ever included in a `DeliveryMessageDto`. A new `delivery_message`
+realtime event nudges staff/rider UIs to refetch immediately rather than
+waiting for their poll interval; the customer tracking page has no
+websocket, so it polls only.
+
+**Frontend**: one shared `DeliveryChat` component
+(`apps/web/src/components/delivery-chat.tsx`) used by all three roles —
+message list (right-aligned bubbles for the viewer's own messages, muted
+italic for system messages), quick-reply buttons, a send form, and an
+optional "Request address change" form — hidden behind a read-only note
+when the conversation is closed or the viewer is monitor-only. Wired in:
+- `track.tsx` (customer) — quick replies "I'm here" / "Please call me" /
+  "I need to change the landmark" / "I'm unavailable"; the address-change
+  form posts to the customer endpoint and shows "Waiting for dispatch to
+  confirm" until reviewed.
+- `rider-dashboard.tsx` (rider) — new `RiderJobChat`, inside a collapsible
+  "Messages" `<details>` on each job card; quick replies "Heading to you" /
+  "I've arrived" / "I cannot reach you" / "Please contact dispatch"; nudged
+  live via `useRealtime().subscribe(["delivery_message"], …)`.
+- `jobs.tsx` (dispatcher) — new `DispatcherJobChat`, behind a "Messages"
+  toggle on every job row (mirroring the existing Route-queue pattern),
+  showing any pending address-change request with "Confirm change"/
+  "Decline" buttons above the chat itself; confirming re-fetches both the
+  request list and the chat so the resulting system message appears
+  immediately without a manual refresh.
+
+**Tests**:
+- `apps/api/test/delivery-messages.test.ts` (12 new) — customer↔dispatcher
+  exchange with correct `senderName`/`isSelf`; rider 403'd out of another
+  rider's job (both read and write); accountant/viewer read-only (403 on
+  write); conversation closes on terminal job status for staff and rider
+  (409 write, `open:false` read); customer conversation closes on an
+  expired-but-not-revoked link (200 read / 409 write) and is fully 410 on a
+  revoked one; an address-change request does **not** touch
+  `Job.addressText` until approved, then does (asserted via raw Prisma
+  query, plus the `JobEvent` and system message); a declined request never
+  touches the address and can't be re-reviewed (409 on a second decision);
+  rider can also propose an address change; message length >1000 chars
+  rejected (400); a send burst eventually 429s; response JSON never
+  contains the job's PIN, the customer's phone, or the substring "phone".
+- `e2e/specs/delivery-messages.spec.ts` (new) — one end-to-end pass across
+  all three roles on a single job: customer sends a message and proposes
+  an address change from the public tracking page; dispatcher sees both,
+  confirms the address change (asserted against the API afterward that
+  `addressText` actually changed), and replies; rider (after signing out
+  of the dispatcher session first — `/login` redirects an
+  already-authenticated user instead of showing the form, so a real
+  sign-out is required between role switches in one test) sees the reply
+  and sends a quick reply; the customer's still-open tracking tab picks up
+  the rider's reply via its poll, with no page reload.
+
+**Verification run**: `npm run typecheck --workspaces` clean; `apps/api`
+vitest 122/122 (110 prior + 12 new); `apps/web` vitest 8/8; clean web
+build; full e2e suite, fresh `e2e-test.db`, 27/27 real specs passing
+serially (28th failure is the pre-existing stray `zz-debug.spec.ts` debug
+script, already flagged separately for removal — not part of this stage
+and not a regression).
+
+**Not done in this stage** (deliberate scope cuts, matching the spec's own
+"text-only initially" and "abuse protection... reasonable... limits"
+wording): no attachments/images; no per-viewer typing indicators; no
+admin-configurable rate-limit threshold (hardcoded at 15/60s); no separate
+"block this customer" abuse tool beyond the existing rate limit — a
+repeat-offender workflow would need a product decision on what "blocked"
+means for a walk-up/phone customer with no account, which is out of scope
+here. Offline/reconnecting state reuses the existing `useRealtime` status
+already surfaced elsewhere in the rider/dispatcher UI (Stage 10); the
+customer tracking page has no realtime channel at all (by design — no
+login, so no per-customer socket to authenticate), so for the customer
+"offline" is simply "the last poll failed", shown via the existing
+`conversation.error` message in `DeliveryChat`.
+
+This was the last of the numbered stages (8–18, covering items 1–5A–5G of
+the original request). Next: the closing instruction — renumber the
+existing Verification section and build out the expanded verification
+checklist across all of Stages 8–18. See the new
+"## Verification checklist (Stages 8–18)" section below.

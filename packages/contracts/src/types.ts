@@ -1,9 +1,11 @@
 import type {
+  AddressChangeStatus,
   CodStatus,
   FailureReason,
   JobSource,
   JobStatus,
   JobType,
+  MessageSenderRole,
   NotificationChannel,
   NotificationStatus,
   PayoutMethod,
@@ -553,6 +555,48 @@ export interface TrackingPublicDto {
   };
   statusHistory: { status: string; at: string }[];
   generatedAt: string;
+}
+
+/** One delivery-chat message (spec 5G). Never carries a phone number or the
+ *  delivery PIN — `senderName` is a role-appropriate label ("You"/
+ *  "Dispatch"/"Rider"/"Customer"), not a phone number, and is the only
+ *  identifying detail ever included. */
+export interface DeliveryMessageDto {
+  id: string;
+  jobId: string;
+  senderRole: MessageSenderRole;
+  /** true only for the message the current viewer themselves sent */
+  isSelf: boolean;
+  senderName: string;
+  body: string;
+  read: boolean;
+  createdAt: string;
+}
+
+export interface DeliveryMessagesDto {
+  jobId: string;
+  /** the delivery's own lifecycle status, so a closed conversation can show
+   *  why (delivered/cancelled/etc.) rather than just going silent */
+  jobStatus: JobStatus;
+  /** false once the job is terminal or (customer view only) the tracking
+   *  link has expired/been revoked — no new messages can be posted, but the
+   *  full history stays visible for anyone still authorized to see it. */
+  open: boolean;
+  messages: DeliveryMessageDto[];
+}
+
+/** A customer/rider's proposed new destination, awaiting dispatch review —
+ *  never applied to the job until explicitly approved (spec 5G). */
+export interface AddressChangeRequestDto {
+  id: string;
+  jobId: string;
+  requestedByRole: MessageSenderRole;
+  proposedAddressText: string;
+  note: string | null;
+  status: AddressChangeStatus;
+  reviewedByName: string | null;
+  reviewedAt: string | null;
+  createdAt: string;
 }
 
 /**

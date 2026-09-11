@@ -43,6 +43,7 @@ model User {
   recon     ReconDaily[]       @relation("reconResolver")
   pushSubscriptions PushSubscription[]
   codApprovals Job[]           @relation("codApprover")
+  addressChangeReviews AddressChangeRequest[] @relation("addressChangeReviewer")
 }
 
 /** One browser/device's opt-in Web Push subscription. A user may have several (multiple devices/browsers). */
@@ -316,6 +317,8 @@ model Job {
   stops     RouteStop[]
   payoutLines PayoutLine[]
   codEvents CodEvent[]
+  messages DeliveryMessage[]
+  addressChangeRequests AddressChangeRequest[]
 }
 
 enum CodStatus {
@@ -509,6 +512,63 @@ model TrackingLink {
   createdAt    DateTime  @default(now())
 
   @@index([expiresAt])
+}
+
+// ---------- Delivery messaging (spec 5G) ----------
+
+enum MessageSenderRole {
+  customer
+  rider
+  dispatcher
+  system
+}
+
+/** One chat message, always tied to exactly one delivery. Text-only,
+ *  never carries the delivery PIN or internal notes (the API never
+ *  constructs a message body from those fields — messages are always
+ *  either user-typed text or one of a small set of fixed system
+ *  announcements, e.g. an address-change decision). */
+model DeliveryMessage {
+  id             String            @id @default(cuid())
+  jobId          String
+  job            Job               @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  senderRole     MessageSenderRole
+  /** User.id for dispatcher, Rider.id for rider, null for customer/system */
+  senderId       String?
+  senderName     String?
+  body           String
+  readByCustomer Boolean           @default(false)
+  readByRider    Boolean           @default(false)
+  readByStaff    Boolean           @default(false)
+  createdAt      DateTime          @default(now())
+
+  @@index([jobId, createdAt])
+}
+
+enum AddressChangeStatus {
+  pending
+  approved
+  declined
+}
+
+/** A customer/rider proposing a new destination in chat is never applied
+ *  automatically — this row is the explicit review queue dispatch acts on;
+ *  only `approve()` (see delivery-messages.ts) ever writes to Job.addressText,
+ *  and it does so alongside a JobEvent, so the change is fully audited. */
+model AddressChangeRequest {
+  id                   String              @id @default(cuid())
+  jobId                String
+  job                  Job                 @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  requestedByRole      MessageSenderRole
+  proposedAddressText  String
+  note                 String?
+  status               AddressChangeStatus @default(pending)
+  reviewedById         String?
+  reviewedBy           User?               @relation("addressChangeReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
+  reviewedAt           DateTime?
+  createdAt            DateTime            @default(now())
+
+  @@index([jobId, status])
 }
 
 // ---------- Consent ----------
