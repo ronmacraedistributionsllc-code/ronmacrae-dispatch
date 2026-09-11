@@ -2261,3 +2261,26 @@ account/persistence beyond the 24h session token — that's Stage 25
 (sign-in/account linking), a deliberately separate, heavier flow (email
 verification, password reset, account claim) this stage doesn't attempt
 to front-run.
+
+## Infrastructure fix — e2e no longer shares a port with either live demo
+
+Small, standalone fix, done before starting Stage 23: `e2e/playwright.config.ts`
+moved its webServer from port 3000 to a dedicated 3900. Port 3000 was
+always shared with the LAN demo's own API server (behind the local HTTPS
+proxy on 8443) — every "reset the port before a clean e2e run" step
+(`lsof -ti:3000 | xargs kill`) was a live risk to whatever was actually
+running there, and it genuinely killed the LAN demo more than once across
+Stages 20-22 (each time caught and the demo restarted, but avoidable).
+The Cloudflare-tunnel demo's own API server (port 3001) was never
+collided with, but 3900 is clear of both, plus Vite's own dev-server
+default (5173) and the LAN proxy (8443) — nothing else in this repo uses
+it. No other file hardcoded port 3000 for e2e purposes (checked); the
+Vite dev-server proxy in `apps/web/vite.config.ts` targeting :3000 is a
+separate, unrelated local-dev-loop convenience (`npm run dev --workspace
+@ronmacrae/web` against a manually-started `npm run dev --workspace
+@ronmacrae/api` on the default port) and was left alone.
+
+**Verified**: full e2e suite (32/32) run clean on :3900 while both the
+LAN demo (:3000/:8443) and the Cloudflare tunnel demo (:3001) were left
+running the whole time — confirmed healthy immediately before and
+immediately after the e2e run, with no restart needed for either.

@@ -12,13 +12,23 @@ export default defineConfig({
   expect: { timeout: 15_000 },
   retries: process.env.CI ? 1 : 0,
   reporter: process.env.CI ? [["github"], ["html", { open: "never" }]] : "list",
+  // Port 3900, not 3000/3001: this repo's LAN demo (Stage A) runs its own
+  // API server on :3000 (behind a local HTTPS proxy on :8443) and the
+  // Cloudflare tunnel demo (Stage B) runs a second one on :3001 — both are
+  // long-lived, manually-started previews a person may be actively testing
+  // with. e2e used to share :3000 with the LAN demo, which meant every
+  // "reset the port before a clean e2e run" step could (and more than once
+  // did) kill that live preview out from under whoever was using it. A
+  // dedicated port removes the collision entirely rather than relying on
+  // remembering not to kill the wrong thing — see WORK_IN_PROGRESS.md's
+  // Stage 23 notes.
   use: {
-    baseURL: "http://localhost:3000",
+    baseURL: "http://localhost:3900",
   },
   webServer: {
     command: "npm run seed --workspace @ronmacrae/api && npm run dev --workspace @ronmacrae/api",
     cwd: repoRoot,
-    url: "http://localhost:3000/api/health",
+    url: "http://localhost:3900/api/health",
     timeout: 120_000,
     reuseExistingServer: !process.env.CI,
     env: {
@@ -33,7 +43,7 @@ export default defineConfig({
       SESSION_SECRET: process.env.SESSION_SECRET ?? "e2e-session-secret-0123456789",
       WEB_DIST: webDist,
       HOST: "127.0.0.1",
-      PORT: "3000",
+      PORT: "3900",
       LOG_LEVEL: "warn",
       // The whole suite's traffic — every test, every spec file, one long
       // serial run — shares a single IP (localhost), unlike real production
