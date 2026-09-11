@@ -290,7 +290,7 @@ export class JobNotifier {
 
   /** The very first customer notification: order placed, tracking link ready.
    *  Called once, the first time a job gets a tracking link (see
-   *  history.ts's createTrackingLinkInner) — never repeated on a later
+   *  history.ts's createTrackingLink) — never repeated on a later
    *  link refresh, which isn't a new order. */
   async forOrderCreated(ctxJob: JobNotifyContext & { ttlHours: number }): Promise<void> {
     const { job } = ctxJob;

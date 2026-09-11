@@ -46,16 +46,6 @@ export async function customerStatusHistory(
  * unexpired, unrevoked link is returned unchanged.
  */
 export async function createTrackingLink(ctx: AppCtx, jobId: string): Promise<TrackingLinkDto> {
-  console.log(`[DBG-TRACK] createTrackingLink jobId=${jobId.slice(0, 8)}`);
-  try {
-    return await createTrackingLinkInner(ctx, jobId);
-  } catch (err) {
-    console.log(`[DBG-TRACK] createTrackingLink FAILED: ${err instanceof Error ? err.message : String(err)}`);
-    throw err;
-  }
-}
-
-async function createTrackingLinkInner(ctx: AppCtx, jobId: string): Promise<TrackingLinkDto> {
   const job = await getJobRow(ctx, jobId);
   if (!job) throw httpErrors.createError(404, "Job not found");
   const existing = await ctx.prisma.trackingLink.findUnique({ where: { jobId } });
