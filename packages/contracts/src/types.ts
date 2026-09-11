@@ -1,6 +1,7 @@
 import type {
   AddressChangeStatus,
   CodStatus,
+  ConversationKind,
   CustomerIdentityStatus,
   FailureReason,
   JobSource,
@@ -611,18 +612,33 @@ export interface DuplicateCandidateDto {
   }[];
 }
 
-/** One delivery-chat message (spec 5G). Never carries a phone number or the
- *  delivery PIN — `senderName` is a role-appropriate label ("You"/
- *  "Dispatch"/"Rider"/"Customer"), not a phone number, and is the only
- *  identifying detail ever included. */
+/** One delivery-chat message, scoped to one of the three real pairwise
+ *  conversations (Stage 24, spec 5) — `conversationKind: null` means a
+ *  "legacy" message from before this stage's redesign, when every party
+ *  shared one merged thread; kept as a read-only archive, never guessed
+ *  into one of the three new conversations (see ConversationKind's own
+ *  doc comment). Never carries a phone number or the delivery PIN —
+ *  `senderName` is a role-appropriate label ("You"/"Dispatch"/"Rider"/
+ *  "Customer"), not a phone number, and is the only identifying detail
+ *  ever included. */
 export interface DeliveryMessageDto {
   id: string;
   jobId: string;
+  conversationKind: ConversationKind | null;
   senderRole: MessageSenderRole;
   /** true only for the message the current viewer themselves sent */
   isSelf: boolean;
   senderName: string;
   body: string;
+  /** Set once the message reached the *other* side of this conversation —
+   *  live immediately if they had a connected realtime socket at send
+   *  time (rider/staff), otherwise (customers are poll-only — this app
+   *  has no live push channel to them) on their next fetch, same trigger
+   *  as `read`. Meaningless (always false) on a message you sent
+   *  yourself — this is the recipient's receipt, not a sent-confirmation. */
+  delivered: boolean;
+  /** Set when the recipient's client actually loaded this conversation.
+   *  Same honest caveat as `delivered` for poll-only recipients. */
   read: boolean;
   createdAt: string;
 }
@@ -636,7 +652,28 @@ export interface DeliveryMessagesDto {
    *  link has expired/been revoked — no new messages can be posted, but the
    *  full history stays visible for anyone still authorized to see it. */
   open: boolean;
+  /** Which single conversation this list is — null only for the one
+   *  legacy-archive endpoint (pre-Stage-24 messages, read-only). */
+  conversationKind: ConversationKind | null;
   messages: DeliveryMessageDto[];
+}
+
+/** Unread-count + preview summary across every conversation a viewer can
+ *  see for one job — powers a tab/badge UI without fetching every
+ *  conversation's full message list (Stage 24). */
+export interface ConversationSummaryDto {
+  kind: ConversationKind;
+  /** false only for customer_rider on the staff side — staff may monitor
+   *  it (see ConversationsDto) but never post into a conversation they
+   *  aren't a party to. */
+  canWrite: boolean;
+  unreadCount: number;
+  lastMessage: { body: string; senderRole: MessageSenderRole; createdAt: string } | null;
+}
+
+export interface ConversationsDto {
+  jobId: string;
+  conversations: ConversationSummaryDto[];
 }
 
 /** A customer/rider's proposed new destination, awaiting dispatch review —

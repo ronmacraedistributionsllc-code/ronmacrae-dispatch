@@ -1,12 +1,13 @@
 import React, { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { API, JOB_SOURCES, JOB_STATUSES, RIDER_STAGE_LABELS, allowedTransitions } from "@ronmacrae/contracts";
-import type { AddressChangeRequestDto, DeliveryMessagesDto, JobSource, JobStatus, JobSummaryDto, RiderDto } from "@ronmacrae/contracts";
+import type { AddressChangeRequestDto, ConversationsDto, DeliveryMessagesDto, JobSource, JobStatus, JobSummaryDto, RiderDto } from "@ronmacrae/contracts";
 import { ApiError, apiFetch, formatMoney } from "../lib/api.js";
 import { useAuth } from "../lib/auth.js";
 import { JobOffersPanel } from "../components/job-offers-panel.js";
 import { ReadOnlyRiderQueue } from "../components/route-queue.js";
 import { DeliveryChat } from "../components/delivery-chat.js";
+import { ConversationTabs } from "../components/conversation-tabs.js";
 import { useRealtime } from "../lib/realtime.js";
 
 const STATUS_BADGE: Record<JobStatus, string> = {
@@ -395,7 +396,13 @@ function DispatcherJobChat({ jobId, canWrite }: { jobId: string; canWrite: boole
       }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["address-change-requests", jobId] });
-      void qc.invalidateQueries({ queryKey: ["delivery-chat", `staff-${jobId}`] });
+      void qc.invalidateQueries({ queryKey: ["conversations", `staff-${jobId}`] });
+      // An address-change decision fans out as a system message into
+      // whichever of this job's conversations it's relevant to (see
+      // sendSystemMessage in delivery-messages.ts) — every "staff-<job>-*"
+      // conversation query needs a refetch, not just one fixed key, since
+      // each conversation now has its own query key suffixed by kind.
+      void qc.invalidateQueries({ predicate: (q) => q.queryKey[0] === "delivery-chat" && String(q.queryKey[1]).startsWith(`staff-${jobId}-`) });
     },
   });
   const pending = (requests.data?.requests ?? []).filter((r) => r.status === "pending");
@@ -425,13 +432,26 @@ function DispatcherJobChat({ jobId, canWrite }: { jobId: string; canWrite: boole
           ))}
         </div>
       ) : null}
-      <DeliveryChat
-        queryKey={`staff-${jobId}`}
-        quickReplies={[]}
-        readOnly={!canWrite}
-        fetchMessages={() => apiFetch<DeliveryMessagesDto>(API.messages.list(jobId))}
-        sendMessage={(body) => apiFetch<DeliveryMessagesDto>(API.messages.send(jobId), { method: "POST", body: JSON.stringify({ body }) })}
-        onRealtimeNudge={(refetch) => subscribe(["delivery_message"], (msg) => { if (msg.type === "delivery_message" && msg.payload.jobId === jobId) refetch(); })}
+      <ConversationTabs
+        storageKey={`staff-${jobId}`}
+        fetchSummary={() => apiFetch<ConversationsDto>(API.messages.conversations(jobId))}
+        renderChat={({ kind, canWrite: conversationWritable }) => (
+          <DeliveryChat
+            queryKey={`staff-${jobId}-${kind}`}
+            quickReplies={[]}
+            // A conversation can be monitor-only in its own right (staff
+            // can never write into customer_rider, whichever they are),
+            // on top of this viewer's own role possibly being read-only
+            // (accountant/viewer) even for the conversations they could
+            // otherwise post into.
+            readOnly={!canWrite || !conversationWritable}
+            fetchMessages={() => apiFetch<DeliveryMessagesDto>(API.messages.list(jobId, kind))}
+            sendMessage={(body, clientToken) =>
+              apiFetch<DeliveryMessagesDto>(API.messages.send(jobId, kind), { method: "POST", body: JSON.stringify({ body, clientToken }) })
+            }
+            onRealtimeNudge={(refetch) => subscribe(["delivery_message"], (msg) => { if (msg.type === "delivery_message" && msg.payload.jobId === jobId) refetch(); })}
+          />
+        )}
       />
     </div>
   );

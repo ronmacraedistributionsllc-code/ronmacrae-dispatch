@@ -104,8 +104,12 @@ export const API = {
     get: (token: string) => `/api/tracking/${token}`,
     create: (jobId: string) => `/api/tracking/${jobId}`,
     revoke: (token: string) => `/api/tracking/${token}/revoke`,
-    /** delivery messaging, customer side — spec 5G, tracking-link-gated */
-    messages: (token: string) => `/api/tracking/${token}/messages`,
+    /** delivery messaging, customer side — spec 5, tracking-link-gated.
+     *  `kind` is a ConversationKind (Stage 24) the customer is a party to
+     *  (customer_dispatch or customer_rider) — the literal "legacy" path
+     *  reaches the read-only, pre-Stage-24 archive instead. */
+    messages: (token: string, kind: string) => `/api/tracking/${token}/messages/${kind}`,
+    conversations: (token: string) => `/api/tracking/${token}/conversations`,
     addressChange: (token: string) => `/api/tracking/${token}/address-change`,
   },
 
@@ -119,16 +123,21 @@ export const API = {
     get: "/api/customer-dashboard",
   },
 
-  /** delivery messaging (spec 5G) — staff side */
+  /** delivery messaging (spec 5) — staff side. Staff may read all three
+   *  ConversationKinds (customer_rider is monitor-only, see
+   *  ConversationSummaryDto.canWrite) but only ever writes into
+   *  customer_dispatch/rider_dispatch. */
   messages: {
-    list: (jobId: string) => `/api/jobs/${jobId}/messages`,
-    send: (jobId: string) => `/api/jobs/${jobId}/messages`,
+    list: (jobId: string, kind: string) => `/api/jobs/${jobId}/messages/${kind}`,
+    send: (jobId: string, kind: string) => `/api/jobs/${jobId}/messages/${kind}`,
+    conversations: (jobId: string) => `/api/jobs/${jobId}/conversations`,
     addressChangeRequests: (jobId: string) => `/api/jobs/${jobId}/address-change-requests`,
     approveAddressChange: (jobId: string, reqId: string) => `/api/jobs/${jobId}/address-change-requests/${reqId}/approve`,
     declineAddressChange: (jobId: string, reqId: string) => `/api/jobs/${jobId}/address-change-requests/${reqId}/decline`,
-    /** rider side — same shape, own job only */
-    bearerList: (jobId: string) => `/api/bearer/jobs/${jobId}/messages`,
-    bearerSend: (jobId: string) => `/api/bearer/jobs/${jobId}/messages`,
+    /** rider side — same shape, own job only, customer_rider/rider_dispatch */
+    bearerList: (jobId: string, kind: string) => `/api/bearer/jobs/${jobId}/messages/${kind}`,
+    bearerSend: (jobId: string, kind: string) => `/api/bearer/jobs/${jobId}/messages/${kind}`,
+    bearerConversations: (jobId: string) => `/api/bearer/jobs/${jobId}/conversations`,
     bearerAddressChange: (jobId: string) => `/api/bearer/jobs/${jobId}/address-change`,
   },
 

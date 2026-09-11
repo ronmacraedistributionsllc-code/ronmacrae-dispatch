@@ -9,7 +9,11 @@ export interface DeliveryChatProps {
   /** unique key for this conversation's query cache (e.g. `chat-${jobId}` or `chat-${token}`) */
   queryKey: string;
   fetchMessages: () => Promise<DeliveryMessagesDto>;
-  sendMessage: (body: string) => Promise<DeliveryMessagesDto>;
+  /** `clientToken` is a fresh id generated per send attempt (see submit()
+   *  below) — reused automatically across this mutation's own retries, so
+   *  the server can recognize (and no-op) a retried send instead of
+   *  creating a duplicate message. */
+  sendMessage: (body: string, clientToken: string) => Promise<DeliveryMessagesDto>;
   quickReplies: string[];
   /** ms between polls — customer/rider/staff all poll as the baseline; staff/rider
    *  also get an immediate nudge from the realtime hub (see rider-dashboard.tsx /
@@ -47,8 +51,11 @@ export function DeliveryChat({ queryKey, fetchMessages, sendMessage, quickReplie
     refetchInterval: pollMs,
   });
   const send = useMutation({
-    mutationFn: (body: string) => sendMessage(body),
+    mutationFn: (vars: { body: string; clientToken: string }) => sendMessage(vars.body, vars.clientToken),
     onSuccess: (data) => qc.setQueryData(["delivery-chat", queryKey], data),
+    // Retries reuse the same mutationFn call (so the same clientToken) —
+    // a flaky send is retried, never silently duplicated on the server.
+    retry: 2,
   });
   const proposeAddress = useMutation({
     mutationFn: (address: string) => addressChange!.onPropose(address),
@@ -74,7 +81,7 @@ export function DeliveryChat({ queryKey, fetchMessages, sendMessage, quickReplie
     const body = draft.trim();
     if (!body) return;
     setDraft("");
-    send.mutate(body);
+    send.mutate({ body, clientToken: crypto.randomUUID() });
   };
 
   const open = conversation.data?.open ?? true;
@@ -91,7 +98,10 @@ export function DeliveryChat({ queryKey, fetchMessages, sendMessage, quickReplie
             <div className={`max-w-[80%] rounded-lg px-2.5 py-1.5 text-sm ${m.isSelf ? "bg-brand text-white" : m.senderRole === "system" ? "bg-zinc-800/60 italic text-zinc-400" : "bg-zinc-800 text-zinc-100"}`}>
               {m.senderRole !== "system" ? <p className="text-[10px] font-medium uppercase tracking-wide opacity-70">{m.senderName}</p> : null}
               <p className="whitespace-pre-wrap break-words">{m.body}</p>
-              <p className="mt-0.5 text-[10px] opacity-60">{new Date(m.createdAt).toLocaleTimeString("en-JM", { hour: "numeric", minute: "2-digit" })}</p>
+              <p className="mt-0.5 text-[10px] opacity-60">
+                {new Date(m.createdAt).toLocaleTimeString("en-JM", { hour: "numeric", minute: "2-digit" })}
+                {m.isSelf ? ` · ${m.read ? "Read" : m.delivered ? "Delivered" : "Sent"}` : ""}
+              </p>
             </div>
           </div>
         ))}
@@ -108,7 +118,7 @@ export function DeliveryChat({ queryKey, fetchMessages, sendMessage, quickReplie
         <>
           <div className="flex flex-wrap gap-1.5">
             {quickReplies.map((q) => (
-              <button key={q} type="button" className="btn !px-2 !py-0.5 text-xs" disabled={send.isPending} onClick={() => send.mutate(q)}>
+              <button key={q} type="button" className="btn !px-2 !py-0.5 text-xs" disabled={send.isPending} onClick={() => send.mutate({ body: q, clientToken: crypto.randomUUID() })}>
                 {q}
               </button>
             ))}

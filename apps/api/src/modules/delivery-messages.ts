@@ -3,11 +3,20 @@ import { z } from "zod";
 import { httpErrors } from "@fastify/sensible";
 import type { AppCtx } from "../ctx.js";
 import { TERMINAL_JOB_STATUSES, roomForDispatch, roomForJob } from "@ronmacrae/contracts";
-import type { AddressChangeRequestDto, DeliveryMessageDto, DeliveryMessagesDto, MessageSenderRole } from "@ronmacrae/contracts";
+import type {
+  AddressChangeRequestDto,
+  ConversationKind,
+  ConversationSummaryDto,
+  ConversationsDto,
+  DeliveryMessageDto,
+  DeliveryMessagesDto,
+  MessageSenderRole,
+} from "@ronmacrae/contracts";
+import { CONVERSATION_KINDS } from "@ronmacrae/contracts";
 
 const MAX_MESSAGE_LENGTH = 1000;
-/** Abuse protection: a burst cap per job per sending role, not a hard global
- *  limit — a busy conversation between three real people over a live
+/** Abuse protection: a burst cap per job+conversation+sending role, not a
+ *  hard global limit — a busy exchange between two real people over a live
  *  delivery is still well under this in normal use. */
 const RATE_LIMIT_WINDOW_MS = 60_000;
 const RATE_LIMIT_MAX = 15;
@@ -19,33 +28,80 @@ const SenderRoleLabel: Record<MessageSenderRole, string> = {
   system: "System",
 };
 
+/** Viewer's own role in the *messaging* sense: which side of a
+ *  conversation they're on. Staff always messages as "dispatcher" here
+ *  regardless of their actual admin/dispatcher/accountant/viewer role. */
+type MessagingRole = "customer" | "rider" | "dispatcher";
+
 interface ViewerIdentity {
-  role: MessageSenderRole;
-  /** User.id for dispatcher, Rider.id for rider, null for customer/system */
+  role: MessagingRole;
+  /** User.id for dispatcher, Rider.id for rider, null for customer */
   id: string | null;
 }
 
-function messageToDto(
-  row: { id: string; jobId: string; senderRole: string; senderId: string | null; body: string; readByCustomer: boolean; readByRider: boolean; readByStaff: boolean; createdAt: Date },
-  viewer: ViewerIdentity,
-): DeliveryMessageDto {
+/** Which conversations each side may read/write. Staff may additionally
+ *  *read* customer_rider (monitor-only — see canWriteKinds) even though
+ *  they're never a party to it. */
+const PARTY_KINDS: Record<MessagingRole, ConversationKind[]> = {
+  customer: ["customer_dispatch", "customer_rider"],
+  rider: ["customer_rider", "rider_dispatch"],
+  dispatcher: ["customer_dispatch", "rider_dispatch"],
+};
+const STAFF_MONITOR_KINDS: ConversationKind[] = ["customer_dispatch", "customer_rider", "rider_dispatch"];
+
+function assertKind(kind: string): ConversationKind {
+  if (!(CONVERSATION_KINDS as readonly string[]).includes(kind)) {
+    throw httpErrors.createError(404, "Unknown conversation");
+  }
+  return kind as ConversationKind;
+}
+
+function readableKinds(viewer: ViewerIdentity): ConversationKind[] {
+  return viewer.role === "dispatcher" ? STAFF_MONITOR_KINDS : PARTY_KINDS[viewer.role];
+}
+
+function assertReadable(viewer: ViewerIdentity, kind: ConversationKind): void {
+  if (!readableKinds(viewer).includes(kind)) throw httpErrors.createError(404, "Unknown conversation");
+}
+
+function assertWritable(viewer: ViewerIdentity, kind: ConversationKind): void {
+  if (!PARTY_KINDS[viewer.role].includes(kind)) {
+    throw httpErrors.createError(403, "You can only send messages in a conversation you're a party to");
+  }
+}
+
+type MessageRow = {
+  id: string;
+  jobId: string;
+  conversationKind: string | null;
+  senderRole: string;
+  senderId: string | null;
+  body: string;
+  deliveredAt: Date | null;
+  readAt: Date | null;
+  createdAt: Date;
+};
+
+function messageToDto(row: MessageRow, viewer: ViewerIdentity): DeliveryMessageDto {
   const senderRole = row.senderRole as MessageSenderRole;
   // For dispatcher/rider, a job can change hands (reassignment, a different
   // staff member responding) — compare the actual sender id, not just the
   // role, so an old message from a previous rider/staff member never shows
   // as "You" to whoever has the job now. Customer has no stored senderId
   // (there's only ever one customer per job), so role alone is unambiguous.
-  const isSelf =
-    senderRole === viewer.role && (senderRole === "customer" || senderRole === "system" ? true : row.senderId === viewer.id);
-  const read = viewer.role === "customer" ? row.readByCustomer : viewer.role === "rider" ? row.readByRider : true;
+  // A "system" message is never anyone's own — viewer.role is never
+  // "system" (see MessagingRole).
+  const isSelf = senderRole === viewer.role && (senderRole === "customer" ? true : row.senderId === viewer.id);
   return {
     id: row.id,
     jobId: row.jobId,
+    conversationKind: (row.conversationKind as ConversationKind | null) ?? null,
     senderRole,
     isSelf,
     senderName: isSelf ? "You" : SenderRoleLabel[senderRole],
     body: row.body,
-    read,
+    delivered: row.deliveredAt !== null,
+    read: row.readAt !== null,
     createdAt: row.createdAt.toISOString(),
   };
 }
@@ -74,12 +130,12 @@ function addressChangeToDto(row: {
   };
 }
 
-const SendBody = z.object({ body: z.string().trim().min(1).max(MAX_MESSAGE_LENGTH) });
+const SendBody = z.object({ body: z.string().trim().min(1).max(MAX_MESSAGE_LENGTH), clientToken: z.string().max(100).optional() });
 const AddressChangeBody = z.object({ proposedAddressText: z.string().trim().min(1).max(300), note: z.string().max(300).optional().or(z.literal("")).nullable() });
 
-async function assertNotRateLimited(ctx: AppCtx, jobId: string, senderRole: MessageSenderRole): Promise<void> {
+async function assertNotRateLimited(ctx: AppCtx, jobId: string, kind: ConversationKind, senderRole: MessageSenderRole): Promise<void> {
   const since = new Date(Date.now() - RATE_LIMIT_WINDOW_MS);
-  const count = await ctx.prisma.deliveryMessage.count({ where: { jobId, senderRole, createdAt: { gte: since } } });
+  const count = await ctx.prisma.deliveryMessage.count({ where: { jobId, conversationKind: kind, senderRole, createdAt: { gte: since } } });
   if (count >= RATE_LIMIT_MAX) {
     throw httpErrors.createError(429, "Too many messages sent recently — please wait a moment before sending another.");
   }
@@ -101,52 +157,126 @@ function assertMessagingBusiness(actorOrViewer: { role: string; businessId?: str
   }
 }
 
+/** A live realtime socket connected right now for the *other* side of a
+ *  conversation, if any — used only to decide whether a fresh message can
+ *  honestly be marked "delivered" immediately (see DeliveryMessageDto's
+ *  own doc comment on why customers never get this: they have no live
+ *  channel in this app, poll-only). */
+function recipientHasLiveSocket(ctx: AppCtx, kind: ConversationKind, senderRole: MessageSenderRole, riderId: string | null): boolean {
+  if (senderRole === "customer" || senderRole === "system") return false; // recipient side has no socket concept here
+  if (kind === "customer_rider") return false; // the recipient is the customer (poll-only) or, if rider sent it, also the customer
+  // customer_dispatch: recipient is staff (dispatch room presence, not tracked per-client here — treated as "not verifiable live", conservative)
+  // rider_dispatch: recipient is whichever side didn't send it
+  if (kind === "rider_dispatch" && senderRole === "dispatcher" && riderId) {
+    return Boolean(ctx.hub.clientForRider(riderId));
+  }
+  return false;
+}
+
 async function sendMessage(
   ctx: AppCtx,
   jobId: string,
   businessId: string,
+  kind: ConversationKind,
   senderRole: MessageSenderRole,
   senderId: string | null,
   body: string,
-): Promise<{ id: string; jobId: string; senderRole: string; senderId: string | null; body: string; readByCustomer: boolean; readByRider: boolean; readByStaff: boolean; createdAt: Date }> {
-  await assertNotRateLimited(ctx, jobId, senderRole);
+  riderId: string | null,
+  clientToken?: string,
+): Promise<MessageRow> {
+  if (clientToken) {
+    const existing = await ctx.prisma.deliveryMessage.findUnique({
+      where: { jobId_conversationKind_clientToken: { jobId, conversationKind: kind, clientToken } },
+    });
+    if (existing) return existing; // retry of an already-sent message — never a duplicate
+  }
+  await assertNotRateLimited(ctx, jobId, kind, senderRole);
+  const deliveredNow = recipientHasLiveSocket(ctx, kind, senderRole, riderId);
   const row = await ctx.prisma.deliveryMessage.create({
     data: {
       jobId,
+      conversationKind: kind,
       senderRole,
       senderId,
       body,
-      readByCustomer: senderRole === "customer",
-      readByRider: senderRole === "rider",
-      readByStaff: senderRole === "dispatcher" || senderRole === "system",
+      deliveredAt: deliveredNow ? new Date() : null,
+      clientToken: clientToken || null,
     },
   });
   ctx.hub.broadcastMany([roomForDispatch(businessId), roomForJob(jobId)], {
     type: "delivery_message",
-    payload: { jobId, id: row.id, senderRole },
+    payload: { jobId, id: row.id, conversationKind: kind, senderRole },
   });
   return row;
 }
 
-/** GET a job's conversation for one viewer, marking everyone else's messages
- *  as read by that viewer along the way. */
-async function listMessages(ctx: AppCtx, jobId: string, viewer: ViewerIdentity, open: boolean): Promise<DeliveryMessagesDto> {
+/** Fans a system announcement (an address-change decision) out to every
+ *  conversation it's actually relevant to: the customer always needs to
+ *  know (customer_dispatch), and the rider does too, for navigation, if
+ *  one is currently assigned (rider_dispatch). Never customer_rider —
+ *  that's not the confirmed-operational-change channel. */
+async function sendSystemMessage(ctx: AppCtx, jobId: string, businessId: string, riderId: string | null, body: string): Promise<void> {
+  const kinds: ConversationKind[] = riderId ? ["customer_dispatch", "rider_dispatch"] : ["customer_dispatch"];
+  for (const kind of kinds) {
+    await ctx.prisma.deliveryMessage.create({ data: { jobId, conversationKind: kind, senderRole: "system", body } });
+  }
+  ctx.hub.broadcastMany([roomForDispatch(businessId), roomForJob(jobId)], { type: "delivery_message", payload: { jobId, senderRole: "system" } });
+}
+
+/** GET one conversation for one viewer. `marksRead` is false for staff
+ *  monitoring customer_rider — they aren't a party to it, so their
+ *  viewing it must never register as "the other side has read this" (that
+ *  concept only applies between the conversation's own two sides). */
+async function listMessages(ctx: AppCtx, jobId: string, kind: ConversationKind, viewer: ViewerIdentity, open: boolean, marksRead: boolean): Promise<DeliveryMessagesDto> {
   const job = await ctx.prisma.job.findUnique({ where: { id: jobId }, select: { status: true } });
   if (!job) throw httpErrors.createError(404, "Job not found");
-  const rows = await ctx.prisma.deliveryMessage.findMany({ where: { jobId }, orderBy: { createdAt: "asc" } });
-  const readField = viewer.role === "customer" ? "readByCustomer" : viewer.role === "rider" ? "readByRider" : viewer.role === "dispatcher" ? "readByStaff" : null;
-  if (readField) {
-    const unreadIds = rows.filter((r) => !r[readField] && r.senderRole !== viewer.role).map((r) => r.id);
+  const rows = await ctx.prisma.deliveryMessage.findMany({ where: { jobId, conversationKind: kind }, orderBy: { createdAt: "asc" } });
+  if (marksRead) {
+    const now = new Date();
+    const unreadIds = rows.filter((r) => r.senderRole !== viewer.role && r.readAt === null).map((r) => r.id);
     if (unreadIds.length > 0) {
-      await ctx.prisma.deliveryMessage.updateMany({ where: { id: { in: unreadIds } }, data: { [readField]: true } });
+      await ctx.prisma.deliveryMessage.updateMany({ where: { id: { in: unreadIds } }, data: { readAt: now, deliveredAt: now } });
+      for (const r of rows) if (unreadIds.includes(r.id)) { r.readAt = now; r.deliveredAt = now; }
     }
   }
   return {
     jobId,
     jobStatus: job.status,
     open,
+    conversationKind: kind,
     messages: rows.map((r) => messageToDto(r, viewer)),
   };
+}
+
+/** GET the pre-Stage-24 shared-thread archive — read-only, no new
+ *  messages ever land here again. Visible to everyone who could see the
+ *  old shared thread (customer, the assigned rider, staff). */
+async function listLegacyMessages(ctx: AppCtx, jobId: string, viewer: ViewerIdentity, open: boolean): Promise<DeliveryMessagesDto> {
+  const job = await ctx.prisma.job.findUnique({ where: { id: jobId }, select: { status: true } });
+  if (!job) throw httpErrors.createError(404, "Job not found");
+  const rows = await ctx.prisma.deliveryMessage.findMany({ where: { jobId, conversationKind: null }, orderBy: { createdAt: "asc" } });
+  return { jobId, jobStatus: job.status, open, conversationKind: null, messages: rows.map((r) => messageToDto(r, viewer)) };
+}
+
+async function conversationsSummary(ctx: AppCtx, jobId: string, viewer: ViewerIdentity): Promise<ConversationsDto> {
+  const kinds = readableKinds(viewer);
+  const writable = new Set(PARTY_KINDS[viewer.role]);
+  const conversations: ConversationSummaryDto[] = [];
+  for (const kind of kinds) {
+    const [unreadCount, last] = await Promise.all([
+      ctx.prisma.deliveryMessage.count({ where: { jobId, conversationKind: kind, senderRole: { not: viewer.role }, readAt: null } }),
+      ctx.prisma.deliveryMessage.findFirst({ where: { jobId, conversationKind: kind }, orderBy: { createdAt: "desc" } }),
+    ]);
+    conversations.push({
+      kind,
+      canWrite: writable.has(kind),
+      // A monitor (staff on customer_rider) never registers an "unread"
+      // badge for a conversation they aren't a party to.
+      unreadCount: writable.has(kind) ? unreadCount : 0,
+      lastMessage: last ? { body: last.body, senderRole: last.senderRole as MessageSenderRole, createdAt: last.createdAt.toISOString() } : null,
+    });
+  }
+  return { jobId, conversations };
 }
 
 export async function deliveryMessageRoutes(app: FastifyInstance, ctx: AppCtx): Promise<void> {
@@ -156,39 +286,52 @@ export async function deliveryMessageRoutes(app: FastifyInstance, ctx: AppCtx): 
   // ---------------------------------------------------------------------
   // Customer side — gated entirely by the tracking token, never a login.
   // ---------------------------------------------------------------------
-  async function resolveCustomerLink(token: string): Promise<{ jobId: string; businessId: string; open: boolean }> {
+  async function resolveCustomerLink(token: string): Promise<{ jobId: string; businessId: string; riderId: string | null; open: boolean }> {
     const link = await ctx.prisma.trackingLink.findUnique({ where: { token } });
     if (!link) throw httpErrors.createError(410, "This tracking link is no longer valid");
     if (link.revoked) throw httpErrors.createError(410, "This tracking link has been revoked");
-    const job = await ctx.prisma.job.findUnique({ where: { id: link.jobId }, select: { status: true, businessId: true } });
+    const job = await ctx.prisma.job.findUnique({ where: { id: link.jobId }, select: { status: true, businessId: true, riderId: true } });
     if (!job) throw httpErrors.createError(410, "This tracking link is no longer valid");
     const linkOpen = link.expiresAt > new Date();
     const jobOpen = !TERMINAL_JOB_STATUSES.includes(job.status);
-    return { jobId: link.jobId, businessId: job.businessId, open: linkOpen && jobOpen };
+    return { jobId: link.jobId, businessId: job.businessId, riderId: job.riderId, open: linkOpen && jobOpen };
   }
 
-  app.get<{ Params: { token: string } }>("/api/tracking/:token/messages", async (req, reply) => {
+  app.get<{ Params: { token: string; kind: string } }>("/api/tracking/:token/messages/:kind", async (req, reply) => {
     reply.header("cache-control", "no-store");
     const { jobId, open } = await resolveCustomerLink(req.params.token);
-    return listMessages(ctx, jobId, { role: "customer", id: null }, open);
+    const viewer: ViewerIdentity = { role: "customer", id: null };
+    if (req.params.kind === "legacy") return listLegacyMessages(ctx, jobId, viewer, open);
+    const kind = assertKind(req.params.kind);
+    assertReadable(viewer, kind);
+    return listMessages(ctx, jobId, kind, viewer, open, true);
   });
 
-  app.post<{ Params: { token: string } }>("/api/tracking/:token/messages", async (req) => {
-    const { jobId, businessId, open } = await resolveCustomerLink(req.params.token);
+  app.post<{ Params: { token: string; kind: string } }>("/api/tracking/:token/messages/:kind", async (req) => {
+    const { jobId, businessId, riderId, open } = await resolveCustomerLink(req.params.token);
     if (!open) throw httpErrors.createError(409, "This delivery's conversation is closed");
+    const viewer: ViewerIdentity = { role: "customer", id: null };
+    const kind = assertKind(req.params.kind);
+    assertWritable(viewer, kind);
     const body = SendBody.parse(req.body);
-    await sendMessage(ctx, jobId, businessId, "customer", null, body.body);
-    return listMessages(ctx, jobId, { role: "customer", id: null }, open);
+    await sendMessage(ctx, jobId, businessId, kind, "customer", null, body.body, riderId, body.clientToken);
+    return listMessages(ctx, jobId, kind, viewer, open, true);
+  });
+
+  app.get<{ Params: { token: string } }>("/api/tracking/:token/conversations", async (req, reply) => {
+    reply.header("cache-control", "no-store");
+    const { jobId } = await resolveCustomerLink(req.params.token);
+    return conversationsSummary(ctx, jobId, { role: "customer", id: null });
   });
 
   app.post<{ Params: { token: string } }>("/api/tracking/:token/address-change", async (req) => {
-    const { jobId, businessId, open } = await resolveCustomerLink(req.params.token);
+    const { jobId, businessId, riderId, open } = await resolveCustomerLink(req.params.token);
     if (!open) throw httpErrors.createError(409, "This delivery's conversation is closed");
     const body = AddressChangeBody.parse(req.body);
     const request = await ctx.prisma.addressChangeRequest.create({
       data: { jobId, requestedByRole: "customer", proposedAddressText: body.proposedAddressText, note: body.note || null },
     });
-    await sendMessage(ctx, jobId, businessId, "system", null, `Customer requested a new delivery address: "${body.proposedAddressText}". Waiting for dispatch to confirm.`);
+    await sendSystemMessage(ctx, jobId, businessId, riderId, `Customer requested a new delivery address: "${body.proposedAddressText}". Waiting for dispatch to confirm.`);
     await ctx.audit.record({ id: null, role: "customer" }, "address_change.request", "job", jobId, { requestId: request.id });
     return addressChangeToDto({ ...request, reviewedBy: null });
   });
@@ -196,19 +339,35 @@ export async function deliveryMessageRoutes(app: FastifyInstance, ctx: AppCtx): 
   // ---------------------------------------------------------------------
   // Staff side — monitor (all 4 staff roles) / respond+resolve (admin/dispatcher)
   // ---------------------------------------------------------------------
-  app.get<{ Params: { id: string } }>("/api/jobs/:id/messages", { preHandler: staffRead }, async (req) => {
+  app.get<{ Params: { id: string; kind: string } }>("/api/jobs/:id/messages/:kind", { preHandler: staffRead }, async (req) => {
     const job = await loadJobForMessaging(ctx, req.params.id);
     assertMessagingBusiness({ role: req.user!.role, businessId: req.user!.businessId }, job.businessId);
-    return listMessages(ctx, req.params.id, { role: "dispatcher", id: req.user!.sub }, !TERMINAL_JOB_STATUSES.includes(job.status));
+    const viewer: ViewerIdentity = { role: "dispatcher", id: req.user!.sub };
+    if (req.params.kind === "legacy") return listLegacyMessages(ctx, req.params.id, viewer, !TERMINAL_JOB_STATUSES.includes(job.status));
+    const kind = assertKind(req.params.kind);
+    assertReadable(viewer, kind);
+    // A dispatcher/admin monitoring customer_rider never registers a
+    // read receipt on a conversation they aren't a party to.
+    const marksRead = PARTY_KINDS.dispatcher.includes(kind);
+    return listMessages(ctx, req.params.id, kind, viewer, !TERMINAL_JOB_STATUSES.includes(job.status), marksRead);
   });
 
-  app.post<{ Params: { id: string } }>("/api/jobs/:id/messages", { preHandler: staffWrite }, async (req) => {
+  app.post<{ Params: { id: string; kind: string } }>("/api/jobs/:id/messages/:kind", { preHandler: staffWrite }, async (req) => {
     const job = await loadJobForMessaging(ctx, req.params.id);
     assertMessagingBusiness({ role: req.user!.role, businessId: req.user!.businessId }, job.businessId);
     if (TERMINAL_JOB_STATUSES.includes(job.status)) throw httpErrors.createError(409, "This delivery's conversation is closed");
+    const viewer: ViewerIdentity = { role: "dispatcher", id: req.user!.sub };
+    const kind = assertKind(req.params.kind);
+    assertWritable(viewer, kind);
     const body = SendBody.parse(req.body);
-    await sendMessage(ctx, req.params.id, job.businessId, "dispatcher", req.user!.sub, body.body);
-    return listMessages(ctx, req.params.id, { role: "dispatcher", id: req.user!.sub }, true);
+    await sendMessage(ctx, req.params.id, job.businessId, kind, "dispatcher", req.user!.sub, body.body, job.riderId, body.clientToken);
+    return listMessages(ctx, req.params.id, kind, viewer, true, true);
+  });
+
+  app.get<{ Params: { id: string } }>("/api/jobs/:id/conversations", { preHandler: staffRead }, async (req) => {
+    const job = await loadJobForMessaging(ctx, req.params.id);
+    assertMessagingBusiness({ role: req.user!.role, businessId: req.user!.businessId }, job.businessId);
+    return conversationsSummary(ctx, req.params.id, { role: "dispatcher", id: req.user!.sub });
   });
 
   app.get<{ Params: { id: string } }>("/api/jobs/:id/address-change-requests", { preHandler: staffRead }, async (req) => {
@@ -249,7 +408,7 @@ export async function deliveryMessageRoutes(app: FastifyInstance, ctx: AppCtx): 
         include: { reviewedBy: { select: { name: true } } },
       });
     });
-    await sendMessage(ctx, req.params.id, job.businessId, "system", null, `Dispatch confirmed the new delivery address: "${request.proposedAddressText}".`);
+    await sendSystemMessage(ctx, req.params.id, job.businessId, job.riderId, `Dispatch confirmed the new delivery address: "${request.proposedAddressText}".`);
     await ctx.audit.record({ id: req.user!.sub, role: req.user!.role }, "address_change.approve", "job", req.params.id, { requestId: request.id });
     return addressChangeToDto(updated);
   });
@@ -266,7 +425,7 @@ export async function deliveryMessageRoutes(app: FastifyInstance, ctx: AppCtx): 
       data: { status: "declined", reviewedById: req.user!.sub, reviewedAt: new Date(), note: body.note || request.note },
       include: { reviewedBy: { select: { name: true } } },
     });
-    await sendMessage(ctx, req.params.id, job.businessId, "system", null, "Dispatch did not confirm the requested address change. The delivery address is unchanged.");
+    await sendSystemMessage(ctx, req.params.id, job.businessId, job.riderId, "Dispatch did not confirm the requested address change. The delivery address is unchanged.");
     await ctx.audit.record({ id: req.user!.sub, role: req.user!.role }, "address_change.decline", "job", req.params.id, { requestId: request.id });
     return addressChangeToDto(updated);
   });
@@ -278,19 +437,32 @@ export async function deliveryMessageRoutes(app: FastifyInstance, ctx: AppCtx): 
     if (job.riderId !== req.user!.riderId) throw httpErrors.createError(403, "Not your job");
   }
 
-  app.get<{ Params: { id: string } }>("/api/bearer/jobs/:id/messages", { preHandler: ctx.requireRider }, async (req) => {
+  app.get<{ Params: { id: string; kind: string } }>("/api/bearer/jobs/:id/messages/:kind", { preHandler: ctx.requireRider }, async (req) => {
     const job = await loadJobForMessaging(ctx, req.params.id);
     assertOwnJob(req, job);
-    return listMessages(ctx, req.params.id, { role: "rider", id: req.user!.riderId! }, !TERMINAL_JOB_STATUSES.includes(job.status));
+    const viewer: ViewerIdentity = { role: "rider", id: req.user!.riderId! };
+    if (req.params.kind === "legacy") return listLegacyMessages(ctx, req.params.id, viewer, !TERMINAL_JOB_STATUSES.includes(job.status));
+    const kind = assertKind(req.params.kind);
+    assertReadable(viewer, kind);
+    return listMessages(ctx, req.params.id, kind, viewer, !TERMINAL_JOB_STATUSES.includes(job.status), true);
   });
 
-  app.post<{ Params: { id: string } }>("/api/bearer/jobs/:id/messages", { preHandler: ctx.requireRider }, async (req) => {
+  app.post<{ Params: { id: string; kind: string } }>("/api/bearer/jobs/:id/messages/:kind", { preHandler: ctx.requireRider }, async (req) => {
     const job = await loadJobForMessaging(ctx, req.params.id);
     assertOwnJob(req, job);
     if (TERMINAL_JOB_STATUSES.includes(job.status)) throw httpErrors.createError(409, "This delivery's conversation is closed");
+    const viewer: ViewerIdentity = { role: "rider", id: req.user!.riderId! };
+    const kind = assertKind(req.params.kind);
+    assertWritable(viewer, kind);
     const body = SendBody.parse(req.body);
-    await sendMessage(ctx, req.params.id, job.businessId, "rider", req.user!.riderId!, body.body);
-    return listMessages(ctx, req.params.id, { role: "rider", id: req.user!.riderId! }, true);
+    await sendMessage(ctx, req.params.id, job.businessId, kind, "rider", req.user!.riderId!, body.body, job.riderId, body.clientToken);
+    return listMessages(ctx, req.params.id, kind, viewer, true, true);
+  });
+
+  app.get<{ Params: { id: string } }>("/api/bearer/jobs/:id/conversations", { preHandler: ctx.requireRider }, async (req) => {
+    const job = await loadJobForMessaging(ctx, req.params.id);
+    assertOwnJob(req, job);
+    return conversationsSummary(ctx, req.params.id, { role: "rider", id: req.user!.riderId! });
   });
 
   app.post<{ Params: { id: string } }>("/api/bearer/jobs/:id/address-change", { preHandler: ctx.requireRider }, async (req) => {
@@ -301,7 +473,7 @@ export async function deliveryMessageRoutes(app: FastifyInstance, ctx: AppCtx): 
     const request = await ctx.prisma.addressChangeRequest.create({
       data: { jobId: req.params.id, requestedByRole: "rider", proposedAddressText: body.proposedAddressText, note: body.note || null },
     });
-    await sendMessage(ctx, req.params.id, job.businessId, "system", null, `Rider requested a new delivery address: "${body.proposedAddressText}". Waiting for dispatch to confirm.`);
+    await sendSystemMessage(ctx, req.params.id, job.businessId, job.riderId, `Rider requested a new delivery address: "${body.proposedAddressText}". Waiting for dispatch to confirm.`);
     await ctx.audit.record({ id: req.user!.sub, role: req.user!.role }, "address_change.request", "job", req.params.id, { requestId: request.id });
     return addressChangeToDto({ ...request, reviewedBy: null });
   });

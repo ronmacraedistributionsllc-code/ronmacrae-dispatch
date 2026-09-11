@@ -146,6 +146,21 @@ export class RealtimeHub {
     if (client.socket.readyState === 1) client.socket.send(JSON.stringify(msg));
   }
 
+  /** Called when a job is reassigned or unassigned away from a rider
+   *  (Stage 24 — "reassignment revokes access", spec 5). A rider's socket
+   *  joins a job's room at connect time and via explicit "join" requests
+   *  (mayJoin re-validates those against the job's *current* assignment)
+   *  — but nothing previously removed a room a socket already held once
+   *  that assignment changed. Without this, an unassigned rider whose
+   *  connection stayed open kept receiving that job's live delivery
+   *  messages and status updates indefinitely, meant for whoever has the
+   *  job now — a real privacy gap, found while building the new
+   *  three-conversation messaging model. */
+  leaveJobRoom(riderId: string, jobId: string): void {
+    const client = this.clientForRider(riderId);
+    if (client) client.rooms.delete(roomForJob(jobId));
+  }
+
   broadcast(room: string, msg: AnyRtMessage): void {
     const data = JSON.stringify(msg);
     for (const client of this.clients.values()) {

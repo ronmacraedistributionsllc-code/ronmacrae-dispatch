@@ -263,7 +263,10 @@ export function registerAuthHook(app: FastifyInstance, ctx: AppCtx): void {
     // token itself (validated inside the route), not a login. Scoped to
     // these exact suffixes so /api/tracking/:jobId (create link) and
     // /api/tracking/:token/revoke (both staff-only) stay protected.
-    if (url.startsWith("/api/tracking/") && method === "POST" && (url.endsWith("/messages") || url.endsWith("/address-change"))) return true;
+    // Stage 24: messages moved from /api/tracking/:token/messages to
+    // /api/tracking/:token/messages/:kind (one per conversation) — the
+    // trailing segment is now a conversation kind, not a fixed suffix.
+    if (url.startsWith("/api/tracking/") && method === "POST" && (/\/messages\/[^/]+$/.test(url) || url.endsWith("/address-change"))) return true;
     if (url === "/api/auth/login" || url === "/api/auth/refresh") return true;
     // Cross-business customer package dashboard (spec 4) — no staff/rider
     // login; request-code/verify are phone-gated, and the dashboard list

@@ -730,21 +730,56 @@ enum MessageSenderRole {
  *  constructs a message body from those fields — messages are always
  *  either user-typed text or one of a small set of fixed system
  *  announcements, e.g. an address-change decision). */
-model DeliveryMessage {
-  id             String            @id @default(cuid())
-  jobId          String
-  job            Job               @relation(fields: [jobId], references: [id], onDelete: Cascade)
-  senderRole     MessageSenderRole
-  /** User.id for dispatcher, Rider.id for rider, null for customer/system */
-  senderId       String?
-  senderName     String?
-  body           String
-  readByCustomer Boolean           @default(false)
-  readByRider    Boolean           @default(false)
-  readByStaff    Boolean           @default(false)
-  createdAt      DateTime          @default(now())
+/** Which pairwise conversation a message belongs to (Stage 24, spec
+ *  section 5) — replacing the old single shared thread. Null means
+ *  "legacy" (every message that existed before this stage, when there
+ *  really was only one merged thread — see the backfill script's own
+ *  comment for why those are kept as a read-only archive rather than
+ *  guessed into one of the three new conversations) or a system-level
+ *  announcement (an address-change decision) that's relevant to every
+ *  conversation on the job, not just one pair. */
+enum ConversationKind {
+  customer_dispatch
+  customer_rider
+  rider_dispatch
+}
 
-  @@index([jobId, createdAt])
+model DeliveryMessage {
+  id               String            @id @default(cuid())
+  jobId            String
+  job              Job               @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  /** Null = legacy (pre-Stage-24) or a system announcement — see
+   *  ConversationKind's own doc comment. */
+  conversationKind ConversationKind?
+  senderRole       MessageSenderRole
+  /** User.id for dispatcher, Rider.id for rider, null for customer/system */
+  senderId         String?
+  senderName       String?
+  body             String
+  /** A single recipient-side receipt pair, not three separate role flags —
+   *  every conversation now has exactly two sides, so "the other side"
+   *  is unambiguous. `deliveredAt`: for a rider/staff recipient with a
+   *  live socket connected at send time, set immediately (a genuine
+   *  live-delivery signal); otherwise (customers are poll-only — this
+   *  app has no live channel for them — or the recipient wasn't
+   *  connected) set on their next fetch, same as `readAt`. `readAt`: set
+   *  when the recipient's client actually loads the conversation. For a
+   *  poll-only customer recipient these two will often land together —
+   *  an honest consequence of not having a push/ack channel to them, not
+   *  faked to look more granular than it is. */
+  deliveredAt      DateTime?
+  readAt           DateTime?
+  /** Client-generated idempotency token — retrying the same compose
+   *  action (e.g. after a network blip) reuses it, so the server can
+   *  recognize the retry and return the already-sent message instead of
+   *  creating a duplicate. Unique per job+conversation, not globally
+   *  (independent conversations may coincidentally generate the same
+   *  client-side random token). */
+  clientToken      String?
+  createdAt        DateTime          @default(now())
+
+  @@index([jobId, conversationKind, createdAt])
+  @@unique([jobId, conversationKind, clientToken])
 }
 
 enum AddressChangeStatus {

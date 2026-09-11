@@ -118,6 +118,11 @@ export async function assignJob(
   const eventDto = eventToDto(updated.event);
   const dispatchRoom = roomForDispatch(row.businessId);
 
+  // The old rider's socket, if still connected, must stop receiving this
+  // job's live updates/messages the moment it's no longer theirs — see
+  // hub.ts's leaveJobRoom for the gap this closes.
+  if (reassign && oldRiderId) ctx.hub.leaveJobRoom(oldRiderId, jobId);
+
   ctx.hub.broadcastMany([roomForRider(input.riderId), dispatchRoom], {
     type: "job.assigned",
     payload: { job: dto, riderId: input.riderId, source: "assign" },
@@ -230,6 +235,7 @@ export async function unassignJob(
   });
   const dto = jobToDto(updated.job, viewer, ctx.config.APP_ORIGIN);
   void ctx.sim.reconcileJob(jobId, "new", null);
+  if (riderId) ctx.hub.leaveJobRoom(riderId, jobId);
   ctx.hub.broadcastMany([roomForJob(jobId), roomForDispatch(row.businessId)], {
     type: "job.state",
     payload: { job: dto, event: eventToDto(updated.event) },

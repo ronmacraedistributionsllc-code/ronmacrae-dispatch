@@ -104,12 +104,12 @@ describe("messages", () => {
     const dispatcherB = await staffToken(businessB.id);
     const jobA = await makeJob(harness.business.id, (await makeCustomer(harness.business.id)).id, { riderId: sharedRider.id, status: "assigned" });
 
-    const send = await harness.app.inject({ method: "POST", url: `/api/jobs/${jobA.id}/messages`, headers: { authorization: `Bearer ${dispatcherA}` }, payload: { body: "Business A's own message" } });
+    const send = await harness.app.inject({ method: "POST", url: `/api/jobs/${jobA.id}/messages/customer_dispatch`, headers: { authorization: `Bearer ${dispatcherA}` }, payload: { body: "Business A's own message" } });
     expect(send.statusCode).toBe(200);
 
-    const readFromB = await harness.app.inject({ method: "GET", url: `/api/jobs/${jobA.id}/messages`, headers: { authorization: `Bearer ${dispatcherB}` } });
+    const readFromB = await harness.app.inject({ method: "GET", url: `/api/jobs/${jobA.id}/messages/customer_dispatch`, headers: { authorization: `Bearer ${dispatcherB}` } });
     expect(readFromB.statusCode).toBe(404);
-    const writeFromB = await harness.app.inject({ method: "POST", url: `/api/jobs/${jobA.id}/messages`, headers: { authorization: `Bearer ${dispatcherB}` }, payload: { body: "intruding" } });
+    const writeFromB = await harness.app.inject({ method: "POST", url: `/api/jobs/${jobA.id}/messages/customer_dispatch`, headers: { authorization: `Bearer ${dispatcherB}` }, payload: { body: "intruding" } });
     expect(writeFromB.statusCode).toBe(404);
 
     // The message never actually landed from B's attempt.

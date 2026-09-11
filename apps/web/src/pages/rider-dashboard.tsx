@@ -11,7 +11,8 @@ import { LocationSharing } from "../components/location-sharing.js";
 import { RouteQueue } from "../components/route-queue.js";
 import { ContactDispatch } from "../components/contact-dispatch.js";
 import { DeliveryChat } from "../components/delivery-chat.js";
-import type { DeliveryMessagesDto } from "@ronmacrae/contracts";
+import { ConversationTabs } from "../components/conversation-tabs.js";
+import type { ConversationsDto, DeliveryMessagesDto } from "@ronmacrae/contracts";
 
 const RIDER_QUICK_REPLIES = ["Heading to you", "I've arrived", "I cannot reach you", "Please contact dispatch"];
 
@@ -580,17 +581,25 @@ function CodPanel({ job, onChanged }: { job: JobDto; onChanged: () => void }): R
 function RiderJobChat({ jobId }: { jobId: string }): React.JSX.Element {
   const { subscribe } = useRealtime();
   return (
-    <DeliveryChat
-      queryKey={`rider-${jobId}`}
-      quickReplies={RIDER_QUICK_REPLIES}
-      fetchMessages={() => apiFetch<DeliveryMessagesDto>(API.messages.bearerList(jobId))}
-      sendMessage={(body) => apiFetch<DeliveryMessagesDto>(API.messages.bearerSend(jobId), { method: "POST", body: JSON.stringify({ body }) })}
-      onRealtimeNudge={(refetch) => subscribe(["delivery_message"], (msg) => { if (msg.type === "delivery_message" && msg.payload.jobId === jobId) refetch(); })}
-      addressChange={{
-        onPropose: async (proposedAddressText) => {
-          await apiFetch(API.messages.bearerAddressChange(jobId), { method: "POST", body: JSON.stringify({ proposedAddressText }) });
-        },
-      }}
+    <ConversationTabs
+      storageKey={`rider-${jobId}`}
+      fetchSummary={() => apiFetch<ConversationsDto>(API.messages.bearerConversations(jobId))}
+      renderChat={({ kind }) => (
+        <DeliveryChat
+          queryKey={`rider-${jobId}-${kind}`}
+          quickReplies={RIDER_QUICK_REPLIES}
+          fetchMessages={() => apiFetch<DeliveryMessagesDto>(API.messages.bearerList(jobId, kind))}
+          sendMessage={(body, clientToken) =>
+            apiFetch<DeliveryMessagesDto>(API.messages.bearerSend(jobId, kind), { method: "POST", body: JSON.stringify({ body, clientToken }) })
+          }
+          onRealtimeNudge={(refetch) => subscribe(["delivery_message"], (msg) => { if (msg.type === "delivery_message" && msg.payload.jobId === jobId) refetch(); })}
+          addressChange={{
+            onPropose: async (proposedAddressText) => {
+              await apiFetch(API.messages.bearerAddressChange(jobId), { method: "POST", body: JSON.stringify({ proposedAddressText }) });
+            },
+          }}
+        />
+      )}
     />
   );
 }

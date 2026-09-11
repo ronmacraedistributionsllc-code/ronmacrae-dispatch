@@ -1823,6 +1823,57 @@ attempted — would mean re-migrating User/Rider/Customer phone storage
 and login-by-phone lookup, out of this stage's bounded scope). No
 Loyverse integration (not requested for this stage).
 
-## Next: Stage 24 — messaging redesign (section 5)
+## Stage 24 (section 5) — messaging redesign: three real conversations
 
-Now proceeding on top of Stages 20-23. No open questions blocking it.
+Replaced the single shared delivery-chat thread (Stage 18) with the three
+real pairwise conversations the spec asked for: customer↔dispatch,
+customer↔rider, rider↔dispatch. Each has its own authorization (staff
+may write into customer_dispatch/rider_dispatch, monitor-only —
+read, never post — on customer_rider), unread count, and delivered/read
+receipts (a single recipient-side pair per message, replacing the old
+three role-keyed booleans — every conversation now has exactly two
+sides). Retry-without-duplicate via a per-conversation `clientToken`.
+The 5 real pre-existing messages in `dev.db` are kept as a read-only
+"legacy" archive (`conversationKind: null`) rather than guessed into one
+of the three new conversations — the old shared thread genuinely could
+have meant either audience.
+
+**Two real bugs found and fixed**: (1) a rider's already-open realtime
+socket kept receiving a job's live messages/updates after reassignment —
+joining was correctly re-validated against the current assignment, but
+nothing revoked a room a socket already held. Fixed via `hub.ts`'s new
+`leaveJobRoom()`, called on both reassign and unassign; verified with a
+real two-`ws`-client test. (2) the global auth allow-list's tracking-
+message exemption used `url.endsWith("/messages")`, which broke the
+moment the route grew a `/:kind` suffix — every customer message POST
+401'd until fixed.
+
+## Commands run and results (Stage 24)
+
+| # | Command | Result |
+| --- | --- | --- |
+| 1 | `npm run typecheck --workspaces` (root) | **PASS** — 0 errors |
+| 2 | `npx vitest run` (apps/api) | **PASS** — 165/165 (delivery-messages.test.ts rewritten, 24 tests; one multi-tenancy.test.ts assertion updated for the new route shape) |
+| 3 | `npx vitest run` / `npm run build` (apps/web) | **PASS** — 8/8, clean build |
+| 4 | Full e2e suite (32 specs), serial, fresh `e2e-test.db`, on :3900 | **PASS** — 32/32, both live demos confirmed undisturbed |
+| 5 | `dev.db` schema push (DeliveryMessage columns) | **PASS** — all 5 existing messages preserved as the legacy archive, 0 lost |
+
+## Re-verify (Stage 24)
+
+```bash
+npm run typecheck --workspaces
+npm run test --workspace @ronmacrae/api
+npm run test --workspace @ronmacrae/web
+npm run build --workspace @ronmacrae/web
+rm -f apps/api/data/e2e-test.db && cd e2e && npx playwright test --workers=1
+```
+
+**Not done in this stage**: no in-app push/ack protocol for customers —
+delivered/read stays honestly poll-driven for them (this app has no
+customer-side realtime channel at all yet, not a gap introduced here).
+`AddressChangeRequest` stays job-level, correctly (one job-wide fact
+under review, not a per-conversation artifact).
+
+## Next: Stage 25 — sign-in / account linking (section 7)
+
+Now proceeding on top of Stages 20-24. No open questions blocking it.

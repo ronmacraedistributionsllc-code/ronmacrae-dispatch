@@ -1723,7 +1723,7 @@ everything from Stage 20 on, not just as a footnote:
 | 21 | UI/UX refresh pass (typography, contrast, empty/loading/error states, mobile bottom nav) across rider/customer/dispatcher screens + verified screenshots | 3 | DONE |
 | 22 | Customer package dashboard + restricted rider-location display post-collection, across participating businesses | 4 | DONE |
 | 23 | Global customer identity: phone normalization (libphonenumber, JM default), safe email normalization, verified-vs-provisional records, duplicate-resolution audit trail, rate limiting, per-business customer relationships on top of Stage 20's Business model | 6 | DONE |
-| 24 | Messaging redesign: split the one shared thread into the three real pairwise conversations, add delivered/read receipts, retry-without-duplicate, reassignment access revocation | 5 | NOT STARTED (needs the thread-model redesign above) |
+| 24 | Messaging redesign: split the one shared thread into the three real pairwise conversations, add delivered/read receipts, retry-without-duplicate, reassignment access revocation | 5 | DONE |
 | 25 | Sign-in/account linking: email verification, password reset, account-claim flow, expiring/single-use codes; Instagram login feasibility investigation (implement only if genuinely supported for this use case; otherwise document why it's disabled) | 7 | NOT STARTED |
 | 26 | Deleted-orders trash: soft-delete + 30-day restore window + scheduled purge job, preserving ledger/dispute/audit records, scoped per business | 8 | NOT STARTED |
 | 27 | Rider cash-profile corrections: separate collected / awaiting handover / handed-in-unconfirmed / confirmed / disputed / earnings-payable, snapshot money components, fix "handed in" prematurely clearing confirmed-owed amount, per business a rider works for | 9 | NOT STARTED |
@@ -2441,3 +2441,121 @@ real, flagged follow-up, not attempted. No Loyverse integration (not
 requested for this stage). Sign-in/account linking, messaging redesign,
 deleted-orders trash, and rider cash-profile corrections are Stages
 24-27, next.
+
+## Stage 24 — Section 5: messaging redesign — three real conversations (DONE)
+
+Replaced the single shared delivery-chat thread (Stage 18) — where a
+customer, their rider, and every staff member all read and wrote into one
+merged conversation — with the three real pairwise conversations the spec
+actually asked for: customer↔dispatch, customer↔rider, rider↔dispatch.
+Each has its own authorization (a customer is a party to their own two;
+a rider to their own two; staff may write into customer_dispatch and
+rider_dispatch, and may only ever *monitor* customer_rider — read, never
+post), its own unread count, and its own delivered/read receipts.
+
+**Data model**: `DeliveryMessage` gained `conversationKind` (a proper
+enum: customer_dispatch/customer_rider/rider_dispatch), a single
+`deliveredAt`/`readAt` receipt pair (replacing the old three separate
+readByCustomer/readByRider/readByStaff booleans — every conversation now
+has exactly two sides, so "the other side" is unambiguous and one pair
+suffices), and a `clientToken` for retry-without-duplicate (unique per
+job+conversation, so a client resending the same compose attempt after a
+network blip gets the already-sent message back instead of creating a
+second one). The 5 real pre-existing messages in `dev.db` were left with
+`conversationKind: null` — a deliberate "legacy archive," not guessed
+into one of the three new conversations: the old shared thread genuinely
+could have meant either audience for a dispatcher/rider message, and
+guessing wrong would misattribute real history. Read-only via a new
+`legacy` endpoint suffix, visible to everyone who could see the old
+thread; nothing new ever lands there again.
+
+**Delivered vs. read, honestly**: `deliveredAt` is set immediately when
+the recipient had a live realtime socket connected at send time (rider/
+staff — a genuine live-delivery signal), otherwise on their next fetch,
+same trigger as `readAt`. Customers have no live channel in this app at
+all (the tracking page polls, it doesn't hold a websocket) — so for any
+conversation with a customer on the receiving end, delivered and read
+land together, honestly reflecting that there's no push channel to them,
+not faked to look more granular than it is.
+
+**Two real bugs found and fixed while building this**:
+
+- **Reassignment didn't revoke a rider's already-open realtime
+  connection.** A rider's socket joins a job's room (`job:<id>`) at
+  connect time and via explicit join requests (both correctly re-
+  validated against the *current* assignment) — but nothing previously
+  removed a room a socket already held once that assignment changed.
+  An unassigned rider whose connection stayed open kept receiving that
+  job's live delivery messages and status updates indefinitely, meant
+  for whoever has the job now. Fixed: `hub.ts`'s new `leaveJobRoom()`,
+  called from both `assignJob` (on a real reassignment) and
+  `unassignJob`. A genuine two-socket test
+  (`delivery-messages.test.ts`'s "reassignment revokes realtime access")
+  confirms a message sent after reassignment never reaches the old
+  rider's already-open socket.
+- **The global auth allow-list's tracking-message exemption used
+  `url.endsWith("/messages")`**, which stopped matching the moment the
+  route grew a `/:kind` suffix — every customer POST to a new
+  conversation-scoped message endpoint 401'd until this was updated to
+  match the new shape. Caught immediately by the rewritten test suite,
+  fixed in `auth.ts`.
+
+**Address-change system messages fan out, don't get lost**: an approved
+or declined address-change decision posts a system message into
+customer_dispatch (the customer always needs to know) and, if a rider is
+currently assigned, rider_dispatch too (riders need it for navigation) —
+never customer_rider, which isn't the confirmed-operational-change
+channel. `mergeCustomerIdentities`-style fan-out, not a 4th conversation
+kind.
+
+**Frontend**: `components/delivery-chat.tsx` needed surprisingly little
+change (it was already cleanly parameterized by fetch/send functions) —
+added `clientToken` generation per send attempt (`crypto.randomUUID()`,
+reused automatically across the mutation's own retries via TanStack
+Query's `retry: 2`) and a delivered/read indicator on the sender's own
+messages. New `components/conversation-tabs.tsx` wraps it: a small
+tabbed switcher (with unread badges) across a viewer's up-to-two-or-three
+conversations for one job, mounting only the active tab's chat (two
+conversations polling in the background when only one is visible isn't
+worth the extra requests). All three consumers — the customer tracking
+page, the rider dashboard, and the dispatcher's Jobs screen — now render
+`ConversationTabs` instead of a single `DeliveryChat`.
+
+**Tests**: `apps/api/test/delivery-messages.test.ts` (rewritten, 24
+tests) — conversation separation (a message in one is invisible in
+another), staff's monitor-only customer_rider (403 on write, read
+succeeds, never marked read, never counted in the staff unread badge),
+receipts flipping on the recipient's next fetch, retry-without-duplicate
+(including that the same clientToken in two different conversations is
+NOT treated as a duplicate), address-change fan-out (with and without a
+rider assigned), the reassignment-revokes-realtime-access fix (a real
+two-`ws`-client test), conversation closure, address-change review, rate
+limiting, and no PIN/phone leakage — plus the two tests carried over
+from Stage 18 (rider-job isolation, accountant/viewer monitor-only) now
+adapted to the new per-conversation routes. `e2e/specs/delivery-messages.spec.ts`
+(rewritten) drives a real browser through the full three-conversation
+flow: customer messages both dispatch and the rider on separate tabs,
+dispatcher sees and can only reply to customer_dispatch (confirming
+customer_rider is genuinely invisible to them until they switch to the
+monitor tab, and clearly marked "Monitor-only" there), the address-change
+confirmation reaches both the customer and the rider, and the customer's
+Customer↔Rider tab picks up the rider's reply live without ever leaking
+the dispatcher's separate Customer↔Dispatch reply into it.
+
+**Verification**: `npm run typecheck --workspaces` clean; `apps/api`
+vitest 165/165 (153 prior + 24 new/rewritten in delivery-messages.test.ts,
+net +12, plus one existing multi-tenancy.test.ts assertion updated for
+the new route shape); `apps/web` vitest 8/8 + clean build; full e2e suite
+32/32 on the dedicated :3900 port, both live demos confirmed undisturbed
+before and after.
+
+**Not done in this stage** (deliberately deferred): no in-app push/ack
+protocol for customers — delivered/read stays honestly poll-driven for
+them, as noted above; this isn't a gap so much as a property of the app
+not having a customer-side realtime channel at all yet. `AddressChangeRequest`
+itself wasn't restructured — it stays job-level (not conversation-scoped),
+which is correct: an address change is one job-wide fact under review,
+not a per-conversation artifact. No UI affordance was added to browse the
+legacy archive from the new tabbed interface beyond the raw `/legacy`
+endpoint (no route in this session's scope needed it — the archive holds
+5 messages total in `dev.db`).

@@ -164,6 +164,21 @@ export type MessageSenderRole = (typeof MESSAGE_SENDER_ROLES)[number];
 export const ADDRESS_CHANGE_STATUSES = ["pending", "approved", "declined"] as const;
 export type AddressChangeStatus = (typeof ADDRESS_CHANGE_STATUSES)[number];
 
+/** Which pairwise delivery conversation a message belongs to (Stage 24,
+ *  spec section 5) — replacing the old single shared thread every party
+ *  saw. A message with no kind at all (not one of these three) is a
+ *  "legacy" message from before this stage, when there really was only
+ *  one merged thread — kept as a read-only archive, not guessed into one
+ *  of these. */
+export const CONVERSATION_KINDS = ["customer_dispatch", "customer_rider", "rider_dispatch"] as const;
+export type ConversationKind = (typeof CONVERSATION_KINDS)[number];
+
+export const CONVERSATION_KIND_LABELS: Record<ConversationKind, string> = {
+  customer_dispatch: "Customer ↔ Dispatch",
+  customer_rider: "Customer ↔ Rider",
+  rider_dispatch: "Rider ↔ Dispatch",
+};
+
 export const PROOF_KINDS = [
   "pickup_photo",
   "delivery_photo",

@@ -4,6 +4,7 @@ import {
   API,
   CUSTOMER_JOB_STATUS_LABELS,
   TRACKING_STATE_LABELS,
+  type ConversationsDto,
   type CustomerJobStatus,
   type DeliveryMessagesDto,
   type TrackingPublicDto,
@@ -11,6 +12,7 @@ import {
 import { ApiError, apiFetch, formatMoney } from "../lib/api.js";
 import { paymentLabel } from "./new-job.js";
 import { DeliveryChat } from "../components/delivery-chat.js";
+import { ConversationTabs } from "../components/conversation-tabs.js";
 
 const CUSTOMER_QUICK_REPLIES = ["I'm here", "Please call me", "I need to change the landmark", "I'm unavailable"];
 
@@ -148,16 +150,24 @@ export function Track(): React.JSX.Element {
 
           <section className="card">
             <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-zinc-400">Messages</h2>
-            <DeliveryChat
-              queryKey={`customer-${token}`}
-              quickReplies={CUSTOMER_QUICK_REPLIES}
-              fetchMessages={() => apiFetch<DeliveryMessagesDto>(API.tracking.messages(token))}
-              sendMessage={(body) => apiFetch<DeliveryMessagesDto>(API.tracking.messages(token), { method: "POST", body: JSON.stringify({ body }) })}
-              addressChange={{
-                onPropose: async (proposedAddressText) => {
-                  await apiFetch(API.tracking.addressChange(token), { method: "POST", body: JSON.stringify({ proposedAddressText }) });
-                },
-              }}
+            <ConversationTabs
+              storageKey={`customer-${token}`}
+              fetchSummary={() => apiFetch<ConversationsDto>(API.tracking.conversations(token))}
+              renderChat={({ kind }) => (
+                <DeliveryChat
+                  queryKey={`customer-${token}-${kind}`}
+                  quickReplies={CUSTOMER_QUICK_REPLIES}
+                  fetchMessages={() => apiFetch<DeliveryMessagesDto>(API.tracking.messages(token, kind))}
+                  sendMessage={(body, clientToken) =>
+                    apiFetch<DeliveryMessagesDto>(API.tracking.messages(token, kind), { method: "POST", body: JSON.stringify({ body, clientToken }) })
+                  }
+                  addressChange={{
+                    onPropose: async (proposedAddressText) => {
+                      await apiFetch(API.tracking.addressChange(token), { method: "POST", body: JSON.stringify({ proposedAddressText }) });
+                    },
+                  }}
+                />
+              )}
             />
           </section>
         </>
