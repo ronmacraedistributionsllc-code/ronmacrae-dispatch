@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import type { OpsBoardDto, OpsBoardRiderDto } from "@ronmacrae/contracts";
+import type { OpsBoardDto, OpsBoardRiderDto, RiderCashProfileDto } from "@ronmacrae/contracts";
 import { API } from "@ronmacrae/contracts";
 import { apiFetch, formatMoney } from "../lib/api.js";
 import { ReadOnlyRiderQueue } from "../components/route-queue.js";
@@ -43,6 +43,7 @@ export function OpsBoard(): React.JSX.Element {
     refetchInterval: 15_000,
   });
   const [queueRiderId, setQueueRiderId] = useState<string | null>(null);
+  const [cashRiderId, setCashRiderId] = useState<string | null>(null);
 
   if (board.isLoading) return <p className="text-sm text-zinc-400">Loading operations board…</p>;
   if (!board.data) {
@@ -83,7 +84,14 @@ export function OpsBoard(): React.JSX.Element {
             </thead>
             <tbody>
               {data.riders.map((r) => (
-                <RiderRow key={r.id} rider={r} queueOpen={queueRiderId === r.id} onToggleQueue={() => setQueueRiderId((cur) => (cur === r.id ? null : r.id))} />
+                <RiderRow
+                  key={r.id}
+                  rider={r}
+                  queueOpen={queueRiderId === r.id}
+                  onToggleQueue={() => setQueueRiderId((cur) => (cur === r.id ? null : r.id))}
+                  cashOpen={cashRiderId === r.id}
+                  onToggleCash={() => setCashRiderId((cur) => (cur === r.id ? null : r.id))}
+                />
               ))}
             </tbody>
           </table>
@@ -91,7 +99,14 @@ export function OpsBoard(): React.JSX.Element {
 
         <div className="space-y-2 md:hidden">
           {data.riders.map((r) => (
-            <RiderCard key={r.id} rider={r} queueOpen={queueRiderId === r.id} onToggleQueue={() => setQueueRiderId((cur) => (cur === r.id ? null : r.id))} />
+            <RiderCard
+              key={r.id}
+              rider={r}
+              queueOpen={queueRiderId === r.id}
+              onToggleQueue={() => setQueueRiderId((cur) => (cur === r.id ? null : r.id))}
+              cashOpen={cashRiderId === r.id}
+              onToggleCash={() => setCashRiderId((cur) => (cur === r.id ? null : r.id))}
+            />
           ))}
         </div>
       </section>
@@ -157,7 +172,19 @@ export function OpsBoard(): React.JSX.Element {
   );
 }
 
-function RiderRow({ rider, queueOpen, onToggleQueue }: { rider: OpsBoardRiderDto; queueOpen: boolean; onToggleQueue: () => void }): React.JSX.Element {
+function RiderRow({
+  rider,
+  queueOpen,
+  onToggleQueue,
+  cashOpen,
+  onToggleCash,
+}: {
+  rider: OpsBoardRiderDto;
+  queueOpen: boolean;
+  onToggleQueue: () => void;
+  cashOpen: boolean;
+  onToggleCash: () => void;
+}): React.JSX.Element {
   const loc = rider.location;
   return (
     <>
@@ -193,6 +220,7 @@ function RiderRow({ rider, queueOpen, onToggleQueue }: { rider: OpsBoardRiderDto
             <a className="btn !px-2 !py-0.5 text-xs" href={`tel:${rider.phone}`}>Call</a>
             <a className="btn !px-2 !py-0.5 text-xs" href={`sms:${rider.phone}`}>Message</a>
             <button className="btn !px-2 !py-0.5 text-xs" onClick={onToggleQueue}>{queueOpen ? "Hide queue" : "Route queue"}</button>
+            <button className="btn !px-2 !py-0.5 text-xs" onClick={onToggleCash}>{cashOpen ? "Hide cash" : "Cash"}</button>
           </div>
         </td>
       </tr>
@@ -203,13 +231,32 @@ function RiderRow({ rider, queueOpen, onToggleQueue }: { rider: OpsBoardRiderDto
           </td>
         </tr>
       ) : null}
+      {cashOpen ? (
+        <tr className="border-t border-zinc-800" data-testid={`ops-cash-${rider.id}`}>
+          <td colSpan={6} className="py-2">
+            <RiderCashPanel riderId={rider.id} />
+          </td>
+        </tr>
+      ) : null}
     </>
   );
 }
 
 /** Mobile equivalent of RiderRow — same data, stacked instead of columnar so
  *  it's readable and tappable at phone width without sideways scrolling. */
-function RiderCard({ rider, queueOpen, onToggleQueue }: { rider: OpsBoardRiderDto; queueOpen: boolean; onToggleQueue: () => void }): React.JSX.Element {
+function RiderCard({
+  rider,
+  queueOpen,
+  onToggleQueue,
+  cashOpen,
+  onToggleCash,
+}: {
+  rider: OpsBoardRiderDto;
+  queueOpen: boolean;
+  onToggleQueue: () => void;
+  cashOpen: boolean;
+  onToggleCash: () => void;
+}): React.JSX.Element {
   const loc = rider.location;
   return (
     <div className="rounded-lg border border-zinc-800 bg-zinc-900/40 p-3" data-testid={`ops-rider-card-${rider.id}`}>
@@ -252,12 +299,66 @@ function RiderCard({ rider, queueOpen, onToggleQueue }: { rider: OpsBoardRiderDt
         <a className="btn !px-3 !py-1.5 text-xs" href={`tel:${rider.phone}`}>📞 Call</a>
         <a className="btn !px-3 !py-1.5 text-xs" href={`sms:${rider.phone}`}>💬 Message</a>
         <button className="btn !px-3 !py-1.5 text-xs" onClick={onToggleQueue}>{queueOpen ? "Hide queue" : "Route queue"}</button>
+        <button className="btn !px-3 !py-1.5 text-xs" onClick={onToggleCash}>{cashOpen ? "Hide cash" : "💵 Cash"}</button>
       </div>
       {queueOpen ? (
         <div className="mt-3 border-t border-zinc-800 pt-3" data-testid={`ops-queue-card-${rider.id}`}>
           <ReadOnlyRiderQueue riderId={rider.id} />
         </div>
       ) : null}
+      {cashOpen ? (
+        <div className="mt-3 border-t border-zinc-800 pt-3" data-testid={`ops-cash-card-${rider.id}`}>
+          <RiderCashPanel riderId={rider.id} />
+        </div>
+      ) : null}
     </div>
+  );
+}
+
+/**
+ * Staff view of a rider's cash profile (spec 9, Stage 27) — this
+ * business's own slice only, even for a rider shared with other
+ * businesses (the backend route enforces the same scoping). Every figure
+ * is a real, fresh sum over that rider's own jobs at this business, never
+ * a stored total a hand-in elsewhere could disturb.
+ */
+function RiderCashPanel({ riderId }: { riderId: string }): React.JSX.Element {
+  const cash = useQuery({
+    queryKey: ["rider-cash", riderId],
+    queryFn: () => apiFetch<RiderCashProfileDto>(API.riders.cash(riderId)),
+  });
+  if (cash.isLoading) return <p className="text-xs text-zinc-500">Loading cash profile…</p>;
+  const b = cash.data?.businesses[0];
+  if (!b) return <p className="text-xs text-zinc-500">No cash activity on file for this rider yet.</p>;
+
+  return (
+    <dl className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-sm sm:grid-cols-5">
+      <div>
+        <dt className="label !mb-0">Holding</dt>
+        <dd className="text-amber-200">{formatMoney(b.collected.amount)} <span className="text-xs text-zinc-500">({b.collected.count})</span></dd>
+      </div>
+      <div>
+        <dt className="label !mb-0">Handed in, unconfirmed</dt>
+        <dd className="text-zinc-200">{formatMoney(b.handedInUnconfirmed.amount)} <span className="text-xs text-zinc-500">({b.handedInUnconfirmed.count})</span></dd>
+      </div>
+      <div>
+        <dt className="label !mb-0">Confirmed</dt>
+        <dd className="text-emerald-300">{formatMoney(b.confirmed.amount)} <span className="text-xs text-zinc-500">({b.confirmed.count})</span></dd>
+      </div>
+      <div>
+        <dt className="label !mb-0">Disputed</dt>
+        <dd className={b.disputed.count > 0 ? "text-red-300" : "text-zinc-500"}>{formatMoney(b.disputed.amount)} <span className="text-xs text-zinc-500">({b.disputed.count})</span></dd>
+      </div>
+      <div>
+        <dt className="label !mb-0">Earnings payable</dt>
+        <dd className="text-zinc-200">{b.earningsPayable ? formatMoney(b.earningsPayable) : "Not set"}</dd>
+      </div>
+      {b.handoverVariance.amount !== 0 ? (
+        <div className="col-span-2 sm:col-span-5">
+          <dt className="label !mb-0">{b.handoverVariance.amount < 0 ? "Shortage" : "Overage"} on past handovers</dt>
+          <dd className="text-amber-400">{formatMoney(b.handoverVariance)}</dd>
+        </div>
+      ) : null}
+    </dl>
   );
 }

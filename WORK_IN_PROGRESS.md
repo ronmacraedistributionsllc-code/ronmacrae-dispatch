@@ -1726,7 +1726,7 @@ everything from Stage 20 on, not just as a footnote:
 | 24 | Messaging redesign: split the one shared thread into the three real pairwise conversations, add delivered/read receipts, retry-without-duplicate, reassignment access revocation | 5 | DONE |
 | 25 | Sign-in/account linking: email verification, password reset, account-claim flow, expiring/single-use codes; Instagram login feasibility investigation (implement only if genuinely supported for this use case; otherwise document why it's disabled) | 7 | DONE |
 | 26 | Deleted-orders trash: soft-delete + 30-day restore window + scheduled purge job, preserving ledger/dispute/audit records, scoped per business | 8 | DONE |
-| 27 | Rider cash-profile corrections: separate collected / awaiting handover / handed-in-unconfirmed / confirmed / disputed / earnings-payable, snapshot money components, fix "handed in" prematurely clearing confirmed-owed amount, per business a rider works for | 9 | NOT STARTED |
+| 27 | Rider cash-profile corrections: separate collected / awaiting handover / handed-in-unconfirmed / confirmed / disputed / earnings-payable, snapshot money components, fix "handed in" prematurely clearing confirmed-owed amount, per business a rider works for | 9 | DONE |
 | 28 | Full verification + handoff pass across all of 19–27 | 10 | NOT STARTED |
 
 Each stage: implement, typecheck, run meaningful tests (new + full existing
@@ -2820,3 +2820,113 @@ makes trash work everywhere else — a deliberate, disclosed trade-off
 given the time this stage had, not a bug); no configurable retention
 window (30 days is fixed, matching the spec). Rider cash-profile
 corrections are Stage 27, next.
+
+## Stage 27 — Section 9: rider cash-profile corrections (DONE)
+
+No schema changes at all — the entire cash profile is derived fresh
+from existing `Job`/`CodEvent` data at read time, nothing new stored.
+Before this stage there was no rider cash-profile summary of any kind:
+`API.bearer.cash` existed as a route path in `contracts/routes.ts` but
+had never actually been implemented — every per-job COD figure existed
+(from Stage 12), but nothing aggregated them into a real picture of what
+one rider is holding, has handed in, or is owed.
+
+**The bug the spec named — "Handed in must not auto-clear confirmed-owed
+amount" — is fixed by construction, not by patching an existing
+counter**: there never was a stored, mutable "confirmed owed" counter to
+begin with (no aggregate existed at all), so the actual design decision
+this stage made was to never introduce one. Every bucket
+(`collected`/`handedInUnconfirmed`/`confirmed`/`disputed`) is a live
+`SUM()` over independent Job rows, grouped by that job's own current
+`codStatus`, computed fresh on every read. A hand-in action only ever
+updates the one job it's called on; it has no shared running total to
+disturb, so a `confirmed` total built from a completely different,
+already-approved job is structurally untouched by it — proven directly
+in `cash-profile.test.ts`'s own test of exactly this scenario (record
+and confirm the total before, hand in an unrelated job, assert the
+`confirmed` total after is byte-identical).
+
+**Five real components, not three**: `collected` (holding cash, not yet
+handed to the office), `handedInUnconfirmed` (rider says it's in, no
+accountant sign-off yet), `confirmed` (accountant-approved, settled),
+`disputed` (under active dispute — falls back to the recorded-collected
+amount when a dispute was raised before any hand-in ever happened, so a
+real dispute never silently shows $0), and `earningsPayable` (what the
+business owes the rider for their own completed work) — kept
+structurally separate as its own field, never summed into or subtracted
+from the COD buckets above it. Those two money flows run in opposite
+directions (the rider owes the business COD cash; the business owes the
+rider their pay) and conflating them was exactly the kind of
+double-counting the spec called out.
+
+**A sixth figure, not explicitly named but a direct consequence of
+"exact money arithmetic"**: `handoverVariance` — the real difference
+between what a rider said they collected and what the office actually
+received, across every job that's reached at least a hand-in. A
+shortage shows negative, an overage positive, and it's a genuine sum
+over real per-job amounts (`codHandedInAmount - amountCollected`), never
+netted away silently inside either bucket's own total (the schema's own
+`Job.codHandedInAmount` doc comment already flagged this gap; this
+stage is what actually surfaces it).
+
+**Honest about `earningsPayable`**: computed the same way reports.ts's
+existing "estimated earnings" already does — pay rate × delivered jobs,
+scoped to deliveries actually made *for that business* (a rider's pay
+rate is global, per Stage 20's own established design, but a business
+must never be shown earnings for work done for a different business).
+Explicitly labeled as an estimate, `null` (not $0) when no pay rate is
+configured, and documented plainly: no payout-tracking exists yet
+(`Payout`/`PayoutLine` are real models, completely unused by any route),
+so this figure never decreases as money is actually paid out. Building
+real payout approval/marking-as-paid is a genuinely separate feature,
+not attempted here.
+
+**Scoped per business, always** — a rider can hold active memberships
+at more than one business (Stage 20); cash owed to business A is never
+summed with cash owed to business B, on either side. The rider's own
+view (`GET /api/bearer/cash`) returns one profile per active
+membership, never combined. The staff view (`GET /api/riders/:id/cash`)
+returns only the caller's own business's slice — 404, not 403, if the
+rider has no membership there at all, even if they work for other
+businesses (the same cross-business boundary rule used everywhere else
+in this codebase).
+
+**Frontend**: a collapsible "Cash summary" card on the rider's own
+dashboard (hidden entirely when there's genuinely nothing to show —
+never an empty card taking up space for a rider who's never touched
+COD), one business at a time. A matching "💵 Cash" panel on the
+dispatcher's ops board, alongside the existing "Route queue" toggle —
+same expand-in-place pattern, staff-scoped to their own business
+automatically.
+
+**Tests**: `apps/api/test/cash-profile.test.ts` (new, 7 tests) — each
+bucket sums only its own status's jobs; the hand-in-doesn't-clear-
+confirmed test described above; the disputed-with-no-prior-handover
+fallback; a real shortage-and-overage variance computation; earnings
+payable null with no rate configured and correctly scoped to
+deliveries-for-this-business-only when one is; and staff scoping (own
+business only, 404 for a rider with no membership there).
+`e2e/specs/rider-cash.spec.ts` (new) drives a real browser through a
+full COD lifecycle with a fresh rider (not the shared seed rider other
+specs already touch, so the figures asserted are exact, not just "at
+least") — collect, hand in short, and confirm both the dispatcher's
+ops-board cash panel and the rider's own dashboard show the identical
+J$2,900 handed-in figure and the shortage variance.
+
+**Verification**: `npm run typecheck --workspaces` clean; `apps/api`
+vitest 193/193 (186 prior + 7 new); `apps/web` vitest 8/8 + clean
+build; full e2e suite 35/35 (34 prior + 1 new), both live demos
+confirmed undisturbed. No `dev.db` migration needed — this stage adds
+no schema.
+
+**Not done in this stage**: no real payout-approval workflow (marking
+earnings as actually paid, which would let `earningsPayable` genuinely
+decrease over time) — `Payout`/`PayoutLine` remain unused models, a
+real, separate feature; no date-range filtering on the cash profile
+(all-time totals only — reasonable at this data volume, would matter
+at real scale); no bulk/CSV export of the cash profile (reports.ts's
+existing CSV export is the closest equivalent today, and doesn't cover
+this new aggregation). This was the last of the ten feature sections
+(1-9 plus verification/handoff) from the original request — Stage 28
+is the final cross-cutting verification and handoff pass across
+everything built in Stages 19-27.

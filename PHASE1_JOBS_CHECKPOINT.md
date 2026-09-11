@@ -1998,6 +1998,70 @@ dedicated detail view for a trashed job (the ordinary job-detail route
 else — disclosed trade-off, not a bug); no configurable retention
 window (fixed at 30 days, matching the spec).
 
-## Next: Stage 27 — rider cash-profile corrections (section 9)
+## Stage 27 (section 9) — rider cash-profile corrections
 
-Now proceeding on top of Stages 20-26. No open questions blocking it.
+No schema changes — the entire cash profile is derived fresh from
+existing Job/CodEvent data at read time. Before this stage there was no
+aggregate rider cash summary of any kind (`API.bearer.cash` was a route
+path in contracts with no implementation behind it).
+
+**"Handed in must not auto-clear confirmed-owed amount" is fixed by
+construction**: there was never a stored, mutable "confirmed owed"
+counter — every bucket is a live SUM over independent Job rows grouped
+by that job's own current `codStatus`, computed fresh on every read. A
+hand-in on one job has no shared running total to disturb; a
+`confirmed` total built from a different, already-approved job is
+structurally untouched by it. Verified directly in `cash-profile.test.ts`.
+
+**Five components**: `collected`, `handedInUnconfirmed`, `confirmed`,
+`disputed` (falls back to the recorded-collected amount when disputed
+before any hand-in), and `earningsPayable` (what the business owes the
+rider — kept structurally separate from the COD buckets, which are cash
+the rider owes the business; conflating the two was exactly the
+double-counting risk the spec named). Plus `handoverVariance` — the
+real shortage/overage between collected and handed-in amounts, never
+silently absorbed.
+
+**`earningsPayable` is honestly an estimate** (pay rate × delivered
+jobs for that business, same approach as reports.ts's existing
+estimate) — `null` not $0 with no rate configured, and documented
+plainly that no payout-tracking exists yet (`Payout`/`PayoutLine` are
+real, unused models), so it never decreases as money is actually paid
+out.
+
+**Scoped per business, always** — the rider's own view returns one
+profile per active membership, never combined; staff see only their
+own business's slice, 404 (not 403) for a rider with no membership
+there.
+
+## Commands run and results (Stage 27)
+
+| # | Command | Result |
+| --- | --- | --- |
+| 1 | `npm run typecheck --workspaces` (root) | **PASS** — 0 errors |
+| 2 | `npx vitest run` (apps/api) | **PASS** — 193/193 (186 prior + 7 new: cash-profile.test.ts) |
+| 3 | `npx vitest run` / `npm run build` (apps/web) | **PASS** — 8/8, clean build |
+| 4 | Full e2e suite (35 specs), serial, fresh `e2e-test.db`, on :3900 | **PASS** — 35/35, both live demos confirmed undisturbed |
+| 5 | `dev.db` | No migration needed — this stage adds no schema |
+
+## Re-verify (Stage 27)
+
+```bash
+npm run typecheck --workspaces
+npm run test --workspace @ronmacrae/api
+npm run test --workspace @ronmacrae/web
+npm run build --workspace @ronmacrae/web
+rm -f apps/api/data/e2e-test.db && cd e2e && npx playwright test --workers=1
+```
+
+**Not done**: no real payout-approval workflow (Payout/PayoutLine
+remain unused — a genuinely separate feature); no date-range filtering
+(all-time totals only); no bulk/CSV export of the cash profile.
+
+This was the last of the ten feature sections from the original
+request. Stage 28 is the final cross-cutting verification and handoff
+pass across everything built in Stages 19-27.
+
+## Next: Stage 28 — final verification and handoff (section 10)
+
+Now proceeding on top of Stages 19-27. No open questions blocking it.

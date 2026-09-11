@@ -57,6 +57,9 @@ export const API = {
     locations: "/api/rider-locations",
     locationsFor: (riderId: string) => `/api/rider-locations/${riderId}`,
     report: (riderId: string) => `/api/rider-locations/${riderId}/report`,
+    /** staff view of a rider's cash profile — this business's own slice
+     *  only (spec 9, Stage 27). */
+    cash: (riderId: string) => `/api/riders/${riderId}/cash`,
   },
 
   /** dispatcher operations board — spec 5C */

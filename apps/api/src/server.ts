@@ -33,6 +33,7 @@ import { settingsRoutes } from "./modules/settings.js";
 import { customerDashboardRoutes } from "./modules/customer-dashboard.js";
 import { customerAccountRoutes } from "./modules/customer-account.js";
 import { ownerRoutes } from "./modules/owner.js";
+import { cashProfileRoutes } from "./modules/cash-profile.js";
 
 const SERVICE = "ronmacrae-dispatch-api";
 
@@ -126,6 +127,7 @@ export async function createApp(ctx: AppCtx): Promise<FastifyInstance> {
   await notificationRoutes(app, ctx);
   await auditRoutes(app, ctx);
   await ownerRoutes(app, ctx);
+  await cashProfileRoutes(app, ctx);
 
   app.setErrorHandler((err, req, reply) => {
     const e = err as FastifyError;

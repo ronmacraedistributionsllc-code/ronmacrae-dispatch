@@ -447,6 +447,51 @@ export interface TrashedJobDto extends JobSummaryDto {
   daysRemaining: number;
 }
 
+/** One rider cash-profile bucket (spec 9, Stage 27) — a count plus the
+ *  exact sum, never an estimate. */
+export interface CashBucketDto {
+  count: number;
+  amount: Money;
+}
+
+/** One business's slice of a rider's cash profile — never combined across
+ *  businesses (see cash-profile.ts's own doc comment for why). `confirmed`
+ *  is derived fresh from every job whose COD is accountant-approved, at
+ *  read time — a hand-in recorded on a different job can never touch it,
+ *  which is the actual fix for "Handed in must not auto-clear
+ *  confirmed-owed amount." */
+export interface RiderCashBusinessProfileDto {
+  businessId: string;
+  businessName: string;
+  /** Collected from customers, not yet handed to the office. */
+  collected: CashBucketDto;
+  /** Rider says it's handed in; not yet accountant-confirmed. */
+  handedInUnconfirmed: CashBucketDto;
+  /** Accountant-confirmed and reconciled — settled. */
+  confirmed: CashBucketDto;
+  /** Under active dispute. */
+  disputed: CashBucketDto;
+  /** What was actually handed in minus what was recorded collected,
+   *  across every job that reached at least a hand-in — a real shortage
+   *  (negative) or overage (positive), never silently absorbed into
+   *  either bucket's own total. */
+  handoverVariance: Money;
+  /** What this business owes the rider for their own completed work —
+   *  kept structurally separate from the COD buckets above, which are
+   *  cash the rider owes *to* the business. Null if no pay rate is
+   *  configured (shown as "not set", never $0). */
+  earningsPayable: Money | null;
+  earningsNote: string | null;
+}
+
+/** GET /api/bearer/cash (rider's own, every active membership) or
+ *  GET /api/riders/:id/cash (staff, that business's slice only). */
+export interface RiderCashProfileDto {
+  riderId: string;
+  riderName: string;
+  businesses: RiderCashBusinessProfileDto[];
+}
+
 export interface JobOfferDto {
   id: string;
   jobId: string;

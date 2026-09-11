@@ -12,7 +12,7 @@ import { RouteQueue } from "../components/route-queue.js";
 import { ContactDispatch } from "../components/contact-dispatch.js";
 import { DeliveryChat } from "../components/delivery-chat.js";
 import { ConversationTabs } from "../components/conversation-tabs.js";
-import type { ConversationsDto, DeliveryMessagesDto } from "@ronmacrae/contracts";
+import type { ConversationsDto, DeliveryMessagesDto, RiderCashProfileDto } from "@ronmacrae/contracts";
 
 const RIDER_QUICK_REPLIES = ["Heading to you", "I've arrived", "I cannot reach you", "Please contact dispatch"];
 
@@ -172,6 +172,7 @@ export function RiderDashboard(): React.JSX.Element {
         <RouteQueue jobs={activeJobs} onReorder={(ids) => reorder.mutate(ids)} reordering={reorder.isPending} />
       </section>
     ) : null}
+    <CashSummary />
     <LocationSharing riderId={rider.id} />
     {availabilityChange.error ? <p className="text-sm text-red-400">{availabilityChange.error instanceof ApiError ? availabilityChange.error.message : "Could not update availability"}</p> : null}
 
@@ -201,6 +202,64 @@ export function RiderDashboard(): React.JSX.Element {
       </details>
     ) : null}
   </div>;
+}
+
+/**
+ * Rider cash profile (spec 9, Stage 27) — one card per business the rider
+ * is active at, never combined into a single cross-business figure. Every
+ * number here is a real sum of actual jobs, computed fresh on each load —
+ * never a running total a "hand in" elsewhere could disturb.
+ */
+function CashSummary(): React.JSX.Element | null {
+  const cash = useQuery({
+    queryKey: ["bearer-cash"],
+    queryFn: () => apiFetch<RiderCashProfileDto>(API.bearer.cash),
+    refetchInterval: 30_000,
+  });
+  const businesses = cash.data?.businesses ?? [];
+  const hasAnything = businesses.some(
+    (b) => b.collected.count > 0 || b.handedInUnconfirmed.count > 0 || b.disputed.count > 0 || (b.earningsPayable?.amount ?? 0) > 0,
+  );
+  if (cash.isLoading || businesses.length === 0 || !hasAnything) return null;
+
+  return (
+    <details className="card space-y-2" data-testid="rider-cash-summary">
+      <summary className="cursor-pointer text-sm font-semibold uppercase tracking-wide text-zinc-400">Cash summary</summary>
+      <div className="mt-2 space-y-3">
+        {businesses.map((b) => (
+          <div key={b.businessId} className="space-y-1 border-t border-zinc-800 pt-2 first:border-t-0 first:pt-0">
+            <p className="text-xs font-medium text-zinc-300">{b.businessName}</p>
+            <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm sm:grid-cols-4">
+              <div>
+                <dt className="label !mb-0">Holding</dt>
+                <dd className="text-amber-200">{formatMoney(b.collected.amount)}</dd>
+              </div>
+              <div>
+                <dt className="label !mb-0">Handed in, unconfirmed</dt>
+                <dd className="text-zinc-200">{formatMoney(b.handedInUnconfirmed.amount)}</dd>
+              </div>
+              {b.disputed.count > 0 ? (
+                <div>
+                  <dt className="label !mb-0">Disputed</dt>
+                  <dd className="text-red-300">{formatMoney(b.disputed.amount)}</dd>
+                </div>
+              ) : null}
+              <div>
+                <dt className="label !mb-0">Your earnings</dt>
+                <dd className="text-emerald-300">{b.earningsPayable ? formatMoney(b.earningsPayable) : "Not set"}</dd>
+              </div>
+            </dl>
+            {b.handoverVariance.amount !== 0 ? (
+              <p className="text-xs text-amber-400">
+                {b.handoverVariance.amount < 0 ? "Shortage" : "Overage"} on past handovers: {formatMoney(b.handoverVariance)}
+              </p>
+            ) : null}
+          </div>
+        ))}
+      </div>
+      <p className="text-[11px] text-zinc-600">"Your earnings" is an estimate — pay rate × completed deliveries — not a confirmed payout.</p>
+    </details>
+  );
 }
 
 function SectionHeading({ label, count }: { label: string; count: number }): React.JSX.Element {
