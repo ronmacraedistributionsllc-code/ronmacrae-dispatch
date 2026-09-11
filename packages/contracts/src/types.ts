@@ -1,6 +1,7 @@
 import type {
   AddressChangeStatus,
   CodStatus,
+  CustomerIdentityStatus,
   FailureReason,
   JobSource,
   JobStatus,
@@ -592,6 +593,22 @@ export interface CustomerPackagesDto {
   active: CustomerPackageDto[];
   history: CustomerPackageDto[];
   generatedAt: string;
+}
+
+/** A group of CustomerIdentity rows that plausibly belong to the same real
+ *  person (share a normalized email) but haven't been merged — GET
+ *  /api/owner/customer-identities/duplicates, owner-only (Stage 23, spec
+ *  section 6). Surfaced for a human to confirm or reject, never acted on
+ *  automatically. */
+export interface DuplicateCandidateDto {
+  normalizedEmail: string;
+  identities: {
+    id: string;
+    normalizedPhone: string;
+    status: CustomerIdentityStatus;
+    customerCount: number;
+    businessNames: string[];
+  }[];
 }
 
 /** One delivery-chat message (spec 5G). Never carries a phone number or the

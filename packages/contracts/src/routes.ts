@@ -184,6 +184,16 @@ export const API = {
     list: "/api/audit",
   },
 
+  /** Platform-owner-only (Stage 23) — see modules/owner.ts. No console UI
+   *  consumes these yet (a documented, deliberate gap, same as the rest of
+   *  the owner console — see WORK_IN_PROGRESS.md); the routes exist and
+   *  are fully tested. */
+  owner: {
+    audit: "/api/owner/audit",
+    customerIdentityDuplicates: "/api/owner/customer-identities/duplicates",
+    mergeCustomerIdentity: (id: string) => `/api/owner/customer-identities/${id}/merge`,
+  },
+
   woo: {
     status: "/api/woo/status",
     orders: "/api/woo/orders",

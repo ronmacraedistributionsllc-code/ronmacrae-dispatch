@@ -22,6 +22,13 @@ export type PlatformRiderStatus = (typeof PLATFORM_RIDER_STATUSES)[number];
 export const RIDER_MEMBERSHIP_STATUSES = ["pending", "active", "suspended", "removed"] as const;
 export type RiderMembershipStatus = (typeof RIDER_MEMBERSHIP_STATUSES)[number];
 
+/** Whether a global CustomerIdentity's phone has actually been proven, or
+ *  is just what a business typed in — see the model's own doc comment in
+ *  schema.prisma (Stage 23, spec section 6). The only way to reach
+ *  `verified` today is the customer-dashboard's own phone-OTP flow. */
+export const CUSTOMER_IDENTITY_STATUSES = ["provisional", "verified"] as const;
+export type CustomerIdentityStatus = (typeof CUSTOMER_IDENTITY_STATUSES)[number];
+
 /**
  * Internal workflow statuses.
  * Store outcomes the dispatcher must distinguish: customer not answering,

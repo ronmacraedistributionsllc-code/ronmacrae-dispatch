@@ -6,6 +6,7 @@ import { normalizePhone } from "./auth.js";
 import { pointFromJson, pointToJson } from "../geo-mappers.js";
 import type { CustomerDto, GeoPoint, NotificationChannel } from "@ronmacrae/contracts";
 import { Prisma, type Customer } from "@prisma/client";
+import { resolveCustomerIdentity, attachEmailSignal } from "./customer-identity.js";
 
 type CustomerWithZone = Customer & { zone: { name: string } | null };
 
@@ -69,6 +70,21 @@ const ListQuery = z.object({
 export class CustomersService {
   constructor(private readonly app: AppCtx) {}
 
+  /** Best-effort — a failure to resolve a global identity must never break
+   *  the actual customer create/update it's attached to. Uses the RAW,
+   *  as-typed phone (never the legacy-normalized value already stored on
+   *  the row, which lib/phone.ts's real parser can't read — see
+   *  customer-identity.ts's own doc comment). */
+  private async resolveIdentityId(phone: string, email: string | null | undefined): Promise<string | undefined> {
+    try {
+      const id = await resolveCustomerIdentity(this.app, { phone, email });
+      return id ?? undefined;
+    } catch (err) {
+      this.app.log.error({ err: String(err) }, "customer identity resolution failed");
+      return undefined;
+    }
+  }
+
   async list(businessId: string, search: string | undefined, take: number, skip: number): Promise<CustomerDto[]> {
     const s = search?.trim().toLowerCase();
     const rows = await this.app.prisma.customer.findMany({
@@ -107,6 +123,7 @@ export class CustomersService {
     const phone = normalizePhone(input.phone);
     const existing = await this.app.prisma.customer.findUnique({ where: { businessId_phone: { businessId, phone } } });
     if (existing) throw httpErrors.createError(409, "A customer with this phone number already exists");
+    const identityId = await this.resolveIdentityId(input.phone, input.email);
     const row = await this.app.prisma.customer.create({
       data: {
         businessId,
@@ -120,6 +137,7 @@ export class CustomersService {
         consentTracking: input.consentTracking,
         consentMarketing: input.consentMarketing,
         note: input.note || null,
+        identityId,
       },
       include: { zone: { select: { name: true } } },
     });
@@ -129,6 +147,19 @@ export class CustomersService {
   async update(businessId: string, id: string, input: z.infer<typeof UpdateBody>): Promise<CustomerDto> {
     const row = await this.app.prisma.customer.findFirst({ where: { id, businessId } });
     if (!row) throw httpErrors.createError(404, "Customer not found");
+    // Only re-resolve the global identity when the phone itself changes —
+    // never from the already-stored, legacy-normalized value (see
+    // resolveIdentityId's own doc comment). An email-only change instead
+    // attaches directly to the row's existing identity by id, with no
+    // phone re-parse involved at all.
+    let identityId: string | undefined;
+    if (input.phone !== undefined) {
+      identityId = await this.resolveIdentityId(input.phone, input.email === undefined ? row.email : input.email);
+    } else if (input.email !== undefined && row.identityId) {
+      await attachEmailSignal(this.app, row.identityId, input.email).catch((err: unknown) =>
+        this.app.log.error({ err: String(err) }, "customer identity email-signal attach failed"),
+      );
+    }
     const updated = await this.app.prisma.customer.update({
       where: { id },
       data: {
@@ -142,6 +173,7 @@ export class CustomersService {
         consentTracking: input.consentTracking,
         consentMarketing: input.consentMarketing,
         note: input.note === undefined ? undefined : input.note || null,
+        identityId,
       },
       include: { zone: { select: { name: true } } },
     });
@@ -167,12 +199,17 @@ export class CustomersService {
     const point =
       (input.point ? pointToJson(input.point) : (existing?.point as Prisma.InputJsonValue | null | undefined) ?? null) ??
       Prisma.JsonNull;
+    const effectiveEmail = input.email ?? existing?.email ?? null;
+    // Raw input.phone (never the legacy-stored `phone` value above) — see
+    // resolveIdentityId's own doc comment.
+    const identityId = await this.resolveIdentityId(input.phone, effectiveEmail);
     const data = {
       name: input.name || existing?.name || "Customer",
-      email: input.email ?? existing?.email ?? null,
+      email: effectiveEmail,
       addressText: input.addressText ?? existing?.addressText ?? null,
       point,
       consentTracking: input.consentTracking ?? existing?.consentTracking ?? false,
+      identityId,
     };
     if (existing) {
       return this.app.prisma.customer.update({ where: { businessId_phone: { businessId, phone } }, data });

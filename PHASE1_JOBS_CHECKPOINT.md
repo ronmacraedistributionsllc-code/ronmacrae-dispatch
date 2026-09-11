@@ -1740,8 +1740,89 @@ DATABASE_URL="file:$(pwd)/data/dev.db" node scripts/backfill-outbox-business.mjs
 DATABASE_URL="file:$(pwd)/data/dev.db" node scripts/backfill-outbox-business.mjs --yes   # execute
 ```
 
-## Next: Stage 23 — global customer identity (section 6)
+## Infrastructure fix — e2e off port 3000
 
-Now proceeding on top of Stage 20's multi-tenancy foundation, Stage 21's
-UI refresh, and Stage 22's dashboard (whose provisional phone matching
-Stage 23 replaces with the real thing). No open questions blocking it.
+`e2e/playwright.config.ts` moved its webServer from :3000 (shared with
+the LAN demo's own API server) to a dedicated :3900. Port 3000 was a
+real, repeated collision risk — killing it before a clean e2e run took
+the LAN demo down with it more than once across Stages 20-22. Verified:
+full e2e (32/32) on :3900 while both the LAN demo (:3000/:8443) and the
+Cloudflare tunnel demo (:3001) stayed up and healthy the whole run.
+
+## Stage 23 (section 6) — global customer identity
+
+Real phone normalization (libphonenumber-js, JM-default, `lib/phone.ts`
+rewritten), safe email normalization (`lib/email.ts`, new, deliberately
+conservative — trim+lowercase only, no Gmail-style folding), and audited
+duplicate resolution, replacing Stage 22's own explicitly-provisional
+phone matching.
+
+**Data model**: `CustomerIdentity` (normalizedPhone unique,
+normalizedEmail nullable, status provisional/verified) + `Customer.
+identityId` (nullable) + `MergedPhoneAlias` (so a merged-away identity's
+phone keeps resolving to the survivor forever after, not just once).
+Every Customer create/update (`modules/customers.ts`) now resolves the
+identity automatically as a side effect — deterministic linking by exact
+phone match, never a "merge" of two already-distinct identities (that
+stays owner-only and audited). Verified status is reached only through
+the customer-dashboard's own phone-OTP flow (Stage 22); never downgrades.
+
+**Two more real cross-business privacy bugs found and fixed**: (1)
+`GET /api/audit` had no business filter at all — any staff at any
+business could read every other business's entire audit trail. Fixed:
+`AuditLog.businessId` (nullable, auto-derived for job/customer/offer
+entities going forward), backfilled onto 299 of 589 derivable historical
+rows via `scripts/backfill-audit-business.mjs` (290 orphaned — their
+underlying entity no longer exists, from years of dev-db reseeding;
+correctly left null). (2) No owner-wide audit view existed — added
+`GET /api/owner/audit` (`requireOwner`-gated, the first real use of that
+guard since Stage 20).
+
+**Owner-only, audited duplicate resolution** (`modules/customer-
+identity.ts`, `modules/owner.ts`, both new): `GET /api/owner/
+customer-identities/duplicates` surfaces identities sharing a
+normalized email; `POST /api/owner/customer-identities/:id/merge`
+combines two, records one audited entry, refuses self-merge, 404s on an
+unknown id.
+
+## Commands run and results (Stage 23)
+
+| # | Command | Result |
+| --- | --- | --- |
+| 1 | `npm run typecheck --workspaces` (root) | **PASS** — 0 errors |
+| 2 | `npx vitest run` (apps/api) | **PASS** — 153/153 (143 prior + 10 new: customer-identity.test.ts) |
+| 3 | `npx vitest run` / `npm run build` (apps/web) | **PASS** — 8/8, clean build |
+| 4 | Full e2e suite (32 specs), serial, fresh `e2e-test.db`, on :3900 | **PASS** — 32/32, both live demos confirmed undisturbed |
+| 5 | `dev.db` schema push + both backfills | **PASS** — 75/77 customers linked (2 unparseable test phones, honest no-match), 299/589 audit rows backfilled (290 orphaned, correctly null) |
+
+## Re-verify (Stage 23)
+
+```bash
+npm run typecheck --workspaces
+npm run test --workspace @ronmacrae/api
+npm run test --workspace @ronmacrae/web
+npm run build --workspace @ronmacrae/web
+rm -f apps/api/data/e2e-test.db && cd e2e && npx playwright test --workers=1
+```
+
+To re-run either backfill on a different database:
+```bash
+cd apps/api
+DATABASE_URL="file:$(pwd)/data/dev.db" node scripts/backfill-customer-identities.mjs --yes
+DATABASE_URL="file:$(pwd)/data/dev.db" node scripts/backfill-audit-business.mjs --yes
+```
+
+**Honestly unverified**: real SMS delivery (Twilio, not the dev memory
+provider) and a real customer completing the OTP flow on their own phone
+— not tested on real hardware this session.
+
+**Not done in this stage**: no owner-console UI (routes fully
+implemented and tested, no frontend); `modules/auth.ts`'s separate,
+older phone normalizer left unconsolidated (flagged as a follow-up, not
+attempted — would mean re-migrating User/Rider/Customer phone storage
+and login-by-phone lookup, out of this stage's bounded scope). No
+Loyverse integration (not requested for this stage).
+
+## Next: Stage 24 — messaging redesign (section 5)
+
+Now proceeding on top of Stages 20-23. No open questions blocking it.

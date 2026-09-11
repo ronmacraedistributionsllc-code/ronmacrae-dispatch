@@ -32,6 +32,7 @@
     "fastify": "^5.12.3",
     "ioredis": "^6.0.0",
     "jose": "^6.2.12",
+    "libphonenumber-js": "^1.13.13",
     "pino": "^9.6.0",
     "web-push": "^3.6.7",
     "ws": "^8.21.3",

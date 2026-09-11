@@ -11,7 +11,7 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildTestHarness, type TestHarness } from "./helpers/test-app.js";
-import { normalizePhoneJM, toNotifyAddress } from "../src/lib/phone.js";
+import { normalizePhone } from "../src/lib/phone.js";
 
 let harness: TestHarness;
 let businessB: { id: string; name: string };
@@ -20,7 +20,7 @@ const uniq = () => `${Date.now()}${++seq}`;
 
 async function latestCode(h: TestHarness, phone: string): Promise<string> {
   const row = await h.prisma.outboxMessage.findFirst({
-    where: { template: "customer_dashboard_code", to: toNotifyAddress(phone) },
+    where: { template: "customer_dashboard_code", to: phone },
     orderBy: { createdAt: "desc" },
   });
   if (!row) throw new Error("no code was sent");
@@ -28,7 +28,7 @@ async function latestCode(h: TestHarness, phone: string): Promise<string> {
 }
 
 async function requestAndVerify(h: TestHarness, rawPhone: string): Promise<string> {
-  const phone = normalizePhoneJM(rawPhone)!;
+  const phone = normalizePhone(rawPhone)!;
   const req = await h.app.inject({ method: "POST", url: "/api/customer-dashboard/request-code", payload: { phone: rawPhone } });
   expect(req.statusCode).toBe(200);
   const code = await latestCode(h, phone);
@@ -49,7 +49,7 @@ afterAll(async () => {
 describe("phone-verified access", () => {
   it("rejects a wrong code without consuming a correct one, and enforces a resend cooldown", async () => {
     const rawPhone = `876555${uniq()}`.slice(0, 10);
-    const phone = normalizePhoneJM(rawPhone)!;
+    const phone = normalizePhone(rawPhone)!;
 
     const req1 = await harness.app.inject({ method: "POST", url: "/api/customer-dashboard/request-code", payload: { phone: rawPhone } });
     expect(req1.statusCode).toBe(200);
@@ -98,8 +98,23 @@ describe("cross-business aggregation", () => {
       data: { riderId: rider.id, point: { lat: 18.01, lng: -76.79 }, trackingState: "active", clientSeq: 1, at: new Date() },
     });
 
+    // A real request goes through customers.ts's service, which resolves
+    // (and creates, if needed) the shared CustomerIdentity as a side
+    // effect of saving a Customer row — these two Customer rows are
+    // created directly via Prisma instead (this test's own convention, see
+    // other suites), so the identity link has to be made explicitly here
+    // too, the same way that service would.
+    const normalizedPhone = normalizePhone(rawPhone)!;
+    const identity = await harness.prisma.customerIdentity.upsert({
+      where: { normalizedPhone },
+      create: { normalizedPhone },
+      update: {},
+    });
+
     // Business A (the harness's own business): an active, not-yet-picked-up job.
-    const customerA = await harness.prisma.customer.create({ data: { businessId: harness.business.id, name: "Cross Biz Customer", phone: rawPhone } });
+    const customerA = await harness.prisma.customer.create({
+      data: { businessId: harness.business.id, name: "Cross Biz Customer", phone: rawPhone, identityId: identity.id },
+    });
     const jobNew = await harness.prisma.job.create({ data: { businessId: harness.business.id, customerId: customerA.id, status: "new" } });
 
     // Business A again: a DELIVERED job with a rider and a fresh location row
@@ -111,7 +126,9 @@ describe("cross-business aggregation", () => {
 
     // Business B: a picked-up job, actively out with the rider — location
     // and PIN should both be visible.
-    const customerB = await harness.prisma.customer.create({ data: { businessId: businessB.id, name: "Cross Biz Customer", phone: rawPhone } });
+    const customerB = await harness.prisma.customer.create({
+      data: { businessId: businessB.id, name: "Cross Biz Customer", phone: rawPhone, identityId: identity.id },
+    });
     const jobPickedUp = await harness.prisma.job.create({
       data: { businessId: businessB.id, customerId: customerB.id, riderId: rider.id, status: "picked_up", pin: "5678" },
     });

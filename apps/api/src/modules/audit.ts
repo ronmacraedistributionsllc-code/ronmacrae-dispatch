@@ -20,6 +20,7 @@ export class AuditService {
     meta?: Record<string, unknown>,
   ): Promise<void> {
     try {
+      const businessId = entityId ? await this.deriveBusinessId(entityType, entityId) : null;
       await this.prisma.auditLog.create({
         data: {
           userId: actor.id ?? undefined,
@@ -27,6 +28,7 @@ export class AuditService {
           action,
           entityType,
           entityId: entityId ?? undefined,
+          businessId,
           meta: meta as object,
         },
       });
@@ -36,7 +38,34 @@ export class AuditService {
     }
   }
 
+  /** job/customer/offer entities carry a businessId (directly, or one hop
+   *  away); rider/user/customerIdentity entities are genuinely global (a
+   *  rider being created, a staff login, an identity merge spanning
+   *  businesses by design) — null for those is correct, not a gap. */
+  private async deriveBusinessId(entityType: string, entityId: string): Promise<string | null> {
+    switch (entityType) {
+      case "job": {
+        const job = await this.prisma.job.findUnique({ where: { id: entityId }, select: { businessId: true } });
+        return job?.businessId ?? null;
+      }
+      case "customer": {
+        const customer = await this.prisma.customer.findUnique({ where: { id: entityId }, select: { businessId: true } });
+        return customer?.businessId ?? null;
+      }
+      case "offer": {
+        const offer = await this.prisma.jobOffer.findUnique({ where: { id: entityId }, select: { businessId: true } });
+        return offer?.businessId ?? null;
+      }
+      default:
+        return null;
+    }
+  }
+
+  /** Omitting `businessId` returns platform-wide, unscoped entries — only
+   *  ever call this without one from an owner-gated route (see
+   *  requireOwner). The per-business route always passes one. */
   async list(filter: {
+    businessId?: string;
     entityType?: string;
     entityId?: string;
     action?: string;
@@ -47,6 +76,7 @@ export class AuditService {
   }) {
     const rows = await this.prisma.auditLog.findMany({
       where: {
+        businessId: filter.businessId,
         entityType: filter.entityType,
         entityId: filter.entityId,
         action: filter.action,
@@ -86,7 +116,21 @@ const ListQuery = z.object({
 });
 
 export async function auditRoutes(app: FastifyInstance, ctx: AppCtx): Promise<void> {
+  // Business-scoped: a real bug found in Stage 23 — this route had no
+  // business filter at all, so any staff member at any business could
+  // read every other business's entire audit trail. Every entry with no
+  // businessId (rider/user/global events) is correctly invisible here too,
+  // not just other businesses' — see the owner-only route below for those.
   app.get("/api/audit", { preHandler: ctx.requireStaff("admin", "accountant", "viewer") }, async (req) => {
+    const q = ListQuery.parse(req.query);
+    return { entries: await ctx.audit.list({ ...q, businessId: req.user!.businessId! }) };
+  });
+
+  // Platform-wide, unscoped — the first real use of requireOwner (closing a
+  // documented gap from Stage 20: "no owner-console UI... yet"). Sees
+  // everything: every business's own events plus the genuinely global ones
+  // (rider creation, staff logins, customer-identity merges).
+  app.get("/api/owner/audit", { preHandler: ctx.requireOwner }, async (req) => {
     const q = ListQuery.parse(req.query);
     return { entries: await ctx.audit.list(q) };
   });

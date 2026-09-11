@@ -5,10 +5,11 @@ import { httpErrors } from "@fastify/sensible";
 import type { AppCtx } from "../ctx.js";
 import type { CustomerPackageDto, CustomerPackagesDto, JobStatus, TrackingState } from "@ronmacrae/contracts";
 import { toCustomerStatus } from "@ronmacrae/contracts";
-import { normalizePhoneJM, toNotifyAddress } from "../lib/phone.js";
+import { normalizePhone } from "../lib/phone.js";
 import { pointFromJson, moneyField } from "../geo-mappers.js";
 import { PIN_VISIBLE_STATUSES, LOCATION_VISIBLE_STATUSES } from "./tracking.js";
 import { CUSTOMER_DASHBOARD_TTL_S } from "../lib/jwt.js";
+import { verifyCustomerIdentity, findIdentityId } from "./customer-identity.js";
 
 const CODE_TTL_MS = 10 * 60_000;
 const REQUEST_COOLDOWN_MS = 30_000;
@@ -31,16 +32,25 @@ const VerifyBody = z.object({ phone: z.string().min(4).max(30), code: z.string()
  * Cross-business customer package dashboard (spec 4). Public, no staff/rider
  * login — phone-ownership verified by a short-lived, single-use code (like
  * an OTP), never a password or a persistent account. See lib/jwt.ts's
- * CustomerDashboardTokenPayload and lib/phone.ts's normalizePhoneJM for the
- * two pieces this leans on, and Stage 22's write-up in WORK_IN_PROGRESS.md
- * for the fuller reasoning (including the two real bugs found while
- * building it: the notification-outbox cross-business leak, and the
+ * CustomerDashboardTokenPayload and lib/phone.ts's normalizePhone for the
+ * two pieces this leans on. As of Stage 23, a successful verify() here is
+ * also the one and only way a CustomerIdentity ever becomes "verified"
+ * (see customer-identity.ts) — Stage 22's write-up in WORK_IN_PROGRESS.md
+ * has the fuller original reasoning, including the two real bugs found
+ * while building it (the notification-outbox cross-business leak, and the
  * unrestricted rider-location display).
+ *
+ * IMPORTANT, honestly: actual SMS delivery (a real provider, not the dev
+ * memory provider) and a real customer completing this flow with a code
+ * that genuinely arrived on their own phone have NOT been tested on real
+ * hardware in this session — only the dev/e2e path (memory provider, code
+ * read back via Prisma) is verified. Do not represent this as
+ * device-tested until it has been.
  */
 export async function customerDashboardRoutes(app: FastifyInstance, ctx: AppCtx): Promise<void> {
   app.post("/api/customer-dashboard/request-code", async (req) => {
     const body = RequestCodeBody.parse(req.body);
-    const phone = normalizePhoneJM(body.phone);
+    const phone = normalizePhone(body.phone);
     if (!phone) throw httpErrors.createError(400, "Enter a valid phone number.");
 
     const recent = await ctx.prisma.customerAccessCode.findFirst({
@@ -58,9 +68,11 @@ export async function customerDashboardRoutes(app: FastifyInstance, ctx: AppCtx)
     });
     // No businessId: this code isn't from any one business, and must never
     // show up in any business's staff notification list (see notify.ts).
+    // `phone` is already the real E.164 form (lib/phone.ts) — no separate
+    // "to"-address formatting needed.
     await ctx.notify.enqueue({
       channel: "sms",
-      to: toNotifyAddress(phone),
+      to: phone,
       template: "customer_dashboard_code",
       params: { code },
     });
@@ -69,7 +81,7 @@ export async function customerDashboardRoutes(app: FastifyInstance, ctx: AppCtx)
 
   app.post("/api/customer-dashboard/verify", async (req) => {
     const body = VerifyBody.parse(req.body);
-    const phone = normalizePhoneJM(body.phone);
+    const phone = normalizePhone(body.phone);
     if (!phone) throw httpErrors.createError(400, "Enter a valid phone number.");
 
     const row = await ctx.prisma.customerAccessCode.findFirst({
@@ -86,6 +98,12 @@ export async function customerDashboardRoutes(app: FastifyInstance, ctx: AppCtx)
       throw httpErrors.createError(400, "Incorrect code.");
     }
     await ctx.prisma.customerAccessCode.update({ where: { id: row.id }, data: { consumedAt: new Date() } });
+    // Proof of ownership — the one and only trigger that ever marks a
+    // CustomerIdentity "verified" (best-effort: a failure here must never
+    // block the customer from getting into their own dashboard).
+    await verifyCustomerIdentity(ctx, phone).catch((err: unknown) =>
+      ctx.log.error({ err: String(err) }, "customer identity verification failed"),
+    );
     const token = await ctx.jwt.issueCustomerDashboard(phone);
     return { token, expiresInSeconds: CUSTOMER_DASHBOARD_TTL_S };
   });
@@ -106,21 +124,20 @@ async function requireCustomerDashboardPhone(ctx: AppCtx, req: FastifyRequest): 
 }
 
 /**
- * Finds every business's Customer row for this phone and aggregates their
- * jobs. Deliberately a broad, honest, exact-match lookup — not the real
- * cross-business identity system Stage 23 builds — so a `contains` prefilter
- * on the phone's last 7 digits (cheap even unindexed at this scale) narrows
- * the scan before an exact normalized comparison in application code, which
- * is what actually decides a match (never the raw stored string, whose
- * formatting isn't guaranteed consistent).
+ * Finds every business's Customer row linked to this phone's
+ * CustomerIdentity (Stage 23) and aggregates their jobs. A genuine indexed
+ * lookup, not a scan — and it follows a merge alias too (see
+ * customer-identity.ts's findIdentityId), so a customer whose duplicate
+ * identity the platform owner has since merged still sees everything under
+ * whichever phone they actually type in.
  */
 async function buildDashboard(ctx: AppCtx, phone: string): Promise<CustomerPackagesDto> {
-  const last7 = phone.slice(-7);
-  const candidates = await ctx.prisma.customer.findMany({
-    where: { phone: { contains: last7 } },
-    select: { id: true, phone: true },
-  });
-  const customerIds = candidates.filter((c) => normalizePhoneJM(c.phone) === phone).map((c) => c.id);
+  const identityId = await findIdentityId(ctx, phone);
+  if (!identityId) {
+    return { active: [], history: [], generatedAt: new Date().toISOString() };
+  }
+  const customers = await ctx.prisma.customer.findMany({ where: { identityId }, select: { id: true } });
+  const customerIds = customers.map((c) => c.id);
   if (customerIds.length === 0) {
     return { active: [], history: [], generatedAt: new Date().toISOString() };
   }

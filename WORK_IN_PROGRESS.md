@@ -1722,7 +1722,7 @@ everything from Stage 20 on, not just as a footnote:
 | 20 | Multi-tenancy foundation: Business model, global User/Rider identity with per-business/platform memberships, isolation across orders/offers/messages/GPS/cash-ledgers/reports/realtime, verified with two businesses sharing one rider | (foundational — enables 4, 6, 7, 9) | DONE |
 | 21 | UI/UX refresh pass (typography, contrast, empty/loading/error states, mobile bottom nav) across rider/customer/dispatcher screens + verified screenshots | 3 | DONE |
 | 22 | Customer package dashboard + restricted rider-location display post-collection, across participating businesses | 4 | DONE |
-| 23 | Global customer identity: phone normalization (libphonenumber, JM default), safe email normalization, verified-vs-provisional records, duplicate-resolution audit trail, rate limiting, per-business customer relationships on top of Stage 20's Business model | 6 | NOT STARTED |
+| 23 | Global customer identity: phone normalization (libphonenumber, JM default), safe email normalization, verified-vs-provisional records, duplicate-resolution audit trail, rate limiting, per-business customer relationships on top of Stage 20's Business model | 6 | DONE |
 | 24 | Messaging redesign: split the one shared thread into the three real pairwise conversations, add delivered/read receipts, retry-without-duplicate, reassignment access revocation | 5 | NOT STARTED (needs the thread-model redesign above) |
 | 25 | Sign-in/account linking: email verification, password reset, account-claim flow, expiring/single-use codes; Instagram login feasibility investigation (implement only if genuinely supported for this use case; otherwise document why it's disabled) | 7 | NOT STARTED |
 | 26 | Deleted-orders trash: soft-delete + 30-day restore window + scheduled purge job, preserving ledger/dispute/audit records, scoped per business | 8 | NOT STARTED |
@@ -2284,3 +2284,160 @@ separate, unrelated local-dev-loop convenience (`npm run dev --workspace
 LAN demo (:3000/:8443) and the Cloudflare tunnel demo (:3001) were left
 running the whole time — confirmed healthy immediately before and
 immediately after the e2e run, with no restart needed for either.
+
+## Stage 23 — Section 6: global customer identity (DONE)
+
+Real phone normalization, verified-vs-provisional identities, and audited
+duplicate resolution — replacing Stage 22's own explicitly-provisional
+phone matching with the real thing.
+
+**Data model** (`schema.prisma`): `CustomerIdentity` (normalizedPhone
+unique, normalizedEmail nullable, status provisional/verified,
+verifiedAt) — holds almost nothing on purpose: just enough to match a
+person's Customer rows across businesses together, never any per-business
+PII (name/address/notes stay on Customer, business-scoped, as always).
+`Customer.identityId` links to it (nullable — a phone that can't be
+confidently normalized just has no identity, an honest state, not a
+bug). `MergedPhoneAlias` — when the owner merges two identities, the
+merged-away one's phone doesn't just vanish; it's recorded here so it
+keeps resolving to the surviving identity forever after, rather than
+silently re-creating a new identity (and quietly undoing the merge) the
+next time someone books with that number.
+
+**Real phone normalization** (`lib/phone.ts`, rewritten): now
+libphonenumber-js-based, Jamaica-default but genuinely handles any
+country's number, exact-match only (a miss just means a package doesn't
+show up grouped with the customer's others — safe; a wrong match between
+two different people is the thing this design avoids). Deliberately kept
+separate from the older, differently-shaped ad-hoc phone normalizer
+already in `modules/auth.ts` (used for User/Rider/Customer.phone storage
+and login-by-phone lookup) — unifying those is a real, known follow-up,
+not attempted here, since it would mean re-migrating phone storage across
+logins/riders/customers for a cleanup outside this stage's scope. Flagged
+via a code comment and a spawn_task suggestion rather than done silently.
+
+**Safe email normalization** (`lib/email.ts`, new): trim + lowercase
+only — deliberately no Gmail-style dot/plus-address folding, which would
+risk treating two different people's real addresses as "the same." Email
+is only ever a duplicate-*candidate* signal, never grounds to auto-merge.
+
+**Automatic, deterministic linking — never a "merge"**: every Customer
+create/update (`modules/customers.ts`, all three code paths: staff
+create, staff update, the public delivery-request upsert) now resolves
+the customer's identity by phone as a side effect, best-effort (a failure
+here never blocks the actual customer save). Two different businesses'
+customers sharing an exact normalized phone land on the same identity
+automatically — that's the intended "one global identity" grouping, not
+a merge of two already-distinct identities (which stays a separate,
+owner-only, audited action — see below). An update that only changes a
+customer's name never touches their identity link; one that changes
+email-only attaches the email as a signal to the *existing* linked
+identity directly (never re-derived from the already-normalized stored
+phone, which the new parser can't read anyway — see below).
+
+**Verified vs. provisional**: every identity starts `provisional` —
+staff typed this phone into a form, nobody has proven they own it. The
+only way to reach `verified` is completing the customer-dashboard's own
+phone-OTP flow (Stage 22) — `customer-dashboard.ts`'s verify() route now
+marks the identity verified as a side effect of a correct code. Verified
+never downgrades: a later provisional-looking write for the same phone
+(a different business typing it into a booking form) doesn't undo proof
+already established.
+
+**Two more real cross-business privacy bugs found and fixed** (found
+because this stage's whole point is "preserving cross-business privacy,"
+and Stage 20's own isolation pass didn't reach these):
+
+- **`GET /api/audit` had no business filter at all.** Any staff member at
+  any business could read every other business's entire audit trail —
+  every job/customer/offer event platform-wide. Fixed: `AuditLog`
+  gained a nullable `businessId`, derived automatically in `record()`
+  going forward (job/customer/offer entities join to their own
+  businessId; rider/user entities are correctly left null — a rider
+  being created or a staff login genuinely isn't any one business's
+  event), backfilled onto 299 of the 589 derivable historical rows via
+  `scripts/backfill-audit-business.mjs` (290 were orphaned — their
+  underlying job/customer/offer no longer exists, from this dev
+  database's long history of reseeding; correctly left null, not
+  guessed at). `GET /api/audit` now requires and enforces the caller's
+  own businessId.
+- **No owner-wide view existed at all** — meaning there was previously
+  no way for the platform owner to review activity *across* businesses,
+  including the new identity-merge events this stage adds (which are
+  inherently cross-business and don't belong to any one business's own
+  audit view). Added `GET /api/owner/audit` (unscoped, `requireOwner`-
+  gated) — the first real route to use the `requireOwner` guard that's
+  existed, unused, since Stage 20.
+
+**Audited duplicate resolution** (`modules/customer-identity.ts`,
+`modules/owner.ts`, both new, owner-only): `GET
+/api/owner/customer-identities/duplicates` surfaces identities that
+share a normalized email but have different phones — a plausible
+same-person signal, never acted on automatically. `POST
+/api/owner/customer-identities/:id/merge` combines two identities:
+every linked Customer row re-points to the survivor, trust already
+established never downgrades (verified beats provisional), the merged-
+away phone keeps resolving via `MergedPhoneAlias`, and the whole thing
+is one audited action (`ctx.audit.record`, action
+`customerIdentity.merge`, meta records both ids, both phones, and the
+reason given). Refuses to merge an identity into itself; 404s (not a
+different code) on an unknown id.
+
+**Rate limiting**: no new public surface was added — the owner routes
+are owner-authenticated, protected the same as every other staff route
+by the global per-IP limiter (Stage 21); the OTP surface's own rate
+limiting (30s resend cooldown, 5-attempt cap) is unchanged from Stage 22
+and is what this stage's "verified" status now actually relies on.
+
+**Migration, verified against the real `dev.db`**: backed up first
+(`data/dev.db.bak-stage23-*`). Additive schema push (`identityId` on
+Customer, `businessId` on AuditLog, both nullable; new
+CustomerIdentity/MergedPhoneAlias tables) confirmed non-destructive by
+row count before/after. `scripts/backfill-customer-identities.mjs`
+(dry-run by default) linked 75 of 77 existing Customer rows to 75 newly
+created (all-provisional) identities — the 2 unlinked rows have
+genuinely malformed test-data phone numbers that don't normalize to
+anything (an honest "no match," not a bug); every identity created this
+way starts provisional, since nothing in historical data proves anyone
+actually owns these numbers. `scripts/backfill-audit-business.mjs`
+resolved 299 of 589 derivable AuditLog rows (see above).
+
+**Tests**: `apps/api/test/customer-identity.test.ts` (new, 10 tests) —
+automatic identity resolution and its "not a merge" distinction across
+two businesses sharing a phone, name-only vs. phone-changing updates,
+provisional-to-verified via the real OTP flow and that verification never
+downgrades, owner-only enforcement (403 for non-owners) on both new
+routes, the full duplicate-candidates → merge → alias-still-resolves →
+audited round trip (a third business booking with the merged-away phone
+afterward lands on the surviving identity, not a new one), self-merge and
+unknown-id rejection, and the audit-log business-isolation fix itself
+(including the owner seeing both businesses' entries).
+`customer-dashboard.test.ts` and `tracking.test.ts` updated for the new
+normalizer's real E.164 output (was the old provisional bare-digit form)
+and re-verified passing; `customer-dashboard.ts`'s `buildDashboard` now
+queries via the indexed CustomerIdentity table instead of Stage 22's
+`contains`-prefiltered scan.
+
+**Verification**: `npm run typecheck --workspaces` clean; `apps/api`
+vitest 153/153 (143 prior + 10 new); `apps/web` vitest 8/8 + clean build;
+full e2e suite (still on the new dedicated :3900, both live demos
+confirmed undisturbed) 32/32.
+
+**Honestly unverified — do not represent otherwise**: actual SMS
+delivery through a real provider (Twilio, not the dev memory provider)
+and a real customer completing this flow with a code that genuinely
+arrived on their own phone have NOT been tested on real hardware in this
+session. Everything above is verified through the dev/e2e path only
+(memory provider; the code read back via Prisma, the same way a real SMS
+would have carried it, but never actually sent as one).
+
+**Not done in this stage** (deliberately deferred): no owner-console
+UI — `GET /api/owner/customer-identities/duplicates` and the merge route
+are fully implemented and tested but have no frontend yet (the same
+documented gap as the rest of the owner console since Stage 20: business
+creation/listing, rider platform-approval). Unifying `modules/auth.ts`'s
+separate phone normalizer with this stage's real one (see above) is a
+real, flagged follow-up, not attempted. No Loyverse integration (not
+requested for this stage). Sign-in/account linking, messaging redesign,
+deleted-orders trash, and rider cash-profile corrections are Stages
+24-27, next.

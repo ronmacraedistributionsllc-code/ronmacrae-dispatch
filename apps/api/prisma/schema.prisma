@@ -271,9 +271,11 @@ model Customer {
   id               String    @id @default(cuid())
   /** Nullable only during the multi-tenancy migration's backfill window. A
    *  Customer row is one business's relationship with a person — the same
-   *  phone number can be a separate Customer row at a different business
-   *  (global cross-business identity is a later, additive layer on top of
-   *  this, not a replacement for it). */
+   *  phone number can be a separate Customer row at a different business.
+   *  `identity` below (Stage 23) is the additive, global layer on top of
+   *  this — it never replaces or is joined into ordinary per-business
+   *  Customer reads/writes, only the cross-business identity/dashboard/
+   *  duplicate-resolution paths touch it. */
   businessId       String
   business         Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
   name             String
@@ -292,10 +294,68 @@ model Customer {
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
 
+  /** The global identity this business's customer resolves to, by exact
+   *  normalized-phone match (Stage 23) — null only when the phone on file
+   *  can't be confidently normalized (see lib/phone.ts). Assigning this is
+   *  automatic and deterministic (same normalized phone = same identity);
+   *  it is never a "merge" of two already-distinct identities — that's a
+   *  separate, owner-only, audited action (see CustomerIdentity below). */
+  identityId String?
+  identity   CustomerIdentity? @relation(fields: [identityId], references: [id], onDelete: SetNull)
+
   jobs    Job[]
   consents ConsentRecord[]
 
   @@unique([businessId, phone])
+  @@index([identityId])
+}
+
+/** Whether a phone number's ownership has actually been proven, or is just
+ *  what a business typed in. The only way to reach `verified` right now is
+ *  the customer-dashboard's own phone-OTP flow (Stage 22) — there is no
+ *  account/login system yet (that's Stage 25). */
+enum CustomerIdentityStatus {
+  provisional
+  verified
+}
+
+/**
+ * One real person across the whole platform (Stage 23, spec section 6) —
+ * deliberately holds almost nothing: just enough to match a person's own
+ * Customer rows across businesses together, never any of the per-business
+ * PII itself (name/address/notes stay on Customer, business-scoped, as
+ * always). `normalizedPhone` is the deterministic join key (exact match
+ * only — see lib/phone.ts); `normalizedEmail` is a *candidate* signal for
+ * duplicate-resolution, never auto-matched into the same identity on its
+ * own (two different phones sharing an email become merge *candidates* for
+ * an owner to confirm, not an automatic merge).
+ */
+model CustomerIdentity {
+  id              String                 @id @default(cuid())
+  normalizedPhone String                 @unique
+  normalizedEmail String?
+  status          CustomerIdentityStatus @default(provisional)
+  verifiedAt      DateTime?
+  createdAt       DateTime               @default(now())
+  updatedAt       DateTime               @updatedAt
+
+  customers      Customer[]
+  mergedAliases  MergedPhoneAlias[]
+
+  @@index([normalizedEmail])
+}
+
+/** Once a CustomerIdentity is merged away (the owner-only, audited merge
+ *  action), its own phone number would otherwise become unclaimed — a
+ *  later booking using that same phone would silently create a brand-new
+ *  identity and quietly undo the merge over time. This alias makes that
+ *  phone permanently resolve to the identity it was merged into instead. */
+model MergedPhoneAlias {
+  id              String           @id @default(cuid())
+  normalizedPhone String           @unique
+  identityId      String
+  identity        CustomerIdentity @relation(fields: [identityId], references: [id], onDelete: Cascade)
+  mergedAt        DateTime         @default(now())
 }
 
 // ---------- Jobs ----------
@@ -918,12 +978,22 @@ model AuditLog {
   action     String
   entityType String
   entityId   String?
+  /** Derived automatically (see audit.ts's record()) from the entity being
+   *  logged, when that entity has one — job/customer/offer events do,
+   *  rider/user events genuinely don't (riders and users are global; a
+   *  rider being created or a staff member logging in isn't "business A's"
+   *  event any more than another business's). Null here is a real,
+   *  correct case, not a migration gap. Found and fixed in Stage 23:
+   *  GET /api/audit had no business filter at all — any staff member at
+   *  any business could read every other business's entire audit trail. */
+  businessId String?
   ip         String?
   meta       Json?
   at         DateTime @default(now())
 
   @@index([at])
   @@index([entityType, entityId])
+  @@index([businessId, at])
 }
 
 model ExternalOrder {
