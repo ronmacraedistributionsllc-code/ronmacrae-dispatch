@@ -89,6 +89,14 @@ const EnvSchema = z.object({
   WEB_DIST: z.string().default(""),
   MAX_UPLOAD_BYTES: z.coerce.number().int().positive().default(8_388_608),
 
+  /** Global request-rate ceiling (per IP, per minute) — production default
+   *  is deliberately generous rather than tight, since this is abuse
+   *  protection, not throttling normal use. Overridden much higher for the
+   *  e2e suite (see e2e/playwright.config.ts), where every test's traffic
+   *  shares one IP (localhost) and a long serial run can otherwise exceed
+   *  a production-sane ceiling on request count alone, not actual abuse. */
+  RATE_LIMIT_MAX: z.coerce.number().int().positive().default(1000),
+
   /** Web Push (VAPID). Dev default below when DEV_DB=1; required otherwise. */
   VAPID_PUBLIC_KEY: z.string().default(""),
   VAPID_PRIVATE_KEY: z.string().default(""),

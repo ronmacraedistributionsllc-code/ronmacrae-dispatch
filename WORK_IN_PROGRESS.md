@@ -1720,7 +1720,7 @@ everything from Stage 20 on, not just as a footnote:
 | - | ----- | ---------- | ------ |
 | 19 | Three-step rider flow + rider dashboard (Offers / To pick up / In my possession / History) | 1, 2 | DONE |
 | 20 | Multi-tenancy foundation: Business model, global User/Rider identity with per-business/platform memberships, isolation across orders/offers/messages/GPS/cash-ledgers/reports/realtime, verified with two businesses sharing one rider | (foundational — enables 4, 6, 7, 9) | DONE |
-| 21 | UI/UX refresh pass (typography, contrast, empty/loading/error states, mobile bottom nav) across rider/customer/dispatcher screens + verified screenshots | 3 | NOT STARTED |
+| 21 | UI/UX refresh pass (typography, contrast, empty/loading/error states, mobile bottom nav) across rider/customer/dispatcher screens + verified screenshots | 3 | DONE |
 | 22 | Customer package dashboard + restricted rider-location display post-collection, across participating businesses | 4 | NOT STARTED |
 | 23 | Global customer identity: phone normalization (libphonenumber, JM default), safe email normalization, verified-vs-provisional records, duplicate-resolution audit trail, rate limiting, per-business customer relationships on top of Stage 20's Business model | 6 | NOT STARTED |
 | 24 | Messaging redesign: split the one shared thread into the three real pairwise conversations, add delivered/read receipts, retry-without-duplicate, reassignment access revocation | 5 | NOT STARTED (needs the thread-model redesign above) |
@@ -2035,3 +2035,113 @@ by design (a rider's real total load has to be visible to anyone
 considering assigning them more work). Sections 4/6/7/9's actual feature
 work (customer package dashboard, global customer identity, sign-in, cash-
 profile corrections) starts next, now on top of this foundation.
+
+## Stage 21 — Section 3: modern, usable interface (DONE)
+
+Bounded to real, verifiable gaps against the spec's own checklist, rather
+than a ground-up redesign — much of the surface was already solid from
+earlier stages (Stage 19's rider dashboard: sectioned cards, empty states,
+dismissible bottom sheets that preserve entered data; the customer tracking
+page: single-column, already mobile-native; status badges throughout
+already pair color with a text label, never color alone).
+
+**Mobile bottom navigation** (`components/layout.tsx`, rewritten) — the
+one checklist item that was flatly absent. The desktop/tablet sidebar is
+unchanged; on mobile it's replaced by a fixed bottom nav (icon + label,
+`env(safe-area-inset-bottom)`-aware) showing the first 4 of the role's own
+filtered tab list, with a "More" button opening a dismissible sheet for
+the rest. **A real, pre-existing bug found in the process**: the sidebar's
+user-info/Sign-out block was `hidden md:block` — on mobile, signing out
+was completely unreachable through the UI at all. Fixed: Sign out now
+lives in the "More" sheet, so it's always reachable on every screen size.
+**A second bug found**: the tab list's `STAFF_ONLY_TABS` filter forgot
+`/zones` — a rider's nav showed "Zones & Fares", a staff config screen
+with nothing for them to do there. Fixed (confirmed visually — see
+Verification below — a rider's nav now shows only Dashboard and
+Notifications).
+
+**Ops board mobile responsiveness** (`pages/ops-board.tsx`) — the rider
+roster was a 6-column table, unusable on a phone (forced sideways
+scrolling, tiny tap targets). Desktop/tablet keeps the table unchanged;
+mobile gets a parallel stacked-card layout (`RiderCard`, new) with the
+same data and larger, icon-labeled action buttons — both render in the
+DOM simultaneously, toggled by Tailwind's responsive `hidden`/`md:block`
+classes, so a viewport resize needs no reload. Distinct `data-testid`s
+(`ops-rider-card-*` vs the desktop's existing `ops-rider-row-*`) so the
+two never collide in the DOM at once. Also added a "Try again" retry
+button to the board's error state, which previously just showed a static
+red line with no way to recover short of a full page reload.
+
+**A real bug found while wiring the mobile nav** (unrelated to it, but
+surfaced by re-touching the same file): `useBusinessName()` on the rider
+dashboard called the (Stage 20-updated) dispatch-contact endpoint without
+the `jobId` it now requires — a real TypeScript compile error that should
+have been caught by Stage 20's own typecheck run and wasn't. Fixed by
+threading the job's id through, which is also the *more correct* fix in
+the multi-tenancy sense (the business name shown is always that specific
+job's own business, not whichever business happened to answer first).
+
+**A second real bug found, this one load-bearing for the whole e2e suite**:
+a full serial run started intermittently failing its very last two tests
+(`smoke.spec.ts`) with a page that rendered raw JSON —
+`{"error":{"message":"Rate limit exceeded, try again in [object
+Object]"...}}`. Root cause: the global `@fastify/rate-limit` ceiling
+(1000 req/min) is keyed per-IP, and in e2e every test's traffic — now 29
+specs, all polling, all logging in and out — shares one IP (localhost),
+unlike real production traffic spread across many users. Fixed properly,
+not just band-aided: `RATE_LIMIT_MAX` is now a config value (`config.ts`),
+defaulting to the same 1000/min in production; `e2e/playwright.config.ts`
+overrides it much higher for the e2e webServer only. Also fixed the
+error message itself while in there — it was interpolating the whole
+context object (`"try again in [object Object]"`) instead of
+`context.after`.
+
+**Verification — real, not just automated**: beyond the full test suite,
+used the Browser tool against the live Cloudflare-tunnel demo (still
+running from earlier this session) to actually look at the rendered
+screens at both mobile (375×812) and desktop widths — logged in as
+dispatcher and as the rider, and opened a live customer tracking link.
+Confirmed by eye: the mobile bottom nav renders with the right active-tab
+highlight and icons; tapping "More" opens the sheet with the remaining
+tabs and a working, dismissible-by-Escape Sign out that actually signs
+out; the ops board swaps cleanly from table to cards at mobile width with
+identical data and larger tap targets; the rider's nav now shows only
+Dashboard/Notifications (the `/zones` fix, confirmed live, not just by
+reading the code); the customer tracking page renders as a clean
+single-column mobile view with the live map, status badge, and history.
+Static screenshot files aren't separately exportable from this session's
+browser tooling, so this verification was done by direct visual
+inspection in the moment rather than attached images — the same live
+demo links already shared with the user let them see the identical views
+themselves, on any device, immediately.
+
+**Tests**: `e2e/specs/mobile-nav.spec.ts` (new, 2 tests) — the mobile
+bottom nav shows the right primary tabs and the desktop sidebar nav is
+hidden at that width; "More" reaches every overflow tab plus Sign out,
+is dismissible by backdrop tap without navigating away, and actually
+signs out when used; the ops board table becomes stacked cards with the
+same data at mobile width.
+
+**Verification run**: `npm run typecheck --workspaces` clean; `apps/api`
+vitest 133/133 (unchanged — this stage touched no API business logic,
+only the rate-limit config plumbing); `apps/web` vitest 8/8 + clean
+build; full e2e suite, fresh `e2e-test.db`, 29/29 (27 prior + 2 new)
+passing serially — including confirming the rate-limit fix by
+reproducing the failure once, then re-running clean after the fix.
+
+**Not done in this stage** (deliberate scope cuts, not overlooked): the
+main dispatcher Jobs screen's table (8 columns, many nested action/chat/
+queue panels per row) was deliberately *not* converted to a mobile-card
+layout in this pass — it already has a horizontal-scroll wrapper (usable,
+not broken, just not optimal), but a full responsive redesign of the
+platform's most complex, most heavily e2e-tested screen is a larger,
+standalone piece of work better done on its own rather than folded into
+this bounded stage; it already has an `overflow-x-auto` wrapper so it's
+usable, not broken, on a phone. No icon-library rollout — the existing
+emoji-as-icon convention (established in Stage 18/19: "📍 Navigate", "💬
+Message customer") was extended into the new nav rather than introducing
+a dependency for this stage. Typography/spacing scale, dedicated
+reconnecting-state UI beyond the existing connection-status dot+label,
+and a full contrast audit (beyond spot-checks made while touching these
+specific files) are not separately itemized — no further gaps were found
+against the checklist in the screens touched.

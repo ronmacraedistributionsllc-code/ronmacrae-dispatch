@@ -45,7 +45,14 @@ export function OpsBoard(): React.JSX.Element {
   const [queueRiderId, setQueueRiderId] = useState<string | null>(null);
 
   if (board.isLoading) return <p className="text-sm text-zinc-400">Loading operations board…</p>;
-  if (!board.data) return <p className="text-sm text-red-400">Could not load the operations board.</p>;
+  if (!board.data) {
+    return (
+      <div className="card space-y-2">
+        <p className="text-sm text-red-400">Could not load the operations board.</p>
+        <button className="btn !px-3 !py-1.5 text-sm" onClick={() => void board.refetch()}>Try again</button>
+      </div>
+    );
+  }
   const data = board.data;
 
   return (
@@ -55,26 +62,38 @@ export function OpsBoard(): React.JSX.Element {
         <p className="text-sm text-zinc-400">Updated {new Date(data.generatedAt).toLocaleTimeString("en-JM")} · refreshes every 15s</p>
       </header>
 
-      <section className="card overflow-x-auto">
+      <section className="card">
         <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-zinc-400">Riders</h2>
-        <table className="w-full text-left text-sm">
-          <thead>
-            <tr className="text-xs uppercase tracking-wide text-zinc-500">
-              <th className="py-1 pr-3">Rider</th>
-              <th className="py-1 pr-3">Availability</th>
-              <th className="py-1 pr-3">Active / capacity</th>
-              <th className="py-1 pr-3">Connection</th>
-              <th className="py-1 pr-3">Last location</th>
-              <th className="py-1">Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {data.riders.map((r) => (
-              <RiderRow key={r.id} rider={r} queueOpen={queueRiderId === r.id} onToggleQueue={() => setQueueRiderId((cur) => (cur === r.id ? null : r.id))} />
-            ))}
-          </tbody>
-        </table>
-        {data.riders.length === 0 ? <p className="mt-2 text-sm text-zinc-500">No active riders.</p> : null}
+        {data.riders.length === 0 ? <p className="text-sm text-zinc-500">No active riders.</p> : null}
+
+        {/* Desktop/tablet: dense table. A 6-column table is unusable on a
+         *  phone (forces sideways scrolling, tiny tap targets), so mobile
+         *  gets its own stacked-card layout below instead. */}
+        <div className="hidden overflow-x-auto md:block">
+          <table className="w-full text-left text-sm">
+            <thead>
+              <tr className="text-xs uppercase tracking-wide text-zinc-500">
+                <th className="py-1 pr-3">Rider</th>
+                <th className="py-1 pr-3">Availability</th>
+                <th className="py-1 pr-3">Active / capacity</th>
+                <th className="py-1 pr-3">Connection</th>
+                <th className="py-1 pr-3">Last location</th>
+                <th className="py-1">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.riders.map((r) => (
+                <RiderRow key={r.id} rider={r} queueOpen={queueRiderId === r.id} onToggleQueue={() => setQueueRiderId((cur) => (cur === r.id ? null : r.id))} />
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        <div className="space-y-2 md:hidden">
+          {data.riders.map((r) => (
+            <RiderCard key={r.id} rider={r} queueOpen={queueRiderId === r.id} onToggleQueue={() => setQueueRiderId((cur) => (cur === r.id ? null : r.id))} />
+          ))}
+        </div>
       </section>
 
       <div className="grid gap-4 lg:grid-cols-2">
@@ -185,5 +204,60 @@ function RiderRow({ rider, queueOpen, onToggleQueue }: { rider: OpsBoardRiderDto
         </tr>
       ) : null}
     </>
+  );
+}
+
+/** Mobile equivalent of RiderRow — same data, stacked instead of columnar so
+ *  it's readable and tappable at phone width without sideways scrolling. */
+function RiderCard({ rider, queueOpen, onToggleQueue }: { rider: OpsBoardRiderDto; queueOpen: boolean; onToggleQueue: () => void }): React.JSX.Element {
+  const loc = rider.location;
+  return (
+    <div className="rounded-lg border border-zinc-800 bg-zinc-900/40 p-3" data-testid={`ops-rider-card-${rider.id}`}>
+      <div className="flex items-center justify-between gap-2">
+        <span className="font-medium text-zinc-100">{rider.name}</span>
+        <span className={`rounded px-2 py-0.5 text-xs font-medium ${STATUS_BADGE[rider.status] ?? "bg-zinc-800 text-zinc-400"}`}>
+          {STATUS_LABEL[rider.status] ?? rider.status}
+        </span>
+      </div>
+      <dl className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1.5 text-sm">
+        <div>
+          <dt className="label !mb-0">Active / capacity</dt>
+          <dd className="text-zinc-200">
+            {rider.activeJobCount} / {rider.capacity}
+            {rider.capacityRemaining === 0 ? <span className="ml-1 text-xs text-amber-400">(full)</span> : null}
+          </dd>
+        </div>
+        <div>
+          <dt className="label !mb-0">Connection</dt>
+          <dd className="flex items-center gap-1.5 text-xs text-zinc-400">
+            <span className={`h-2 w-2 rounded-full ${rider.connected ? "bg-emerald-500" : "bg-zinc-600"}`} />
+            {rider.connected ? "Connected" : "Not connected"}
+          </dd>
+        </div>
+        <div className="col-span-2">
+          <dt className="label !mb-0">Last location</dt>
+          <dd>
+            {loc ? (
+              <span className={`text-xs ${loc.stale ? "text-amber-400" : "text-zinc-400"}`}>
+                {ageLabel(loc.ageMs)}
+                {loc.stale ? " — stale, may not be current" : ""}
+              </span>
+            ) : (
+              <span className="text-xs text-zinc-600">No report yet</span>
+            )}
+          </dd>
+        </div>
+      </dl>
+      <div className="mt-3 flex flex-wrap gap-2">
+        <a className="btn !px-3 !py-1.5 text-xs" href={`tel:${rider.phone}`}>📞 Call</a>
+        <a className="btn !px-3 !py-1.5 text-xs" href={`sms:${rider.phone}`}>💬 Message</a>
+        <button className="btn !px-3 !py-1.5 text-xs" onClick={onToggleQueue}>{queueOpen ? "Hide queue" : "Route queue"}</button>
+      </div>
+      {queueOpen ? (
+        <div className="mt-3 border-t border-zinc-800 pt-3" data-testid={`ops-queue-card-${rider.id}`}>
+          <ReadOnlyRiderQueue riderId={rider.id} />
+        </div>
+      ) : null}
+    </div>
   );
 }

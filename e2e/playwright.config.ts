@@ -35,6 +35,14 @@ export default defineConfig({
       HOST: "127.0.0.1",
       PORT: "3000",
       LOG_LEVEL: "warn",
+      // The whole suite's traffic — every test, every spec file, one long
+      // serial run — shares a single IP (localhost), unlike real production
+      // traffic spread across many users. The production-sane default
+      // (1000/min) is real abuse protection there; here it's just an
+      // accident of how e2e tests happen to be shaped, and a long run was
+      // starting to trip it near the end (real finding, not a product bug —
+      // see WORK_IN_PROGRESS.md's Stage 21 notes).
+      RATE_LIMIT_MAX: "100000",
     },
   },
   projects: [

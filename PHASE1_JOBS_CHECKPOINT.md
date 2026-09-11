@@ -1615,7 +1615,79 @@ DEV_DB=1 DATABASE_URL="file:$(pwd)/data/dev.db" node scripts/backfill-multitenan
 DEV_DB=1 DATABASE_URL="file:$(pwd)/data/dev.db" node scripts/backfill-multitenancy.mjs --yes   # execute
 ```
 
-## Next: Stage 21 (section 3) — UI/UX refresh pass
+## Stage 21 (section 3) — UI/UX refresh pass
 
-Now proceeding on top of the multi-tenancy foundation. No open questions
-blocking it.
+**Mobile bottom nav** added to `layout.tsx` (previously desktop-sidebar-
+only, no mobile nav at all). Two real bugs found and fixed while building
+it: Sign out was `hidden md:block` — completely unreachable on mobile
+before this stage; and `STAFF_ONLY_TABS` was missing `/zones`, so riders
+saw a stray "Zones & Fares" config tab. Both fixed; Sign out now lives in
+a dismissible "More" sheet reachable at every width.
+
+**Ops board** (`ops-board.tsx`) gained a responsive table/card split — a
+new `RiderCard` for mobile with the same data as the existing desktop
+table, plus a "Try again" retry button on the load-failure state (there
+was none before). Distinct `data-testid`s (`ops-rider-card-*` vs the
+desktop `ops-rider-row-*`) since both render in the DOM at once, toggled
+by CSS only.
+
+**A real leftover Stage 20 bug found**: `rider-dashboard.tsx`'s
+`useBusinessName()` still called the dispatch-contact endpoint without
+the `jobId` argument Stage 20's route-signature change now requires — a
+genuine TypeScript compile error, now fixed by threading the job's id
+through.
+
+**A real, load-bearing bug found in the process of running the new e2e
+spec repeatedly**: the global `@fastify/rate-limit` ceiling (1000/min,
+per-IP) was intermittently exhausted near the end of a full serial e2e
+run, since all 29 specs' traffic shares one IP (localhost) — surfaced as
+the suite's last two tests failing with a raw 429 JSON body
+(`"...try again in [object Object]"`, itself a second bug in the error
+message's interpolation). Fixed properly: `RATE_LIMIT_MAX` is now a
+`config.ts` value (prod default unchanged at 1000/min), overridden only
+in `e2e/playwright.config.ts`'s webServer env; the message interpolation
+bug fixed alongside it (`context` → `context.after`).
+
+**Tests**: `e2e/specs/mobile-nav.spec.ts` (new, 2 specs) — mobile bottom
+nav + "More" sheet (all tabs, Sign out, dismiss-without-navigating,
+actual sign-out), and the ops board's table→card swap at mobile width.
+
+**Verification**: beyond the automated suite, did a genuine live visual
+pass with the Browser tool against the running Cloudflare-tunnel demo, at
+both mobile (375×812) and desktop widths — dispatcher dashboard/ops board
+(table + cards + More sheet + bottom nav), rider dashboard (confirming
+the `/zones` tab fix live), and the customer tracking page. No mechanism
+in this session's tooling exports those views as attachable screenshot
+files; the same live demo links already given to the user show the
+identical views on any device.
+
+**Deliberately deferred**: a full mobile-card redesign of the dispatcher
+Jobs screen's dense 8-column table — it already has `overflow-x-auto`
+(usable, not broken) but is the platform's most complex, most heavily
+e2e-tested screen; redesigning it belongs in its own bounded stage rather
+than folded into this one.
+
+## Commands run and results (Stage 21)
+
+| # | Command | Result |
+| --- | --- | --- |
+| 1 | `npm run typecheck --workspaces` (root) | **PASS** — 0 errors |
+| 2 | `npx vitest run` (apps/api) | **PASS** — 133/133 (unchanged — no API business logic touched) |
+| 3 | `npx vitest run` / `npm run build` (apps/web) | **PASS** — 8/8, clean build |
+| 4 | Full e2e suite (29 specs, 27 prior + 2 new), serial, fresh `e2e-test.db` | **PASS** — 29/29 (reproduced the rate-limit failure once pre-fix, then re-ran clean twice post-fix) |
+| 5 | Live visual verification (Browser tool vs. running tunnel demo) | mobile + desktop dispatcher/ops-board/rider/tracking views confirmed by eye |
+
+## Re-verify (Stage 21)
+
+```bash
+npm run typecheck --workspaces
+npm run test --workspace @ronmacrae/api
+npm run test --workspace @ronmacrae/web
+npm run build --workspace @ronmacrae/web
+rm -f apps/api/data/e2e-test.db && cd e2e && npx playwright test --workers=1
+```
+
+## Next: Stage 22 — customer package dashboard + restricted rider-location display (section 4)
+
+Now proceeding on top of Stage 20's multi-tenancy foundation and Stage
+21's UI refresh. No open questions blocking it.

@@ -39,12 +39,12 @@ export async function createApp(ctx: AppCtx): Promise<FastifyInstance> {
   await app.register(fastifySensible);
   await app.register(fastifyCookie);
   await app.register(fastifyRateLimit, {
-    max: 1000,
+    max: ctx.config.RATE_LIMIT_MAX,
     timeWindow: "1 minute",
     errorResponseBuilder: (_req, context) => ({
       statusCode: 429,
       error: "Too Many Requests",
-      message: `Rate limit exceeded, try again in ${context}`,
+      message: `Rate limit exceeded, try again in ${context.after}`,
     }),
   });
   await app.register(fastifyMultipart, {

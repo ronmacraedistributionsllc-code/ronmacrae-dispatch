@@ -66,10 +66,13 @@ function isAvailableForJobs(status: RiderStatus | null): boolean {
   return status === "available" || status === "on_job";
 }
 
-function useBusinessName(): string {
+/** A rider can carry jobs for several businesses — the business name shown
+ *  on a card is always that specific job's business, resolved via its own
+ *  jobId (see the dispatch-contact endpoint's own isolation rule). */
+function useBusinessName(jobId: string): string {
   const contact = useQuery({
-    queryKey: ["dispatch-contact"],
-    queryFn: () => apiFetch<DispatchContactDto>(API.bearer.dispatchContact),
+    queryKey: ["dispatch-contact", jobId],
+    queryFn: () => apiFetch<DispatchContactDto>(API.bearer.dispatchContact(jobId)),
     staleTime: 5 * 60_000,
   });
   return contact.data?.businessName ?? "Ronmacrae";
@@ -295,7 +298,7 @@ function navigateHref(job: JobDto): string {
 }
 
 function RiderJobCard({ job, onChanged }: { job: JobDto; onChanged: () => void }): React.JSX.Element {
-  const businessName = useBusinessName();
+  const businessName = useBusinessName(job.id);
   const [sheet, setSheet] = useState<Action | null>(null);
   const [note, setNote] = useState("");
   const [pin, setPin] = useState("");
