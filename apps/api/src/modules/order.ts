@@ -14,6 +14,7 @@ import { createTrackingLink } from "./jobs/history.js";
 import { jobInclude, jobToDto, actorType, type Actor, type JobRow, type Viewer } from "./jobs/dto.js";
 import { nextJobNumber, isUniqueViolation } from "./jobs/repository.js";
 import { sendMerchantOrderEmail } from "./merchant-notify.js";
+import { sendDispatchOrderNotification } from "./dispatch-notify.js";
 
 /**
  * The main public, no-login, no-app multi-item order form (spec section 5:
@@ -337,11 +338,12 @@ export async function orderRoutes(app: FastifyInstance, ctx: AppCtx): Promise<vo
     const link = await createTrackingLink(ctx, row.id, viewer);
     await ctx.audit.record(actor, "order.create", "job", row.id, { merchantId: resolved.merchantId, itemCount: items.length });
 
-    // Never blocks the customer's own confirmation on the merchant email —
-    // send it, but a slow/failing provider must not fail the order itself.
+    // Never blocks the customer's own confirmation on either notification —
+    // send them, but a slow/failing provider must not fail the order itself.
     if (resolved.merchantId) {
       void sendMerchantOrderEmail(ctx, row.id).catch((err) => ctx.log.error({ err: String(err), jobId: row!.id }, "merchant order email failed"));
     }
+    void sendDispatchOrderNotification(ctx, row.id).catch((err) => ctx.log.error({ err: String(err), jobId: row!.id }, "dispatch order email failed"));
 
     const dto = jobToDto(row, viewer, ctx.config.APP_ORIGIN);
     return {

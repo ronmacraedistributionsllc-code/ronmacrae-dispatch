@@ -38,6 +38,7 @@ import { merchantRoutes } from "./modules/merchants.js";
 import { orderRoutes } from "./modules/order.js";
 import { settlementRoutes } from "./modules/settlements.js";
 import { merchantNotifyRoutes } from "./modules/merchant-notify.js";
+import { dispatchNotifyRoutes } from "./modules/dispatch-notify.js";
 
 const SERVICE = "ronmacrae-dispatch-api";
 
@@ -136,6 +137,7 @@ export async function createApp(ctx: AppCtx): Promise<FastifyInstance> {
   await orderRoutes(app, ctx);
   await settlementRoutes(app, ctx);
   await merchantNotifyRoutes(app, ctx);
+  await dispatchNotifyRoutes(app, ctx);
 
   app.setErrorHandler((err, req, reply) => {
     const e = err as FastifyError;

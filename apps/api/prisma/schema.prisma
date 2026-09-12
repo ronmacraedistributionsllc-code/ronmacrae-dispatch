@@ -41,6 +41,11 @@ model Business {
   active               Boolean  @default(true)
   dispatchPhone        String?
   dispatchWhatsApp     String?
+  /** Where the "a new order came in" alert goes — separate from any
+   *  merchant's own notificationEmails (merchant-notify.ts): this fires for
+   *  every order, merchant-linked or not, so dispatch never has to refresh
+   *  the Jobs screen to notice new work. */
+  dispatchNotificationEmail String?
   operationalCurrency  String   @default("JMD")
   usdToJmdRate         Float?
   defaultZoneId        String?
@@ -631,6 +636,10 @@ model Job {
    *  sets this before sending), not a delivery confirmation. Null for a job
    *  with no merchant, or one created before this existed. */
   merchantNotifiedAt DateTime?
+  /** Same idempotency-guard pattern as merchantNotifiedAt, but for the
+   *  dispatch-side "a new order came in" alert — fires for every order,
+   *  merchant-linked or not, unlike the merchant email above. */
+  dispatchNotifiedAt DateTime?
   createdAt        DateTime      @default(now())
   updatedAt        DateTime      @updatedAt
 

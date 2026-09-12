@@ -942,6 +942,9 @@ export interface BusinessSettings {
   businessName: string;
   dispatchPhone: string;
   dispatchWhatsApp: string;
+  /** Where the "a new order came in" email alert goes — every order,
+   *  merchant-linked or not (see dispatch-notify.ts). Empty = no alert. */
+  dispatchNotificationEmail: string;
   operationalCurrency: string;
   /** 1 USD -> X JMD, for dual currency display */
   usdToJmdRate: number | null;

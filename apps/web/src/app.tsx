@@ -13,6 +13,8 @@ import { MyPackages } from "./pages/my-packages.js";
 import { NewJob } from "./pages/new-job.js";
 import { PublicOrder } from "./pages/order.js";
 import { Merchants } from "./pages/merchants.js";
+import { Team } from "./pages/team.js";
+import { Settings } from "./pages/settings.js";
 import { Settlements } from "./pages/settlements.js";
 import { Notifications } from "./pages/notifications.js";
 import { OpsBoard } from "./pages/ops-board.js";
@@ -136,6 +138,22 @@ export default function App(): React.JSX.Element {
                 element={
                   <Protected>
                     <Merchants />
+                  </Protected>
+                }
+              />
+              <Route
+                path="/team"
+                element={
+                  <Protected>
+                    <Team />
+                  </Protected>
+                }
+              />
+              <Route
+                path="/settings"
+                element={
+                  <Protected>
+                    <Settings />
                   </Protected>
                 }
               />
