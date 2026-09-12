@@ -2154,6 +2154,121 @@ no real payout-approval workflow (`Payout`/`PayoutLine` unused);
 `lib/phone.ts` (flagged as a background task, `task_c0c94e29`); no
 billing; not deployed (both dev demos still running by design).
 
-This is the last stage. All ten sections of the original request
-(1-9 plus this verification/handoff pass) are now complete across
-Stages 19-28. There is no Stage 29 in the plan.
+This was the last stage of the original ten-section request. All ten
+sections (1-9 plus this verification/handoff pass) were complete
+across Stages 19-28. Stage 29 below is a **separate, later** follow-up
+request, not a continuation of that plan.
+
+## Stage 29 — new follow-up request: simplify the rider/dispatcher/customer workflow
+
+A distinct request made after Stage 28's handoff: eight specific
+usability/correctness points, aimed at making the app "feel extremely
+simple to operate." Reviewed the actual built app against each point
+first; changed only what was genuinely missing or conflicting.
+
+**Real bugs found and fixed** (not just missing features):
+
+- Accepting an offer landed the job on `assigned`, and the rider
+  dashboard then showed a *second* "Accept job" button before the
+  rider could do anything else — a real double-accept, not a labeling
+  issue. Fixed at the source (`offers.ts`): offer-accept now claims the
+  job straight to `accepted`. A dispatcher's direct assignment (no
+  offer) keeps its own single accept step, since it never had an offer
+  to stand in for it.
+- A delivered COD job never had its `codStatus` auto-advanced past
+  `pending_collection` — the rider always had to find and use a
+  separate "Record collected" button after delivery, even though
+  `transitionJob` already computed the right default amount for
+  `amountCollected`. Fixed: delivering a COD job still at
+  `pending_collection` now also flips `codStatus` to `collected` (with
+  a matching `CodEvent`) in the same transaction.
+- The `customer_rider` conversation closed to new messages the instant
+  a job went terminal, same as every other conversation kind — the
+  user's spec ("up to 24 hours after delivery") needed a real behavior
+  change. Added `conversationOpenFor()` in `delivery-messages.ts`,
+  wired into all six read/write routes that used to compute `open`
+  from the terminal check directly.
+- The nav's unread badge never counted `delivery_message` events at
+  all — no app-wide signal existed that an unread message existed
+  anywhere outside the specific job's own chat panel. Added it to
+  `isAlertWorthy` in `lib/realtime.tsx`.
+- The zero-credential offline geocoding fallback (`simulated.ts` — this
+  deployment's actual current behavior, since no real geocoding key is
+  configured in `.env`) had **Basseterre, the capital of St. Kitts,
+  hardcoded as a Jamaican town**, plus several genuine Jamaican places
+  mislabeled with the wrong parish (Moore Town, Old Harbour, Linstead,
+  Half Way Tree, Constant Spring, Harbour View, New Kingston) because
+  multiple distinct real places had been bundled under shared
+  regex/point pairs. Rewrote as one real, independently-correct place
+  per entry; restricted both real providers (OSM, Google) to Jamaica;
+  added a bounding-box check (`filterResultInJamaica`/
+  `filterResultsInJamaica` in `factory.ts`) that rejects any provider
+  result outside the island regardless of confidence; stopped the
+  fallback from fabricating a guessed pin for a query it doesn't
+  recognize (returns nothing instead, per the user's own explicit
+  preference).
+
+**Sections already correctly built, confirmed by inspection, no
+changes made**: rider job notification/detail richness (section 3) —
+`OfferCard`/`RiderJobCard` already show address, cash-to-collect, and
+pay with no extra taps; cash-accountability audit trail (section 8) —
+`CodEvent` + `Job.codApprovedById/codApprovedByName/codApprovedAt`
+already recorded who-confirmed/who-approved/timestamps in full.
+
+**Everything else was a targeted fix or relabeling**, not a rebuild:
+promoted "Customer Unavailable" out of a "show more" toggle into its
+own always-visible button (the `no_answer` transition itself was
+already correct — non-terminal, notifies dispatch); renamed "Job
+offers" to "Available Jobs" and moved it to the top of the rider
+dashboard; renamed the rider's "Message customer" button to "Messages"
+and gave every conversation tab a viewer-relative label instead of one
+generic pairing shown to everyone; added dispatcher to `cod.ts`'s
+approver list (kept separate from a still-accountant/admin-only
+`disputer`); collapsed the "Start delivery" tap into "Confirm pickup"
+on the frontend by chaining two transition calls, with a fallback
+button if the chain's second leg ever fails; defaulted both booking
+forms' date/time to today + 12:00 PM (the staff form had no time field
+at all before this).
+
+## Commands run and results (Stage 29)
+
+| # | Command | Result |
+| --- | --- | --- |
+| 1 | `npm run typecheck --workspaces` (root) | **PASS** — 0 errors, all workspaces (the `@ronmacrae/e2e` "missing script" line is a pre-existing packaging gap, not a typecheck failure — that workspace has no `typecheck` script) |
+| 2 | `npx vitest run` (apps/api) | **PASS** — 198/198 (197 prior + 1 net new: 2 tests updated for the offer-accept status change, 1 new test for the 24h messaging grace window) |
+| 3 | `npx vitest run` (apps/web) | **PASS** — 8/8, unchanged |
+| 4 | `npx vitest run` (packages/geo) | **PASS** — 21/21 (11 new: no-fabrication on `searchAddresses`, corrected-parish regression guards, bounding-box filter) |
+| 5 | `npm run build` (apps/web) | **PASS** — clean build |
+| 6 | `npm run lint` (root) | **PASS** — same 15 pre-existing, unrelated errors as before this stage (verified via `git stash` + re-lint); 0 new errors |
+| 7 | Full e2e suite (35 specs), serial, fresh `e2e-test.db`, on :3900 | **PASS** — 35/35 (5 specs updated for intentional behavior/label changes: `offers`, `cod`, `delivery-messages`, `rider-dashboard`, plus copy touch-ups in `realtime` and `multi-job-notifications`) |
+| 8 | `dev.db` | Untouched — this stage adds no schema |
+
+A full-suite e2e run against this stage's own *accumulated*
+`e2e-test.db` (grown across several manual re-runs while developing
+this stage, not a code defect) hit the seeded rider's daily-capacity
+ceiling and produced spurious failures — reproduced, understood, and
+resolved by clearing the disposable db, not by changing any code.
+
+## Re-verify (Stage 29)
+
+```bash
+npm run typecheck --workspaces
+npm run test --workspace @ronmacrae/api
+npm run test --workspace @ronmacrae/web
+npm run test --workspace @ronmacrae/geo
+npm run build --workspace @ronmacrae/web
+npm run lint
+rm -f apps/api/data/e2e-test.db && cd e2e && npx playwright test --workers=1
+```
+
+**Not done in this stage**: the LAN demo and Cloudflare tunnel demo
+(both still running per the user's standing "keep it running"
+instruction) still serve the pre-Stage-29 build — rebuilding/restarting
+either was judged disruptive and wasn't asked for. Real
+Waze/Google-grade address accuracy in production still needs an actual
+`GOOGLE_MAPS_API_KEY` and/or `JAMNAV_API_KEY`+`JAMNAV_ENABLED=1`
+supplied in `.env` — the fixes here correct the fallback's own data
+and add real guardrails, but can't substitute for a real geocoding
+credential. Full narrative (what existed already vs. what was actually
+broken, file by file) is in `WORK_IN_PROGRESS.md`'s own Stage 29
+section.
