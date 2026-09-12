@@ -14,6 +14,14 @@ import { getPrisma } from "./prisma.js";
 import { hashPassword } from "./lib/password.js";
 import { ADMIN_EMAIL, randomPassword } from "./bootstrap-prod.js";
 
+/** Set RESET_ADMIN_PASSWORD to force a specific password instead of a
+ *  randomly generated one — useful when diagnosing whether a password
+ *  actually reached the login check correctly, without relying on a
+ *  human to transcribe a random string out of a log viewer. */
+function choosePassword(): string {
+  return process.env.RESET_ADMIN_PASSWORD || randomPassword();
+}
+
 async function main(): Promise<void> {
   const config = loadConfig();
   const log = createLogger(config.LOG_LEVEL, "reset-admin-password");
@@ -28,7 +36,7 @@ async function main(): Promise<void> {
       return;
     }
 
-    const password = randomPassword();
+    const password = choosePassword();
     await prisma.user.update({ where: { id: user.id }, data: { passwordHash: hashPassword(password) } });
 
     console.log("=".repeat(60));

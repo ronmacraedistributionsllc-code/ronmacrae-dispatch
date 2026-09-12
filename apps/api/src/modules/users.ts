@@ -44,6 +44,19 @@ export async function userRoutes(app: FastifyInstance, ctx: AppCtx): Promise<voi
         role: body.role,
       },
     });
+    // Every staff role (everything except rider, which is scoped some other
+    // way — see resolveStaffContext in auth.ts) needs an active
+    // StaffMembership in the creating admin's own business, or login fails
+    // outright with "no active business membership": this used to create
+    // the bare User and stop there, silently producing an account nobody
+    // could ever sign into.
+    if (body.role !== "rider") {
+      const businessId = req.user!.businessId;
+      if (!businessId) throw httpErrors.createError(400, "No business context to add this user to");
+      await ctx.prisma.staffMembership.create({
+        data: { userId: user.id, businessId, role: body.role, active: true },
+      });
+    }
     await ctx.audit.record({ id: req.user!.sub, role: req.user!.role }, "user.create", "user", user.id, { name: body.name, role: body.role });
     return { user: toUserDto(user) };
   });
