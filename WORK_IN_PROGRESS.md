@@ -1728,6 +1728,7 @@ everything from Stage 20 on, not just as a footnote:
 | 26 | Deleted-orders trash: soft-delete + 30-day restore window + scheduled purge job, preserving ledger/dispute/audit records, scoped per business | 8 | DONE |
 | 27 | Rider cash-profile corrections: separate collected / awaiting handover / handed-in-unconfirmed / confirmed / disputed / earnings-payable, snapshot money components, fix "handed in" prematurely clearing confirmed-owed amount, per business a rider works for | 9 | DONE |
 | 28 | Full verification + handoff pass across all of 19–27 | 10 | DONE |
+| 29 | New follow-up request (separate from the original ten sections): simplify the rider job workflow to one accept step, auto cash defaults, dispatch cash approval, promoted Customer Unavailable, Available Jobs, messaging clarity + 24h rider-customer grace window, delivery date/time defaults, address-search accuracy | (new request, 8 points) | DONE |
 
 Each stage: implement, typecheck, run meaningful tests (new + full existing
 suite), update this file with what was actually found/built/tested, update
@@ -3076,4 +3077,201 @@ collected in one place**:
 **Nine commits landed this session's multi-tenancy arc**, each
 independently verified and documented before the next began: the
 infra port-separation fix, then Stages 20 through 27. This stage adds
+the tenth: a final cross-cutting verification pass, not a new feature.
+
+## Stage 29 — new follow-up request: simplify the rider/dispatcher/customer workflow (DONE)
+
+A **separate request from the user**, made after Stage 28's handoff —
+not a continuation of the original ten sections. The ask was blunt:
+the app should feel extremely simple to operate, and eight specific
+things weren't. Reviewed the actual built app against each of the
+eight points before touching anything; fixed only what was genuinely
+missing or conflicting, left working things alone.
+
+**1 — the confusing second "Accept Job" step**: found the real cause.
+Accepting an offer (`POST /api/bearer/offers/:id/accept`) moved the job
+to `assigned`, and the rider dashboard's `primaryActionFor` then showed
+a *second* "Accept job" button for `assigned` jobs before they could do
+anything else — a rider who had just said yes to an offer was made to
+say yes again. Fixed at the source: offer-accept now claims the job
+straight to `accepted` (`offers.ts`), skipping the intermediate status
+entirely. A dispatcher's *direct* assignment (no offer involved, via
+`assignJob`) still lands on `assigned` and still needs the rider's one
+"Accept job" tap — that path never had an offer to stand in for it, so
+it keeps its own single accept step. Both paths now cost the rider
+exactly one accept, never two.
+
+**Collapsed the pickup step, not removed it**: `picked_up` and
+`in_transit` stay real, distinct statuses server-side (customer
+notifications, PIN visibility, and location-sharing windows all key off
+`in_transit` specifically, and removing it would have meant touching
+five other files' worth of behavior for no real benefit). Instead the
+rider-facing "Confirm pickup" button chains two transition calls
+(`picked_up` then immediately `in_transit`) from the frontend in one
+tap. If the second call ever fails mid-chain, the job is left at
+`picked_up` and a plain "Start delivery" fallback button appears — the
+rider is never stranded with no visible next step, they just see one
+extra (rare) tap instead of losing progress.
+
+**Cash defaults + "Record Collected" folded into delivery confirmation**:
+`transitionJob`'s existing `cashDefault` (full expected amount unless
+overridden) already existed for the `amountCollected`/`paymentStatus`
+fields, but nothing wired it to `codStatus` — a COD job stayed at
+`pending_collection` even after being marked delivered, so the rider
+still had to find and use the separate "Record collected" button
+afterward. Fixed: delivering a COD job still at `pending_collection`
+now also flips `codStatus` to `collected` (with a matching `CodEvent`)
+in the same transaction. The rider-dashboard "Confirm delivery" sheet
+gained an editable cash-collected field, pre-filled from the order
+total — the default the user asked for, changeable when the customer
+actually paid something different. `CodPanel` on the rider's job card
+lost its "Record collected" button/form entirely (now redundant) and
+kept only "Confirm Cash Drop-Off" for the hand-in step.
+
+**8 — dispatch approves cash drop-off**: `cod.ts`'s `approve` route was
+`admin`/`accountant`-only; the user was explicit that dispatch presses
+this button day-to-day. Added `dispatcher` to the approver list, but
+split it from a separate `disputer` (still `admin`/`accountant`-only)
+rather than widening one shared preHandler — disputing a mismatch is a
+deliberate escalation, not routine reconciliation, and conflating the
+two would have accidentally let dispatch dispute their own approval.
+`cod.tsx` mirrors this: `canApprove` now includes dispatcher, `canDispute`
+doesn't. The accountability trail the user asked for (who confirmed, who
+approved, timestamps) already existed in full — `CodEvent` rows plus
+`Job.codApprovedById/codApprovedByName/codApprovedAt` — nothing needed
+there.
+
+**6 — Customer Unavailable**: this was already a real transition
+(`no_answer`, non-terminal, notifies dispatch via the existing
+job.state broadcast) — the gap was purely that it was labeled "Not
+Answering" and buried behind a "show more" toggle alongside "Customer
+Changed Location" and "Failed". Pulled it out into its own
+always-visible, distinctly-styled button during any delivery-attempt
+status (`picked_up`/`in_transit`/`delivering`/`location_changed`), with
+confirmation copy that says plainly it never marks the delivery
+complete.
+
+**4 — Available Jobs**: same finding as above — the mechanism (an
+offer the rider can accept, which then moves into their active
+workflow) already existed under the label "Job offers", positioned
+below Route Queue/Cash Summary. Renamed to "Available Jobs" and moved
+above everything else on the dashboard, since accepting new work is the
+most actionable thing an idle rider can do.
+
+**5 — messaging visibility**: the three-conversation infrastructure
+(Stage 24) was already complete end to end — the rider dashboard's
+"Message customer" button already opened both a Customer and a
+Dispatch tab via `ConversationTabs`, it just *said* "Message customer",
+which hid that dispatch was in there too. Renamed to "💬 Messages".
+Every conversation tab is now labeled from each viewer's own
+perspective (`labelFor` prop on `ConversationTabs`) — a rider sees
+"Customer"/"Dispatch", a customer sees "Dispatch"/"Rider", staff sees
+"Customer"/"Customer & Rider"/"Rider" — instead of the same generic
+"Customer ↔ Rider" pairing shown to everyone regardless of which side
+they're on. Real gap found and fixed: `customer_rider` closed to new
+messages the instant a job went terminal, same as every other
+conversation — the user's own spec ("for up to 24 hours after the
+delivery") needed a genuine behavior change, not just a label fix.
+Added `conversationOpenFor(kind, status, completedAt)` in
+`delivery-messages.ts`: every kind still closes instantly at terminal
+status *except* `customer_rider`, which stays open until 24 hours past
+`completedAt`. Wired into all six read/write routes that previously
+computed `open` from `!TERMINAL_JOB_STATUSES.includes(status)` directly
+(staff, rider, and customer/tracking-token sides). Also found the nav's
+unread badge (`isAlertWorthy` in `lib/realtime.tsx`) never counted
+`delivery_message` events at all — a rider or dispatcher had no
+app-wide signal that an unread message existed anywhere. Added it,
+skipping a rider's own just-sent messages (there's only ever one rider
+session) but always counting for staff (a shared role across several
+real people).
+
+**2 — delivery date/time defaults**: found both booking forms defaulted
+to blank. The staff "New Order" form (`new-job.tsx`) had a date field
+but no time field at all — `scheduledAt` was silently hardcoded to
+local noon whenever a date was entered, with no way to change it. Added
+a real time input (defaulting to 12:00) and defaulted the date field
+itself to today via `makeEmptyForm()` (a function, not a static
+constant, so "today" is recomputed on every reset). The public booking
+form (`book.tsx`) had a single `datetime-local` field defaulting to
+blank; defaulted it to today at 12:00 via the same local-time
+convention. Either field stays fully editable, per the user's own
+"can change it, but doing nothing books for noon today" spec.
+
+**7 — address search accuracy**: this took the most digging, and found
+a genuine, embarrassing bug. The zero-credential offline fallback
+(`simulated.ts`, meant only for dev/CI preview when no real geocoding
+key is configured — which is this deployment's actual current state,
+since `GOOGLE_MAPS_API_KEY`/`JAMNAV_API_KEY` are both empty in `.env`)
+had **Basseterre — the capital of St. Kitts, not a Jamaican town at
+all** — hardcoded as a known Jamaican place. Several genuinely
+Jamaican places were also mislabeled with the wrong parish: Moore Town
+(actually Portland, was St. Catherine), Old Harbour (actually St.
+Catherine, was St. Ann), Linstead (actually St. Catherine, was St.
+Elizabeth), Half Way Tree/Constant Spring/Harbour View/New Kingston
+(actually St. Andrew, were St. Catherine/Kingston depending on the
+entry) — several distinct real places had also been bundled under one
+shared regex/point, guaranteeing at least one of them resolved to
+somebody else's location. Rewrote the list as one real place per entry,
+each independently correct. Beyond the fallback data itself: restricted
+both real providers to Jamaica (`countrycodes=jm` on OSM, `region=jm` +
+`components=country:JM` on Google) so an unrestricted global search
+can't match a same-named place in another country in the first place,
+and added a belt-and-braces bounding-box check
+(`filterResultInJamaica`/`filterResultsInJamaica` in `factory.ts`, using
+the existing but previously-unused `inJamaica` helper from `jamnav.ts`)
+that rejects *any* provider's result outside Jamaica's bounding box
+before it's ever surfaced, regardless of how confidently the provider
+returned it. Per the user's explicit "I'd rather it not suggest an
+address at all than suggest incorrect locations": `SimulatedProvider
+.searchAddresses` no longer returns a hash-jittered guess for a query it
+doesn't recognize — it returns nothing, and the frontend's existing
+"no suggestions matched, place a pin manually" path (already built,
+already tested) handles that honestly. `geocode()` (singular, used only
+internally by the composite chain, never called directly by any route)
+keeps the old deterministic-hash behavior — nothing external depends on
+it returning non-null.
+
+**3 — rider job notification / job details**: checked against the spec
+line by line and found this one already met. `OfferCard` (pre-accept)
+shows pickup/destination area, item summary, rider earnings, delivery
+fee, and cash-to-collect, all in one card with no extra taps.
+`RiderJobCard` (post-accept) additionally shows the full pickup and
+destination addresses, a "📍 Navigate" deep link (opens the device's own
+maps app), the delivery PIN once visible, and instructions. No changes
+made here.
+
+**Verification**: `npm run typecheck --workspaces` clean across every
+workspace (the `@ronmacrae/e2e` "missing script" line is a pre-existing,
+unrelated packaging gap, not a real typecheck failure — that workspace
+has no `typecheck` script at all). `apps/api` vitest 198/198 (2 tests
+updated for the intentional offer-accept status change, 1 new test for
+the 24h messaging grace window). `apps/web` vitest 8/8 unchanged.
+`packages/geo` vitest 21/21 (11 new — no-fabrication on
+`searchAddresses`, corrected-parish regression guards, and the
+bounding-box filter, tested via exported helpers rather than poking the
+composite provider's private chain). `npm run lint` reports the same 15
+pre-existing, unrelated errors as before this stage (verified via `git
+stash` + re-lint) — zero new lint errors introduced. Full e2e suite
+**35/35** on a freshly reset `e2e-test.db` (five specs needed updates
+for the intentional behavior/label changes: `offers.spec.ts`,
+`cod.spec.ts`, `delivery-messages.spec.ts`, `rider-dashboard.spec.ts`,
+plus comment/copy touch-ups in `realtime.spec.ts` and
+`multi-job-notifications.spec.ts`). A full-suite run against the
+session's *accumulated* `e2e-test.db` (grown across several of this
+stage's own manual re-runs, not a code defect) hit the seeded rider's
+daily-capacity ceiling and produced spurious failures — confirmed as a
+pre-existing test-data-accumulation artifact, not a regression, by
+reproducing it and then clearing it with a fresh db.
+
+**Not done in this stage**: the LAN demo and Cloudflare tunnel demo
+(both still running per the user's standing "keep it running" instruction
+from earlier in the session) still serve the pre-Stage-29 build — the web
+app was rebuilt locally to drive e2e tests against real frontend
+behavior, but neither running demo process was rebuilt or restarted,
+since that's disruptive and wasn't asked for. For genuinely
+Waze/Google-quality address accuracy in production (rather than the
+now-corrected but still approximate offline fallback), a real
+`GOOGLE_MAPS_API_KEY` and/or `JAMNAV_API_KEY`+`JAMNAV_ENABLED=1` still
+need to be supplied in `.env` — nothing here can substitute for an
+actual geocoding credential.
 a tenth.
