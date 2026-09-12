@@ -2272,3 +2272,109 @@ and add real guardrails, but can't substitute for a real geocoding
 credential. Full narrative (what existed already vs. what was actually
 broken, file by file) is in `WORK_IN_PROGRESS.md`'s own Stage 29
 section.
+
+## Stage 30 — multi-merchant public ordering, cash-by-merchant, settlements
+
+A 103-section spec asking for public order → merchant → dispatch →
+multi-rider delivery → payment collection → rider cash accountability →
+merchant settlement, written against a Supabase mental model this app
+doesn't use (corrected in one line, then proceeded per the user's own
+"don't stop to ask" instruction). Built as a genuine vertical slice on
+top of the real stack (Fastify + Prisma + custom JWT + custom WebSocket
+hub), preserving every Stage 29 behavior untouched.
+
+**New, additive schema** (`schema.prisma`, `prisma db push` — this repo's
+existing no-migrations-directory convention, unchanged): `Merchant`,
+`Product`, `ProductVariant`, `JobItem`, `Settlement`, `SettlementLine`,
+a new `SettlementType` enum, two new `PaymentMethod` values
+(`paid_at_store`, `other`), and two new nullable `Job` columns
+(`merchantId`, `merchantNotifiedAt`). Every new relation is nullable or
+additive — no existing row's shape changed, no destructive flag used.
+
+**Real bugs found and fixed** (not just missing features):
+
+- The legacy `normalizePhone()` in `auth.ts` did not actually unify
+  "8765551234" / "18765551234" / "+18765551234" into one value — a real
+  gap the spec calls out by name, and one that matters once the public
+  (not just staff) are typing their own numbers into the new `/order`
+  form. Fixed at the source; verified safe across the full 213-test
+  suite and confirmed live (876 555 1234 arrived as `+8765551234` on
+  order RM-000071).
+- The pre-existing `/api/delivery-requests` endpoint accepts a
+  client-supplied delivery fee with no server-side re-validation — a
+  genuine price-manipulation gap matching spec §13/§59. Left that old
+  endpoint untouched (out of scope — "don't break existing features"),
+  but made sure of the new `/api/order*` path never has that gap in the
+  first place: `PublicOrderBody` has no fee/total field at all, so
+  there's nothing for a client to submit — the fee is always computed
+  server-side from the existing zone/fare engine.
+- `packages/contracts` (and `notifications`/`geo`) resolve via their
+  compiled `dist/` at runtime for `apps/api`/`apps/web`, not live `src/`
+  — a source-only edit left `PAYMENT_METHOD_LABELS` `undefined` at
+  runtime until the packages were rebuilt. Not a logic bug, but real
+  runtime breakage until caught.
+
+**What was built, in one pass**: `Merchant` CRUD + public order-link
+generation + QR code (`merchants.ts`, `merchants.tsx`); relational
+multi-item orders via `Product`/`ProductVariant`/`JobItem` instead of a
+text field (items are price-snapshotted at order time — a later catalog
+price change never rewrites an existing order); a public, no-login order
+form at `/order` and `/order/:merchantSlug` with server-side-only
+pricing (`order.ts`, `order.tsx`); an immediate HTML+text merchant
+order-notification email, idempotent and non-blocking, on a real
+`ResendEmailProvider`-capable `EmailProvider` abstraction
+(`merchant-notify.ts`, extended `packages/notifications/src/email.ts`);
+per-merchant cash breakdown on the existing rider cash profile
+(`cash-profile.ts`'s new `buildMerchantBreakdown()`); a `Settlement`
+ledger for rider-to-office cash hand-in, batched per merchant and kept
+deliberately separate from the existing `Payout` (business-to-rider
+wages) and `CodEvent` (per-job audit trail) — no double-counting, no
+rewritten history (`settlements.ts`, `settlements.tsx`); merchant
+selector/filter/badge threaded through the existing staff order form,
+jobs list, and rider offer/job cards rather than bolted on separately.
+
+**Live end-to-end verification, not just automated tests**: rebuilt and
+redeployed both running demo processes; created a real "VBR Basics"
+merchant via the live API; placed a real order through the actual public
+order form in a browser against the live Cloudflare tunnel URL; traced
+it by hand through every stage — order confirmation (job **RM-000071**),
+the dispatcher's job list filtered by merchant (correct J$4,556 =
+J$4,500 + server-computed J$56 delivery fee, client sent no fee),
+the merchant notification email (full correct content in the server
+log), and the public tracking-link endpoint (live status, no auth
+required). This is the single-merchant half of the spec's mandatory
+end-to-end test (§99/§102).
+
+## Commands run and results (Stage 30)
+
+| # | Command | Result |
+| --- | --- | --- |
+| 1 | `npm run build --workspace packages/contracts --workspace packages/notifications --workspace packages/geo` | **PASS** — required after every contracts/notifications source edit (dist-resolution at runtime, not live src) |
+| 2 | `npm run typecheck --workspace apps/api --workspace apps/web` | **PASS** — 0 errors |
+| 3 | `npx vitest run` (apps/api) | **PASS** — 213/213 (28 files; 15 net new: 5 merchants, 7 order, 3 settlements) |
+| 4 | `npm run build --workspace apps/api --workspace apps/web` | **PASS** — clean production build (pre-existing >500kB map-vendor chunk warning, unrelated to this stage) |
+| 5 | `npm run lint` (root) | **PASS** — 16 errors vs. a true baseline of 15 (checked via `git stash -u` + re-lint); the one new occurrence is `order.tsx`'s debounced-quote `useEffect` hitting the same pre-existing "rule definition not found" `react-hooks/exhaustive-deps` config gap already present on `delivery-chat.tsx` — a broken lint-config registration, not an actual missing dependency (the disable-comment convention from `delivery-chat.tsx` was already applied) |
+| 6 | Full e2e suite (35 specs), serial, fresh `e2e-test.db` | **34/35** — the one failure (`booking.spec.ts`'s staff-order address-suggestion test) reproduces identically against the pre-Stage-30 baseline (verified via `git stash -u`), confirming it's a pre-existing flake, not a regression |
+| 7 | Live order placed via browser against the redeployed Cloudflare tunnel demo | **PASS** — order RM-000071 created, correctly priced server-side, visible on the dispatcher board filtered by merchant, merchant email logged with full correct content, public tracking link resolved with no auth |
+| 8 | `dev.db` via `prisma db push` | New tables created additively; no data loss, no destructive flag |
+
+## Re-verify (Stage 30)
+
+```bash
+npm run build --workspace packages/contracts --workspace packages/notifications --workspace packages/geo
+npm run typecheck --workspace apps/api --workspace apps/web
+npm run test --workspace @ronmacrae/api
+npm run build --workspace apps/api --workspace apps/web
+npm run lint
+rm -f apps/api/data/e2e-test.db && cd e2e && npx playwright test --workers=1
+```
+
+**Not done in this stage** (see `BLOCKERS.md` for what's genuinely
+credential-blocked): polygon-drawn delivery zones; a merchant-staff
+login/role; route-optimization UI surfacing; CAPTCHA on the public
+order form; full multi-item entry on the *staff* order form (only a
+merchant selector was added there). Real email delivery, the
+`ronmacraedistributions.com` production deployment, and
+production-grade geocoding all need credentials only the account owner
+can supply. Full narrative is in `WORK_IN_PROGRESS.md`'s own Stage 30
+section.

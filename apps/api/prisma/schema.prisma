@@ -56,6 +56,8 @@ model Business {
   customers        Customer[]
   zones            Zone[]
   offers           JobOffer[]
+  merchants        Merchant[]
+  settlements      Settlement[]
 }
 
 /** A staff member's role at one specific business. A User is the global
@@ -144,6 +146,7 @@ model User {
   pushSubscriptions PushSubscription[]
   codApprovals Job[]           @relation("codApprover")
   addressChangeReviews AddressChangeRequest[] @relation("addressChangeReviewer")
+  settlementsReceived Settlement[] @relation("settlementReceiver")
 }
 
 /** One browser/device's opt-in Web Push subscription. A user may have several (multiple devices/browsers). */
@@ -220,6 +223,7 @@ model Rider {
   alerts      SosAlert[]
   offers      JobOffer[]
   memberships RiderMembership[]
+  settlements Settlement[]
 }
 
 // ---------- Geography / pricing ----------
@@ -263,6 +267,82 @@ model FareRule {
   updatedAt  DateTime @updatedAt
 
   @@unique([fromZoneId, toZoneId])
+}
+
+// ---------- Merchants / catalog ----------
+
+/** A store/client of the courier business (e.g. "VBR Basics") — distinct from
+ *  `Business`, which is the courier/dispatch operator itself (Ronmacrae).
+ *  Every merchant belongs to exactly one business; a business can have many
+ *  merchants. A job with `merchantId: null` is a direct/in-house order (no
+ *  third-party store involved) — the pre-existing single-store `/book` flow
+ *  and staff-entered orders both still work this way. */
+model Merchant {
+  id         String   @id @default(cuid())
+  businessId String
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  name       String
+  slug       String
+  logoUrl    String?
+  phone      String?
+  email      String?
+  /** Comma-separated list — kept as one field rather than a child table since
+   *  it's small, admin-edited, and never queried independently of the merchant. */
+  notificationEmails String?
+  pickupAddressText   String?
+  pickupPoint          Json?
+  /** Freeform text (e.g. "Mon-Sat 9am-6pm") — not parsed/enforced anywhere yet. */
+  businessHours String?
+  active     Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  products Product[]
+  jobs     Job[]
+  settlements Settlement[]
+
+  @@unique([businessId, slug])
+}
+
+model Product {
+  id          String   @id @default(cuid())
+  merchantId  String
+  merchant    Merchant @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+  name        String
+  description String?
+  sku         String?
+  photoUrl    String?
+  category    String?
+  /** Default/base price in minor units — a variant's own `priceOverride` wins when set. */
+  price       Int
+  currency    String   @default("JMD")
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  variants   ProductVariant[]
+  orderItems JobItem[]
+
+  @@index([merchantId, active])
+}
+
+model ProductVariant {
+  id            String   @id @default(cuid())
+  productId     String
+  product       Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  size          String?
+  color         String?
+  sku           String?
+  priceOverride Int?
+  /** Null = not tracked (unlimited); a merchant not doing inventory leaves this unset. */
+  inventoryQty  Int?
+  active        Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  orderItems JobItem[]
+
+  @@index([productId])
 }
 
 // ---------- Customers ----------
@@ -435,6 +515,9 @@ enum PaymentMethod {
   online
   card
   transfer
+  /** Customer already paid the merchant in person; nothing to collect on delivery. */
+  paid_at_store
+  other
 }
 
 enum PaymentStatus {
@@ -469,6 +552,12 @@ model Job {
    *  everything else scopes off the job's businessId (directly or via it). */
   businessId       String
   business         Business     @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  /** Which store/merchant client this order is for, when the order came
+   *  through a merchant's own public order link — null for a job created
+   *  directly with the courier business itself (e.g. the old single-store
+   *  `/book` form, or a dispatcher-entered order with no merchant chosen). */
+  merchantId       String?
+  merchant         Merchant?    @relation(fields: [merchantId], references: [id], onDelete: SetNull)
   jobNumber        String?
   externalRef      String?
   source           String        @default("manual")
@@ -537,6 +626,11 @@ model Job {
   scheduledAt      DateTime?
   promisedAt       DateTime?
   completedAt      DateTime?
+  /** Set once the merchant new-order notification email has actually been
+   *  attempted for this job — an idempotency guard (a guarded `updateMany`
+   *  sets this before sending), not a delivery confirmation. Null for a job
+   *  with no merchant, or one created before this existed. */
+  merchantNotifiedAt DateTime?
   createdAt        DateTime      @default(now())
   updatedAt        DateTime      @updatedAt
 
@@ -566,11 +660,45 @@ model Job {
   codEvents CodEvent[]
   messages DeliveryMessage[]
   addressChangeRequests AddressChangeRequest[]
+  items JobItem[]
+  settlementLines SettlementLine[]
 
   @@unique([businessId, jobNumber])
   @@unique([businessId, externalRef])
   @@index([businessId, status])
   @@index([businessId, deletedAt])
+  @@index([businessId, merchantId])
+}
+
+/** One line of a (possibly multi-item) order. Every job gets at least one of
+ *  these once created through the item-aware paths (the public multi-item
+ *  order form, or the updated staff order form) — `Job.itemSummary`/
+ *  `quantity`/`itemSize`/`itemColor` are kept in sync as a derived, flattened
+ *  summary purely so every screen that already reads those fields directly
+ *  keeps working unchanged; `JobItem` rows are the real source of truth
+ *  going forward. `productId`/`productVariantId` are null for a merchant
+ *  without a catalog yet — free-text `name`/`size`/`color` always work. */
+model JobItem {
+  id               String          @id @default(cuid())
+  jobId            String
+  job              Job             @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  productId        String?
+  product          Product?        @relation(fields: [productId], references: [id], onDelete: SetNull)
+  productVariantId String?
+  productVariant   ProductVariant? @relation(fields: [productVariantId], references: [id], onDelete: SetNull)
+  name             String
+  size             String?
+  color            String?
+  quantity         Int             @default(1)
+  /** Minor units. For a catalog item this is the product/variant price at
+   *  order time (snapshotted — a later price change must never reprice an
+   *  old order); for a free-text item it's whatever the customer/staff typed. */
+  unitPrice        Int
+  currency         String          @default("JMD")
+  notes            String?
+  createdAt        DateTime        @default(now())
+
+  @@index([jobId])
 }
 
 enum CodStatus {
@@ -1035,6 +1163,63 @@ model PayoutLine {
   description String
   amount      Int
   currency    String  @default("JMD")
+}
+
+enum SettlementType {
+  full
+  partial
+}
+
+/**
+ * A rider handing COD cash they're holding for one merchant over to the
+ * office, recorded as its own ledger entry — distinct from `Payout` (which
+ * is the business paying the RIDER their own earnings; this is the RIDER
+ * paying the BUSINESS money they collected on a merchant's behalf) and from
+ * the existing per-job `CodEvent` hand-in/approve trail (which this doesn't
+ * replace — a settlement batches several already-handed-in jobs into one
+ * "the office actually has this now" record, for one rider and one merchant
+ * at a time; the underlying jobs keep their own individual CodEvent history
+ * either way). Never deletes/rewrites a prior settlement — a correction is
+ * a new settlement (possibly negative in spirit, but represented as its own
+ * note+lines), same ledger-immutability rule as everywhere else in this app.
+ */
+model Settlement {
+  id           String         @id @default(cuid())
+  businessId   String
+  business     Business       @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  riderId      String
+  rider        Rider          @relation(fields: [riderId], references: [id], onDelete: Cascade)
+  /** Null = settling the rider's non-merchant (direct/in-house) cash. */
+  merchantId   String?
+  merchant     Merchant?      @relation(fields: [merchantId], references: [id], onDelete: SetNull)
+  amount       Int
+  currency     String         @default("JMD")
+  type         SettlementType @default(full)
+  receivedById String
+  receivedBy   User           @relation("settlementReceiver", fields: [receivedById], references: [id])
+  reference    String?
+  note         String?
+  createdAt    DateTime       @default(now())
+
+  lines SettlementLine[]
+
+  @@index([businessId, riderId])
+  @@index([businessId, merchantId])
+}
+
+/** Which specific jobs a settlement's cash actually covers — so "outstanding"
+ *  is always a real computation (sum of handed-in jobs minus settled jobs),
+ *  never a mutable running total that a correction could silently corrupt. */
+model SettlementLine {
+  id           String     @id @default(cuid())
+  settlementId String
+  settlement   Settlement @relation(fields: [settlementId], references: [id], onDelete: Cascade)
+  jobId        String
+  job          Job        @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  amount       Int
+
+  @@index([settlementId])
+  @@index([jobId])
 }
 
 // ---------- Safety ----------

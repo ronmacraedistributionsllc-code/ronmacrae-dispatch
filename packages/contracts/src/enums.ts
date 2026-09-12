@@ -58,11 +58,22 @@ export type Priority = (typeof PRIORITIES)[number];
 
 /**
  * How the customer settles the order. `cod` = pays the courier in cash;
- * `online` = already paid online (store/web checkout); card/transfer = prepaid.
+ * `online` = already paid online (store/web checkout); card/transfer = prepaid;
+ * `paid_at_store` = the customer already paid the merchant in person (nothing
+ * for the rider to collect); `other` = anything else, explained in a note.
  * Everything except `cod` is treated as paid up front (no cash for the rider).
  */
-export const PAYMENT_METHODS = ["cod", "online", "card", "transfer"] as const;
+export const PAYMENT_METHODS = ["cod", "online", "card", "transfer", "paid_at_store", "other"] as const;
 export type PaymentMethod = (typeof PAYMENT_METHODS)[number];
+
+export const PAYMENT_METHOD_LABELS: Record<PaymentMethod, string> = {
+  cod: "Cash on delivery",
+  online: "Paid online",
+  card: "Card",
+  transfer: "Bank transfer",
+  paid_at_store: "Paid at store",
+  other: "Other",
+};
 
 export const PAYMENT_STATUSES = ["unpaid", "partial", "paid"] as const;
 export type PaymentStatus = (typeof PAYMENT_STATUSES)[number];
@@ -209,6 +220,12 @@ export type PayoutStatus = (typeof PAYOUT_STATUSES)[number];
 
 export const PAYOUT_METHODS = ["cash", "bank_transfer", "wire", "wipay"] as const;
 export type PayoutMethod = (typeof PAYOUT_METHODS)[number];
+
+/** A rider settling COD cash they're holding for a merchant with the office
+ *  — `full` clears everything currently outstanding for that rider+merchant
+ *  pair, `partial` records less than the full outstanding amount. */
+export const SETTLEMENT_TYPES = ["full", "partial"] as const;
+export type SettlementType = (typeof SETTLEMENT_TYPES)[number];
 
 /**
  * Honest location-tracking states for the bearer client.

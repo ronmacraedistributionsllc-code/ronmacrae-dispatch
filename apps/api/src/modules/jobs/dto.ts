@@ -6,13 +6,41 @@ import type {
   CodStatus,
   JobDto,
   JobEventDto,
+  JobItemDto,
   JobSource,
   JobStatus,
   JobSummaryDto,
   ProofDto,
   TrackingLinkDto,
 } from "@ronmacrae/contracts";
+import { money } from "@ronmacrae/money";
 import { pointFromJson, moneyField } from "../../geo-mappers.js";
+
+export function jobItemToDto(item: {
+  id: string;
+  productId: string | null;
+  productVariantId: string | null;
+  name: string;
+  size: string | null;
+  color: string | null;
+  quantity: number;
+  unitPrice: number;
+  currency: string;
+  notes: string | null;
+}): JobItemDto {
+  return {
+    id: item.id,
+    productId: item.productId,
+    productVariantId: item.productVariantId,
+    name: item.name,
+    size: item.size,
+    color: item.color,
+    quantity: item.quantity,
+    unitPrice: money(item.unitPrice, item.currency),
+    lineTotal: money(item.unitPrice * item.quantity, item.currency),
+    notes: item.notes,
+  };
+}
 
 export type JobRow = Prisma.JobGetPayload<{ include: typeof jobInclude }>;
 
@@ -21,6 +49,8 @@ export const jobInclude = {
   customer: true,
   rider: true,
   zone: true,
+  merchant: true,
+  items: { orderBy: { createdAt: "asc" } },
   events: true,
   assignments: true,
   proofs: true,
@@ -96,6 +126,8 @@ export function jobToDto(
     type: job.type,
     status: job.status,
     priority: job.priority,
+    merchantId: job.merchantId,
+    merchantName: job.merchant?.name ?? null,
     customerId: job.customerId,
     customerName: job.customer.name,
     customerPhone: job.customer.phone,
@@ -115,6 +147,7 @@ export function jobToDto(
     itemColor: job.itemColor,
     packageSize: job.packageSize,
     instructions: job.instructions,
+    items: job.items.map(jobItemToDto),
     stage: job.stage,
     vehicle: job.vehicle,
     fare: moneyField(job.fare, cur),
@@ -161,6 +194,8 @@ export function jobSummaryToDto(job: JobRow): JobSummaryDto {
     type: job.type,
     status: job.status,
     priority: job.priority,
+    merchantId: job.merchantId,
+    merchantName: job.merchant?.name ?? null,
     customerName: job.customer.name,
     customerPhone: job.customer.phone,
     addressText: job.addressText,

@@ -12,6 +12,7 @@ import type {
   NotificationStatus,
   PayoutMethod,
   PayoutStatus,
+  PaymentMethod,
   PaymentStatus,
   Priority,
   ProofKind,
@@ -19,6 +20,7 @@ import type {
   RiderStage,
   RiderStatus,
   Role,
+  SettlementType,
   SosStatus,
   TrackingState,
   VehicleType,
@@ -332,6 +334,10 @@ export interface JobDto {
   type: JobType;
   status: JobStatus;
   priority: Priority;
+  /** Which store/merchant client this order is for — null for a direct/
+   *  in-house order (no third-party merchant involved). */
+  merchantId: string | null;
+  merchantName: string | null;
   customerId: string;
   customerName: string;
   customerPhone: string;
@@ -347,13 +353,22 @@ export interface JobDto {
     pickupAddressProviderText: string | null;
     pickupContact: string | null;
     itemSummary: string | null;
-    /** units of the product in this order (1 when not stated) */
+    /** units of the product in this order (1 when not stated) — for a
+     *  multi-item order this is the total quantity across all items, kept
+     *  in sync for anything still reading it directly; `items` below is the
+     *  real per-line detail. */
     quantity: number | null;
     /** product size / colour details (e.g. "Large", "Red") - kept separate for picking */
     itemSize: string | null;
     itemColor: string | null;
     packageSize: string | null;
     instructions: string | null;
+    /** Real per-line order detail (spec: "AN ORDER MUST SUPPORT MORE THAN ONE
+     *  ITEM"). Always has at least one entry for any job created through an
+     *  item-aware path; empty for older jobs created before this existed —
+     *  `itemSummary`/`quantity`/`itemSize`/`itemColor` above remain the
+     *  fallback for those. */
+    items: JobItemDto[];
     /** rider sub-progress (heading to pickup / at pickup / heading to dropoff) */
     stage: RiderStage;
     vehicle: VehicleType | null;
@@ -409,6 +424,8 @@ export interface JobSummaryDto {
   type: JobType;
   status: JobStatus;
   priority: Priority;
+  merchantId: string | null;
+  merchantName: string | null;
   customerName: string;
   customerPhone: string;
   addressText: string | null;
@@ -482,6 +499,26 @@ export interface RiderCashBusinessProfileDto {
    *  configured (shown as "not set", never $0). */
   earningsPayable: Money | null;
   earningsNote: string | null;
+  /** The same four buckets, split by which merchant's cash it is — a rider
+   *  can carry COD for several of this business's merchants at once, and
+   *  "the rider has $57,000" is meaningless without saying whose it is
+   *  (spec: rider cash by merchant). One entry has `merchantId: null` for
+   *  this business's own direct/in-house orders (no third-party merchant),
+   *  when there are any. Every bucket here sums to the matching bucket
+   *  above — this is a breakdown of the same totals, not a separate figure. */
+  byMerchant: RiderCashMerchantProfileDto[];
+}
+
+/** One merchant's slice of a rider's cash-for-this-business profile. */
+export interface RiderCashMerchantProfileDto {
+  merchantId: string | null;
+  /** "Direct orders" when `merchantId` is null. */
+  merchantName: string;
+  collected: CashBucketDto;
+  handedInUnconfirmed: CashBucketDto;
+  confirmed: CashBucketDto;
+  disputed: CashBucketDto;
+  handoverVariance: Money;
 }
 
 /** GET /api/bearer/cash (rider's own, every active membership) or
@@ -499,6 +536,7 @@ export interface JobOfferDto {
   expiresAt: string;
   pickupArea: string | null;
   destinationArea: string | null;
+  merchantName: string | null;
   itemSummary: string | null;
   deliveryFee: Money | null;
   riderEarnings: Money | null;
@@ -912,4 +950,190 @@ export interface BusinessSettings {
   trackingLinkTtlHours: number;
   /** true = bearer web location is best-effort; native app recommended */
   nativeAppRecommended: boolean;
+}
+
+// ---------- Merchants / catalog / multi-item orders ----------
+
+/** One line of an order — the real per-item detail (spec: an order must
+ *  support more than one item). `productId`/`productVariantId` are null for
+ *  a free-text item (a merchant without a catalog, or the customer/staff
+ *  typed something not in it); `unitPrice` is always a real snapshot taken
+ *  at order time, never re-derived from the current product price later. */
+export interface JobItemDto {
+  id: string;
+  productId: string | null;
+  productVariantId: string | null;
+  name: string;
+  size: string | null;
+  color: string | null;
+  quantity: number;
+  unitPrice: Money;
+  /** unitPrice × quantity, for convenience — always derivable, never authoritative on its own. */
+  lineTotal: Money;
+  notes: string | null;
+}
+
+/** Staff-facing merchant record — includes operational contact details
+ *  never shown on the public order page (see MerchantPublicDto for that). */
+export interface MerchantDto {
+  id: string;
+  businessId: string;
+  name: string;
+  slug: string;
+  logoUrl: string | null;
+  phone: string | null;
+  email: string | null;
+  /** parsed from the stored comma-separated field */
+  notificationEmails: string[];
+  pickupAddressText: string | null;
+  pickupPoint: GeoPoint | null;
+  businessHours: string | null;
+  active: boolean;
+  /** the full public order URL for this merchant, e.g. `${origin}/order/vbr-basics` */
+  orderUrl: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** What the public `/order/:slug` page is allowed to know about a merchant —
+ *  deliberately excludes phone/email/notificationEmails, same "never expose
+ *  more than the public actually needs" rule as DispatchContactDto. A
+ *  disabled/inactive merchant simply isn't returned (404), not returned
+ *  with a flag — the public page never learns *why* a link doesn't work. */
+export interface MerchantPublicDto {
+  id: string;
+  name: string;
+  slug: string;
+  logoUrl: string | null;
+  pickupAddressText: string | null;
+  /** Whether this merchant has any active catalog products — if false, the
+   *  public order form falls back to free-text item entry. */
+  hasCatalog: boolean;
+  businessHours: string | null;
+}
+
+export interface ProductVariantDto {
+  id: string;
+  size: string | null;
+  color: string | null;
+  sku: string | null;
+  /** effective price for this variant (override if set, else the product's own price) */
+  price: Money;
+  inventoryQty: number | null;
+  active: boolean;
+}
+
+export interface ProductDto {
+  id: string;
+  merchantId: string;
+  name: string;
+  description: string | null;
+  sku: string | null;
+  photoUrl: string | null;
+  category: string | null;
+  price: Money;
+  active: boolean;
+  variants: ProductVariantDto[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** One item as submitted on an order (public or staff) — a catalog pick
+ *  (`productId`/`productVariantId`) or a free-text line (`name` + optional
+ *  `unitPrice`, since a merchant with no catalog may have no fixed price
+ *  yet and lets dispatch fill it in). The server always snapshots whatever
+ *  price it resolves at creation time; a client-supplied `unitPrice` for a
+ *  catalog item is never trusted over the real product/variant price. */
+export interface OrderItemInput {
+  productId?: string | null;
+  productVariantId?: string | null;
+  name?: string;
+  size?: string | null;
+  color?: string | null;
+  quantity: number;
+  unitPrice?: number | null;
+  notes?: string | null;
+}
+
+/** POST /api/order (public, no merchant) or /api/order/:merchantSlug. */
+export interface PublicOrderRequestInput {
+  name: string;
+  phone: string;
+  email?: string | null;
+  alternatePhone?: string | null;
+  pickupAddressText?: string | null;
+  addressText: string;
+  addressProviderText?: string | null;
+  landmark?: string | null;
+  apartmentUnit?: string | null;
+  point?: GeoPoint | null;
+  items: OrderItemInput[];
+  paymentMethod?: PaymentMethod;
+  scheduledAt?: string | null;
+  instructions?: string | null;
+  consentTracking?: boolean;
+}
+
+/** What the public order form shows before submit, and what the real
+ *  submission returns — the server-computed truth either way; a client
+ *  never supplies (or can influence) `deliveryFee` or `total` directly. */
+export interface PublicOrderPricingDto {
+  subtotal: Money;
+  deliveryFee: Money | null;
+  /** false when the destination didn't resolve into any configured zone —
+   *  the UI must show "delivery price requires confirmation", never invent one. */
+  deliveryFeeConfirmed: boolean;
+  total: Money;
+}
+
+export interface PublicOrderResultDto {
+  jobId: string;
+  jobNumber: string | null;
+  merchantName: string | null;
+  customerName: string;
+  items: JobItemDto[];
+  pricing: PublicOrderPricingDto;
+  scheduledAt: string | null;
+  tracking: TrackingLinkDto | null;
+}
+
+/** POST /api/order/quote (public, side-effect-free price preview) — the
+ *  same pricing the real submission will compute, shown before the
+ *  customer commits to "Place order". */
+export interface PublicQuoteRequestDto {
+  point: GeoPoint | null;
+  items: OrderItemInput[];
+  merchantSlug?: string | null;
+}
+
+/** A rider handing merchant COD cash to the office, recorded as a ledger
+ *  entry — see the Settlement model's own doc comment in schema.prisma for
+ *  how this differs from a rider `Payout` (their own earnings) and from
+ *  the per-job CodEvent hand-in/approve trail (which this batches, not
+ *  replaces). */
+export interface SettlementDto {
+  id: string;
+  businessId: string;
+  riderId: string;
+  riderName: string;
+  merchantId: string | null;
+  merchantName: string | null;
+  amount: Money;
+  type: SettlementType;
+  receivedById: string;
+  receivedByName: string;
+  reference: string | null;
+  note: string | null;
+  jobIds: string[];
+  createdAt: string;
+}
+
+export interface CreateSettlementInput {
+  riderId: string;
+  merchantId?: string | null;
+  amount: number;
+  type?: SettlementType;
+  jobIds: string[];
+  reference?: string | null;
+  note?: string | null;
 }

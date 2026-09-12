@@ -11,6 +11,9 @@ import { Jobs } from "./pages/jobs.js";
 import { Login } from "./pages/login.js";
 import { MyPackages } from "./pages/my-packages.js";
 import { NewJob } from "./pages/new-job.js";
+import { PublicOrder } from "./pages/order.js";
+import { Merchants } from "./pages/merchants.js";
+import { Settlements } from "./pages/settlements.js";
 import { Notifications } from "./pages/notifications.js";
 import { OpsBoard } from "./pages/ops-board.js";
 import { Reports } from "./pages/reports.js";
@@ -42,6 +45,8 @@ export default function App(): React.JSX.Element {
             <Routes>
               <Route path="/login" element={<Login />} />
               <Route path="/book" element={<Book />} />
+              <Route path="/order" element={<PublicOrder />} />
+              <Route path="/order/:merchantSlug" element={<PublicOrder />} />
               <Route path="/track/:token" element={<Track />} />
               <Route path="/my-packages" element={<MyPackages />} />
               <Route
@@ -123,6 +128,22 @@ export default function App(): React.JSX.Element {
                 element={
                   <Protected>
                     <Trash />
+                  </Protected>
+                }
+              />
+              <Route
+                path="/merchants"
+                element={
+                  <Protected>
+                    <Merchants />
+                  </Protected>
+                }
+              />
+              <Route
+                path="/settlements"
+                element={
+                  <Protected>
+                    <Settlements />
                   </Protected>
                 }
               />

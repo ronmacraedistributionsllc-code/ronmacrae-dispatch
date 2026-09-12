@@ -26,6 +26,7 @@ type OfferRow = {
     pickupAddressText: string | null;
     addressText: string | null;
     zone: { name: string } | null;
+    merchant: { name: string } | null;
     itemSummary: string | null;
     fee: number | null;
     amountExpected: number | null;
@@ -44,6 +45,7 @@ function dto(row: OfferRow, opts: { includeRider?: boolean } = {}): JobOfferDto 
     expiresAt: row.expiresAt.toISOString(),
     pickupArea: row.job.pickupAddressText,
     destinationArea: row.job.zone?.name ?? row.job.addressText,
+    merchantName: row.job.merchant?.name ?? null,
     itemSummary: row.job.itemSummary,
     deliveryFee: moneyField(row.job.fee, row.job.currency),
     riderEarnings: moneyField(row.rider.payRate, row.rider.payCurrency),
@@ -95,7 +97,7 @@ async function createOffers(ctx: AppCtx, jobId: string, businessId: string, ride
       riders.map((rider) =>
         tx.jobOffer.create({
           data: { jobId, businessId, riderId: rider.id, expiresAt },
-          include: { job: { include: { zone: true } }, rider: true },
+          include: { job: { include: { zone: true, merchant: true } }, rider: true },
         }),
       ),
     ),
@@ -144,7 +146,7 @@ export async function offerRoutes(app: FastifyInstance, ctx: AppCtx): Promise<vo
     const offers = await ctx.prisma.jobOffer.findMany({
       where: { jobId: req.params.id, businessId: req.user!.businessId! },
       orderBy: { createdAt: "desc" },
-      include: { job: { include: { zone: true } }, rider: true },
+      include: { job: { include: { zone: true, merchant: true } }, rider: true },
     });
     return { offers: offers.map((o) => dto(o, { includeRider: true })) };
   });
@@ -176,7 +178,7 @@ export async function offerRoutes(app: FastifyInstance, ctx: AppCtx): Promise<vo
     const offers = await ctx.prisma.jobOffer.findMany({
       where: { riderId: req.user!.riderId!, status: "open", expiresAt: { gt: new Date() } },
       orderBy: { expiresAt: "asc" },
-      include: { job: { include: { zone: true } }, rider: true },
+      include: { job: { include: { zone: true, merchant: true } }, rider: true },
     });
     return { offers: offers.map((o) => dto(o)) };
   });

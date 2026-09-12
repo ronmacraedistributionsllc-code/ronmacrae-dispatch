@@ -21,6 +21,10 @@ const MoneyMajor = z.number().min(0).max(10_000_000);
 
 export const CreateJobBody = z.object({
   customerId: z.string().min(1),
+  /** Which store/merchant client this order is for (spec section 80: staff
+   *  can create an order for a merchant too) — omit for a direct/in-house
+   *  order. Validated against the actor's own business below. */
+  merchantId: z.string().min(1).optional().nullable(),
   type: z.enum(["pickup", "delivery", "pickup_delivery", "return"]).default("delivery"),
   priority: z.enum(["normal", "express", "urgent"]).default("normal"),
   source: z.enum(JOB_SOURCES).default("manual"),
@@ -100,6 +104,10 @@ export async function createJob(
     const dup = await ctx.prisma.job.findFirst({ where: { externalRef: body.externalRef, businessId }, select: { id: true } });
     if (dup) throw httpErrors.createError(409, `A job with external reference ${body.externalRef} already exists`);
   }
+  if (body.merchantId) {
+    const merchant = await ctx.prisma.merchant.findFirst({ where: { id: body.merchantId, businessId } });
+    if (!merchant) throw httpErrors.createError(404, "Merchant not found");
+  }
 
   // fee: explicit override wins; otherwise quote store->drop-off when both points exist
   let feeMinor: number | null = null;
@@ -127,6 +135,7 @@ export async function createJob(
 
   const data = {
     businessId,
+    merchantId: body.merchantId || null,
     jobNumber: "",
     externalRef: body.externalRef || null,
     source: body.source,

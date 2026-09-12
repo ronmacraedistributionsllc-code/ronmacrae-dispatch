@@ -3275,3 +3275,140 @@ now-corrected but still approximate offline fallback), a real
 need to be supplied in `.env` — nothing here can substitute for an
 actual geocoding credential.
 a tenth.
+
+## Stage 30 — multi-merchant public ordering, cash-by-merchant, settlements (DONE)
+
+A different scale of request from Stage 29: a 103-section spec asking for
+a full multi-merchant public-order → dispatch → multi-rider delivery →
+payment-collection → rider-cash-accountability → merchant-settlement
+platform, written against a Supabase/RLS/Edge-Functions mental model that
+doesn't match this app (Fastify + Prisma + custom JWT auth + a custom
+WebSocket hub — no Supabase anywhere). Corrected that once, in one line,
+per the user's own explicit "don't stop to ask" instruction, then audited
+the real codebase and built a genuine vertical slice rather than either
+refusing the mismatch or rebuilding from scratch. Preserved everything
+from Stage 29 untouched (single-accept flow, cash defaults, date/time
+defaults, Available Jobs, Customer Unavailable, messaging) — this stage
+only adds new entities and new screens around that existing core.
+
+**New entity: `Merchant`** (`schema.prisma`) — a store client of the
+courier business (e.g. "VBR Basics"), distinct from `Business` (the
+courier operator itself, still exactly one real row). Each merchant gets
+a unique slug, a public order URL
+(`{APP_ORIGIN}/order/{slug}`), one or more notification emails, its own
+pickup address, and an active/inactive flag. `apps/web/src/pages/merchants.tsx`
+is the admin CRUD screen: create, edit, copy the public link, generate a
+QR code for it (via `api.qrserver.com`, no key needed), and toggle a
+merchant inactive (which 404s its public order page rather than silently
+still accepting orders).
+
+**Real relational order items, not a text field.** Added `Product`,
+`ProductVariant`, and `JobItem` — a job can now hold N line items, each
+with its own product/variant/quantity/price snapshot (`JobItem` freezes
+the name/price *at order time*, so a later product-catalog price change
+never rewrites history on an already-placed order). `jobs/dto.ts`'s
+`jobToDto`/`jobSummaryToDto` now include `items[]`; the rider dashboard
+(`rider-dashboard.tsx`) shows the full item list on any job with more
+than one item instead of the old single "item summary" line.
+
+**Public order form, no login required**
+(`apps/web/src/pages/order.tsx`, `apps/api/src/modules/order.ts`):
+`/order` (the courier's own in-house public form) and `/order/:merchantSlug`
+(a specific merchant's branded form). Customer name/phone/email, delivery
+address via the existing `AddressPicker` (unchanged — reused as-is),
+multiple item rows, and date/time fields defaulting to today + 12:00 PM
+(same default as Stage 29's staff form). **The server always recomputes
+the price** — `PublicOrderBody`'s zod schema has no `fee`/`total` field at
+all, so there is nothing for a malicious client to submit; delivery fee
+comes from the existing zone/fare engine (`zones.ts`/`quotes.ts`, reused
+unmodified) run server-side against the geocoded delivery point, same as
+every other order path already in this app. Submitting returns an
+order number, a tracking link, and (for an unrecognized phone) a
+"claim my account" prompt into the existing Stage 23/25 OTP system —
+no new identity system was built; `CustomersService.upsertFromRequest()`
+already did phone-normalized find-or-create scoped by business, reused
+unchanged.
+
+**Real bug fixed as part of this: phone normalization.** The legacy
+`normalizePhone()` in `auth.ts` (used by customers/riders/users — a
+*different* function from the Stage-23 libphonenumber-based one used by
+the cross-business `CustomerIdentity` system) did not actually unify
+"8765551234" / "18765551234" / "+18765551234" into one value, which the
+spec calls out explicitly and which matters a lot once random members of
+the public are typing their own numbers into a public form. Fixed at the
+source; verified safe by running the full 213-test suite (nothing
+depends on the old, incorrect output shape) and by hand in the live
+demo (876 555 1234 arrived at the API as `+8765551234`, confirmed in the
+merchant email and the dispatcher job list for order RM-000071).
+
+**Immediate merchant-owner email** (`apps/api/src/modules/merchant-notify.ts`,
+`packages/notifications/src/email.ts`): a full HTML+text order-notification
+email fires on every order that has a merchant, non-blocking (order
+creation never waits on it or fails because of it), idempotent (a
+`Job.merchantNotifiedAt` guard on a conditional `updateMany` — the same
+guarded-update pattern this codebase already uses for job-transition
+guards — stops a duplicate send, with a `force` option for a genuine
+resend). Extended the existing `EmailProvider` abstraction (previously
+memory-only, used for verification codes) with `html?` support and a real
+`ResendEmailProvider`; `EMAIL_PROVIDER=memory` (the current default) logs
+the exact email instead of sending it — verified in this stage's live
+test: the full order RM-000071 email (customer, phone, address, map
+link, itemized list, subtotal/fee/total, payment method, a link back to
+the job) appeared correctly in the server log.
+
+**Cash-by-merchant, not just "rider has $65,000."** `cash-profile.ts`
+gained `buildMerchantBreakdown()`: a rider's outstanding cash is now
+broken out per merchant ("J$31,000 → VBR Basics, J$19,000 → Merchant B"),
+wired into the existing `RiderCashBusinessProfileDto` as a new `byMerchant`
+array — the existing single-number total is still there too, this adds
+detail rather than replacing it.
+
+**New entity: `Settlement`/`SettlementLine`** — a real ledger for a rider
+handing cash to the office, batched per merchant, deliberately kept
+**separate** from the pre-existing `Payout`/`PayoutLine` (business paying
+the rider their own earnings — a completely different money flow that
+this stage does not touch) and from the existing `CodEvent` per-job audit
+trail (a `Settlement` batches several already-`handed_in` jobs into one
+`approved` transition, reusing the same `CodEvent` mechanism rather than
+replacing it — no double-counting, no rewritten history, corrections
+would be new entries). `apps/web/src/pages/settlements.tsx` is the admin
+screen: outstanding cash grouped by rider-then-merchant, a settle action
+per group.
+
+**Smaller integrations threaded through, not bolted on separately**:
+merchant selector on the staff `new-job.tsx` order form; merchant
+filter dropdown + inline merchant badge on `jobs.tsx`; merchant name
+shown next to the business name on both the rider's pre-accept offer
+card and post-accept job card (`offers.ts`'s `dto()` and
+`rider-dashboard.tsx`); `merchantId` threaded through
+`jobs/create.ts`/`repository.ts`/`routes.ts` as a first-class filter
+alongside the existing `riderId`/`customerId`/`status` filters, not a
+bolted-on special case.
+
+**Live, real end-to-end verification (not just automated tests)**:
+rebuilt and redeployed both running demo processes (LAN + Cloudflare
+tunnel), created a real merchant ("VBR Basics") via the live API,
+placed a real order through the actual public order form running in a
+browser against the live tunnel URL, and traced it through every stage
+by hand: the order confirmation screen showed job number **RM-000071**;
+the dispatcher's `/api/jobs?merchantId=...` showed it with the correct
+COD amount (J$4,556 = J$4,500 subtotal + J$56 server-computed delivery
+fee — the client never sent a fee at all); the merchant notification
+email appeared in the server log with every field correct; a tracking
+link was generated and its public `GET /api/tracking/:token` endpoint
+returned the job's live status with no authentication required. This is
+the single-merchant half of the spec's mandatory end-to-end test
+(spec §99/§102) — genuinely exercised, not just asserted.
+
+**Not done in this stage** (see `BLOCKERS.md` for the credential-blocked
+items, and the checkpoint's own "not blocked" list for scope
+deliberately left for a future stage): polygon-drawn delivery zones
+(today: center+radius, unchanged); a separate merchant-staff login/
+role; route-optimization UI (the `optimizeStops` function already
+exists in `packages/geo`, unused by any screen); CAPTCHA on the public
+form; full multi-item entry on the *staff* order form (only a merchant
+selector was added there — multi-item entry exists on the new public
+`/order` form only). Real email delivery, a production `ronmacraedistributions.com`
+deployment, and (optionally) production-grade geocoding all need
+credentials only the account owner can supply — the code for all three
+is complete and waiting on configuration, not further development.

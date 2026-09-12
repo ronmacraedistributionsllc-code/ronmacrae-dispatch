@@ -64,9 +64,11 @@ export function buildCtx(
   const notify = new NotifyService(prisma, notifier, queue, hub, config, log, audit);
   const push = new PushService(prisma, config, log);
   const sim = new LocationSimulator(prisma, hub, log);
-  // Only "memory" ever exists (see email.ts) — no config knob to wire up,
-  // since there's nothing real to select between.
-  const email = createEmailProvider({ provider: "memory", log: (line) => log.info({ line }, "outbound email") });
+  const email = createEmailProvider({
+    provider: config.EMAIL_PROVIDER,
+    resend: { apiKey: config.RESEND_API_KEY || undefined, from: config.EMAIL_FROM || undefined },
+    log: (line) => log.info({ line }, "outbound email"),
+  });
   return {
     prisma,
     config,

@@ -357,6 +357,7 @@ function OfferCard({ offer, onChanged }: { offer: JobOfferDto; onChanged: () => 
   return <section className={`card space-y-2 border ${offer.urgent ? "border-red-800/60" : "border-sky-800/50"}`}>
     <div className="flex items-start justify-between gap-3">
       <div>
+        {offer.merchantName ? <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">{offer.merchantName}</p> : null}
         <h2 className="font-semibold">
           {offer.urgent ? <span className="mr-2 rounded bg-red-900/70 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-red-200">Urgent</span> : null}
           {offer.pickupArea ?? "Pickup TBC"} → {offer.destinationArea ?? "Destination TBC"}
@@ -439,7 +440,7 @@ function RiderJobCard({ job, onChanged }: { job: JobDto; onChanged: () => void }
   return <section className={`card space-y-3 ${urgent ? "border-red-900/50 bg-red-950/10" : ""}`}>
     <div className="flex items-start justify-between gap-3">
       <div>
-        <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">{businessName}</p>
+        <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">{businessName}{job.merchantName ? ` · ${job.merchantName}` : ""}</p>
         <h2 className="font-semibold">{jobLabel}</h2>
         <p className="text-xs text-zinc-400">{job.status.replaceAll("_", " ")}</p>
       </div>
@@ -450,8 +451,25 @@ function RiderJobCard({ job, onChanged }: { job: JobDto; onChanged: () => void }
       {/* Customer name only — never the phone number here. Message the
        *  customer through the in-app chat below, not by dialing directly. */}
       <div><dt className="label !mb-0">Customer</dt><dd className="break-words text-zinc-200">{job.customerName}</dd></div>
-      <div><dt className="label !mb-0">Product</dt><dd className="break-words text-zinc-200">{job.itemSummary ?? "—"}{job.quantity && job.quantity > 1 ? ` × ${job.quantity}` : ""}</dd></div>
-      <div><dt className="label !mb-0">Size / colour</dt><dd className="break-words text-zinc-200">{[job.itemSize ?? job.packageSize, job.itemColor].filter(Boolean).join(" · ") || "—"}</dd></div>
+      {job.items.length > 1 ? (
+        <div className="sm:col-span-2">
+          <dt className="label !mb-0">Items ({job.items.length})</dt>
+          <dd className="mt-0.5 space-y-0.5 text-zinc-200">
+            {job.items.map((it) => (
+              <p key={it.id} className="break-words">
+                {it.quantity}× {it.name}
+                {it.size ? ` (${it.size})` : ""}
+                {it.color ? ` — ${it.color}` : ""}
+              </p>
+            ))}
+          </dd>
+        </div>
+      ) : (
+        <>
+          <div><dt className="label !mb-0">Product</dt><dd className="break-words text-zinc-200">{job.itemSummary ?? "—"}{job.quantity && job.quantity > 1 ? ` × ${job.quantity}` : ""}</dd></div>
+          <div><dt className="label !mb-0">Size / colour</dt><dd className="break-words text-zinc-200">{[job.itemSize ?? job.packageSize, job.itemColor].filter(Boolean).join(" · ") || "—"}</dd></div>
+        </>
+      )}
       <div><dt className="label !mb-0">Pickup</dt><dd className="break-words text-zinc-200">{job.pickupAddressText ?? "Not supplied"}</dd></div>
       <div><dt className="label !mb-0">Destination</dt><dd className="break-words text-zinc-200">{job.addressText ?? "Not supplied"}{job.landmark ? ` (${job.landmark})` : ""}</dd></div>
     </dl>

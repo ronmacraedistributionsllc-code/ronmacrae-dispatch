@@ -2,7 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { httpErrors } from "@fastify/sensible";
 import { money, sum, type Money } from "@ronmacrae/money";
 import type { AppCtx } from "../ctx.js";
-import type { CashBucketDto, RiderCashBusinessProfileDto, RiderCashProfileDto } from "@ronmacrae/contracts";
+import type { CashBucketDto, RiderCashBusinessProfileDto, RiderCashMerchantProfileDto, RiderCashProfileDto } from "@ronmacrae/contracts";
 
 /**
  * Rider cash-profile corrections (Stage 27, spec section 9) — a real,
@@ -28,13 +28,61 @@ import type { CashBucketDto, RiderCashBusinessProfileDto, RiderCashProfileDto } 
  * be summed with cash owed to business B, on either side of this.
  */
 
-const codJobSelect = { codStatus: true, amountCollected: true, codHandedInAmount: true, currency: true } as const;
-type CodJobRow = { codStatus: string; amountCollected: number | null; codHandedInAmount: number | null; currency: string };
+const codJobSelect = {
+  codStatus: true,
+  amountCollected: true,
+  codHandedInAmount: true,
+  currency: true,
+  merchantId: true,
+  merchant: { select: { name: true } },
+} as const;
+type CodJobRow = {
+  codStatus: string;
+  amountCollected: number | null;
+  codHandedInAmount: number | null;
+  currency: string;
+  merchantId: string | null;
+  merchant: { name: string } | null;
+};
 
 function bucketFor(jobs: CodJobRow[], amountField: "amountCollected" | "codHandedInAmount", fallbackField?: "amountCollected"): CashBucketDto {
   if (jobs.length === 0) return { count: 0, amount: money(0, "JMD") };
   const amounts = jobs.map((j) => money(j[amountField] ?? (fallbackField ? (j[fallbackField] ?? 0) : 0), j.currency));
   return { count: jobs.length, amount: sum(amounts) };
+}
+
+/** Same four buckets as the business-level profile, split by merchant — a
+ *  rider can be holding COD for several of this business's merchants at
+ *  once, and "the rider has $X" is meaningless without saying whose it is
+ *  (spec: rider cash by merchant). `merchantId: null` groups this
+ *  business's own direct/in-house orders (no third-party merchant). */
+function buildMerchantBreakdown(codJobs: CodJobRow[]): RiderCashMerchantProfileDto[] {
+  const groups = new Map<string | null, { name: string; jobs: CodJobRow[] }>();
+  for (const job of codJobs) {
+    const key = job.merchantId;
+    const existing = groups.get(key);
+    if (existing) existing.jobs.push(job);
+    else groups.set(key, { name: job.merchant?.name ?? "Direct orders", jobs: [job] });
+  }
+  return [...groups.entries()].map(([merchantId, { name, jobs }]) => {
+    const collectedJobs = jobs.filter((j) => j.codStatus === "collected");
+    const handedInJobs = jobs.filter((j) => j.codStatus === "handed_in");
+    const confirmedJobs = jobs.filter((j) => j.codStatus === "approved");
+    const disputedJobs = jobs.filter((j) => j.codStatus === "disputed");
+    const varianceSource = [...handedInJobs, ...confirmedJobs];
+    return {
+      merchantId,
+      merchantName: name,
+      collected: bucketFor(collectedJobs, "amountCollected"),
+      handedInUnconfirmed: bucketFor(handedInJobs, "codHandedInAmount"),
+      confirmed: bucketFor(confirmedJobs, "codHandedInAmount"),
+      disputed: bucketFor(disputedJobs, "codHandedInAmount", "amountCollected"),
+      handoverVariance:
+        varianceSource.length === 0
+          ? money(0, "JMD")
+          : sum(varianceSource.map((j) => money((j.codHandedInAmount ?? 0) - (j.amountCollected ?? 0), j.currency))),
+    };
+  });
 }
 
 async function buildBusinessProfile(ctx: AppCtx, riderId: string, businessId: string): Promise<RiderCashBusinessProfileDto> {
@@ -93,6 +141,7 @@ async function buildBusinessProfile(ctx: AppCtx, riderId: string, businessId: st
     handoverVariance,
     earningsPayable,
     earningsNote,
+    byMerchant: buildMerchantBreakdown(codJobs),
   };
 }
 

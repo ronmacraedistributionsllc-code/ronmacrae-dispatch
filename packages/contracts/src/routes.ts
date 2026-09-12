@@ -92,8 +92,48 @@ export const API = {
 
   quotes: {
     create: "/api/quotes",
-    /** public (rate limited) - used by the customer delivery-request page */
+    /** public (rate limited) - a side-effect-free delivery-fee preview for
+     *  the public order form, before the customer commits to submitting. */
     public: "/api/quotes/public",
+  },
+
+  /** Store/merchant clients of the courier business (e.g. "VBR Basics") —
+   *  distinct from Business (the courier itself). Staff-managed; the public
+   *  order form only ever sees the narrower MerchantPublicDto via `public`. */
+  merchants: {
+    list: "/api/merchants",
+    create: "/api/merchants",
+    get: (id: string) => `/api/merchants/${id}`,
+    update: (id: string) => `/api/merchants/${id}`,
+    /** public, no auth — resolves a slug for the /order/:slug page */
+    public: (slug: string) => `/api/merchants/public/${slug}`,
+    products: (merchantId: string) => `/api/merchants/${merchantId}/products`,
+  },
+
+  products: {
+    create: (merchantId: string) => `/api/merchants/${merchantId}/products`,
+    update: (id: string) => `/api/products/${id}`,
+    delete: (id: string) => `/api/products/${id}`,
+    /** public, no auth — the catalog for one merchant's order page */
+    public: (merchantSlug: string) => `/api/merchants/public/${merchantSlug}/products`,
+  },
+
+  /** The main public multi-item order form (spec: PUBLIC ORDER, no login,
+   *  no app). `create`/`quote` with no slug book against the courier
+   *  business's own default storefront (the old single-item `/book` flow's
+   *  successor); with a slug they book against that merchant. */
+  order: {
+    quote: "/api/order/quote",
+    create: "/api/order",
+    createForMerchant: (merchantSlug: string) => `/api/order/${merchantSlug}`,
+  },
+
+  /** Rider cash-to-office settlements, batched per rider+merchant — see
+   *  SettlementDto's own doc comment for how this differs from `payouts`. */
+  settlements: {
+    list: "/api/settlements",
+    create: "/api/settlements",
+    outstanding: (riderId: string) => `/api/riders/${riderId}/settlements/outstanding`,
   },
 
   /** public geocoding (rate limited); simulated fallback when no map provider */

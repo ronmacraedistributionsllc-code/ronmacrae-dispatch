@@ -246,11 +246,28 @@ async function issueTokenPair(
   return { access, refresh, expiresAt };
 }
 
+/**
+ * Legacy normalizer for login/Customer/Rider/User records — kept
+ * deliberately producing the exact same "+876XXXXXXX" shape it always has
+ * (never the real E.164 "+1876XXXXXXX" shape `lib/phone.ts`'s real
+ * normalizer uses for the global CustomerIdentity system), so every phone
+ * number already stored this way keeps matching. `lib/phone.ts`'s own
+ * normalizer is intentionally not reused here — unifying the two would mean
+ * re-migrating every already-stored User/Rider/Customer phone, a genuinely
+ * separate cleanup outside this fix's scope (see WORK_IN_PROGRESS.md).
+ *
+ * Fixed here (Stage 30, spec section 8): a Jamaican number typed with or
+ * without the "1" country-code digit — "8765551234", "18765551234", and
+ * "+18765551234" — must all collapse to the one same customer profile, not
+ * three. The previous version only handled the with-country-code and
+ * without-country-code forms as accidentally-different shapes; this
+ * strips a leading "1876" down to "876" first, so every form canonicalizes
+ * identically.
+ */
 export function normalizePhone(raw: string): string {
-  const digits = raw.replace(/[^\d]/g, "");
-  if (digits.length === 10 && digits.startsWith("1876")) return `+876${digits.slice(1)}`;
-  if (digits.length === 11 && digits.startsWith("876")) return `+${digits}`;
-  if (digits.length === 7) return `+876${digits}`;
+  let digits = raw.replace(/[^\d]/g, "");
+  if (digits.length === 11 && digits.startsWith("1876")) digits = digits.slice(1);
+  if (digits.length === 7) digits = `876${digits}`;
   return `+${digits}`;
 }
 
@@ -286,6 +303,12 @@ export function registerAuthHook(app: FastifyInstance, ctx: AppCtx): void {
     if (url === "/api/quotes/public" && method === "POST") return true;
     if (url === "/api/geo/geocode" && method === "POST") return true;
     if (url === "/api/geo/reverse" && method === "POST") return true;
+    // Main public multi-item order form (spec section 5) — no login, no
+    // app. `/api/order`, `/api/order/quote`, and `/api/order/:merchantSlug`
+    // all covered by this one prefix check.
+    if ((url === "/api/order" || url.startsWith("/api/order/")) && method === "POST") return true;
+    // A merchant's public storefront info + catalog for their own /order/:slug page.
+    if (url.startsWith("/api/merchants/public/") && method === "GET") return true;
     // Twilio's own delivery-status webhook — unauthenticated by nature (Twilio
     // isn't a logged-in user), verified instead by its own signature header
     // when TWILIO_AUTH_TOKEN is configured (see notify.ts).

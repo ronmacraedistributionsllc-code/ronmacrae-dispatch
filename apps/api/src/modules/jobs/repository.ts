@@ -17,6 +17,7 @@ export interface JobListFilter {
   source?: string;
   riderId?: string;
   customerId?: string;
+  merchantId?: string;
   /** matches job number, external ref, address or customer name/phone */
   search?: string;
   /** ISO dates on createdAt */
@@ -54,6 +55,7 @@ export function jobListWhere(f: JobListFilter): Prisma.JobWhereInput {
     ...(f.source ? { source: f.source } : {}),
     ...(f.riderId ? { riderId: f.riderId } : {}),
     ...(f.customerId ? { customerId: f.customerId } : {}),
+    ...(f.merchantId ? { merchantId: f.merchantId } : {}),
     ...(f.from || f.to
       ? { createdAt: { ...(f.from ? { gte: new Date(f.from) } : {}), ...(f.to ? { lte: new Date(f.to) } : {}) } }
       : {}),

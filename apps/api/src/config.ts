@@ -70,6 +70,14 @@ const EnvSchema = z.object({
   TWILIO_WHATSAPP_FROM: z.string().default(""),
   TWILIO_SMS_FROM: z.string().default(""),
 
+  /** Transactional email (verification codes, and merchant new-order
+   *  notifications) — see @ronmacrae/notifications' email.ts. Leave at
+   *  "memory" (the default) with no real provider connected; set
+   *  EMAIL_PROVIDER=resend + RESEND_API_KEY + EMAIL_FROM to send real mail. */
+  EMAIL_PROVIDER: z.enum(["memory", "resend"]).default("memory"),
+  RESEND_API_KEY: z.string().default(""),
+  EMAIL_FROM: z.string().default(""),
+
   WOO_API_URL: z.string().default("https://ronmacraedistributions.com/wp-json/wc/v3"),
   WOO_CONSUMER_KEY: z.string().default(""),
   WOO_CONSUMER_SECRET: z.string().default(""),

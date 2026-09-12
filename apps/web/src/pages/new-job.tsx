@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import type { CustomerDto, FareQuoteDto, JobDto, JobSource, TrackingLinkDto } from "@ronmacrae/contracts";
+import type { CustomerDto, FareQuoteDto, JobDto, JobSource, MerchantDto, TrackingLinkDto } from "@ronmacrae/contracts";
 import { API } from "@ronmacrae/contracts";
 import { ApiError, apiFetch } from "../lib/api.js";
 import { useAuth } from "../lib/auth.js";
@@ -33,6 +33,8 @@ interface FormState {
   firstName: string;
   lastName: string;
   customerPhone: string;
+  /** Which store/merchant client this order is for — "" = direct/in-house order. */
+  merchantId: string;
   landmark: string;
   product: string;
   colour: string;
@@ -66,6 +68,7 @@ function makeEmptyForm(): FormState {
     firstName: "",
     lastName: "",
     customerPhone: "",
+    merchantId: "",
     landmark: "",
     product: "",
     colour: "",
@@ -99,6 +102,12 @@ export function NewJob(): React.JSX.Element {
   const [form, setForm] = useState<FormState>(makeEmptyForm);
   const [selected, setSelected] = useState<CustomerDto | null>(null);
   const [matches, setMatches] = useState<CustomerDto[]>([]);
+  const [merchants, setMerchants] = useState<MerchantDto[]>([]);
+  useEffect(() => {
+    apiFetch<{ merchants: MerchantDto[] }>(API.merchants.list)
+      .then((r) => setMerchants(r.merchants.filter((m) => m.active)))
+      .catch(() => setMerchants([]));
+  }, []);
   const [feeAutoFilled, setFeeAutoFilled] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -213,6 +222,7 @@ export function NewJob(): React.JSX.Element {
         method: "POST",
         body: JSON.stringify({
           customerId,
+          merchantId: form.merchantId || undefined,
           type: "delivery",
           priority: form.urgent ? "urgent" : "normal",
           source: form.channel,
@@ -305,6 +315,18 @@ export function NewJob(): React.JSX.Element {
 
       {destination ? (
         <>
+          {merchants.length > 0 ? (
+            <section className="card">
+              <label className="label" htmlFor="nj-merchant">Store / merchant (optional)</label>
+              <select id="nj-merchant" className="input max-w-sm" value={form.merchantId} onChange={(e) => set({ merchantId: e.target.value })}>
+                <option value="">Direct order (no third-party store)</option>
+                {merchants.map((m) => (
+                  <option key={m.id} value={m.id}>{m.name}</option>
+                ))}
+              </select>
+              <p className="mt-1 text-xs text-zinc-500">Attributes this order's cash accounting to that store, and sends them a new-order email.</p>
+            </section>
+          ) : null}
           <section className="card">
             <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-zinc-400">Customer</h2>
             <div className="grid gap-3 md:grid-cols-3">

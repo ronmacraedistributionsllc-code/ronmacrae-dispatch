@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ACTIVE_JOB_STATUSES, API, JOB_SOURCES, JOB_STATUSES, RIDER_STAGE_LABELS, allowedTransitions } from "@ronmacrae/contracts";
-import type { AddressChangeRequestDto, ConversationsDto, DeliveryMessagesDto, JobSource, JobStatus, JobSummaryDto, RiderDto } from "@ronmacrae/contracts";
+import type { AddressChangeRequestDto, ConversationsDto, DeliveryMessagesDto, JobSource, JobStatus, JobSummaryDto, MerchantDto, RiderDto } from "@ronmacrae/contracts";
 import { ApiError, apiFetch, formatMoney } from "../lib/api.js";
 import { useAuth } from "../lib/auth.js";
 import { JobOffersPanel } from "../components/job-offers-panel.js";
@@ -68,6 +68,7 @@ function JobRow({ job, riders, canWrite, busy, offersOpen, queueOpen, chatOpen, 
           ) : null}
         </div>
         <div className="text-xs text-zinc-500">
+          {job.merchantName ? <span className="mr-1 rounded bg-zinc-800 px-1 py-0.5 text-zinc-300">{job.merchantName}</span> : null}
           {job.source} · {job.type}
         </div>
         {job.itemSummary ? (
@@ -203,6 +204,7 @@ export function Jobs(): React.JSX.Element {
 
   const [status, setStatus] = useState<JobStatus | "">("");
   const [source, setSource] = useState<JobSource | "">("");
+  const [merchantId, setMerchantId] = useState("");
   const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
   useEffect(() => {
@@ -210,12 +212,15 @@ export function Jobs(): React.JSX.Element {
     return () => clearTimeout(t);
   }, [searchInput]);
 
+  const merchants = useQuery({ queryKey: ["merchants"], queryFn: () => apiFetch<{ merchants: MerchantDto[] }>(API.merchants.list) });
+
   const jobs = useQuery({
-    queryKey: ["jobs", status, source, search],
+    queryKey: ["jobs", status, source, merchantId, search],
     queryFn: () => {
       const p = new URLSearchParams({ take: "100" });
       if (status) p.set("status", status);
       if (source) p.set("source", source);
+      if (merchantId) p.set("merchantId", merchantId);
       if (search) p.set("search", search);
       return apiFetch<{ jobs: JobSummaryDto[]; total: number }>(`/jobs?${p.toString()}`);
     },
@@ -270,7 +275,7 @@ export function Jobs(): React.JSX.Element {
       </header>
 
       <section className="card">
-        <div className="grid gap-3 md:grid-cols-4">
+        <div className="grid gap-3 md:grid-cols-5">
           <div>
             <label className="label" htmlFor="job-status">
               Status
@@ -304,6 +309,17 @@ export function Jobs(): React.JSX.Element {
                 <option key={s} value={s}>
                   {s}
                 </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="label" htmlFor="job-merchant">
+              Merchant
+            </label>
+            <select id="job-merchant" className="input" value={merchantId} onChange={(e) => setMerchantId(e.target.value)}>
+              <option value="">All merchants</option>
+              {merchants.data?.merchants.map((m) => (
+                <option key={m.id} value={m.id}>{m.name}</option>
               ))}
             </select>
           </div>
