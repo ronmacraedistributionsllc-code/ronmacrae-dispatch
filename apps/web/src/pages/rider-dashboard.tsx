@@ -23,34 +23,66 @@ const TO_PICK_UP_STATUSES: JobStatus[] = ["assigned", "accepted"];
  *  package is still physically with the rider until the job resolves. */
 const IN_POSSESSION_STATUSES: JobStatus[] = ["picked_up", "in_transit", "delivering", "location_changed", "no_answer", "failed"];
 
-type Action = { label: string; to?: JobStatus; stage?: "heading_to_pickup" | "at_pickup"; needsPin?: boolean; location?: boolean; failed?: boolean };
+type Action = {
+  label: string;
+  to?: JobStatus;
+  stage?: "heading_to_pickup" | "at_pickup";
+  needsPin?: boolean;
+  /** Collapses two backend transitions into one rider-facing tap (spec item
+   *  1's four-step flow: Accept -> Confirm Pickup -> Confirm Delivery ->
+   *  Confirm Cash Drop-Off — `in_transit` is a real, useful status for
+   *  ETA/tracking/notifications, but the rider should never have to tap a
+   *  separate "start delivery" button for it). Applied automatically right
+   *  after `to` succeeds. */
+  chainTo?: JobStatus;
+  /** Shows the cash-collected field, pre-filled from the order total (spec
+   *  item 1) — only "Confirm delivery" needs this. */
+  needsAmount?: boolean;
+  location?: boolean;
+  failed?: boolean;
+};
 
-/** The ONE big next step for this job (spec item 1: Collected -> In transit ->
- *  Delivered, acceptance kept separate from collection). Everything else is a
- *  secondary/exception action, tucked away so it can't be tapped by mistake. */
+/** The ONE big next step for this job — Accept -> Confirm Pickup -> Confirm
+ *  Delivery -> Confirm Cash Drop-Off (COD jobs; see CodPanel below for that
+ *  last step). Everything else is a secondary/exception action, tucked away
+ *  so it can't be tapped by mistake. */
 function primaryActionFor(job: JobDto): Action | null {
   switch (job.status) {
     case "assigned": return { label: "Accept job", to: "accepted" };
-    case "accepted": return { label: "Confirm collection", to: "picked_up" };
+    case "accepted": return { label: "Confirm pickup", to: "picked_up", chainTo: "in_transit" };
+    // Normally skipped in one tap by "Confirm pickup" above — this is only
+    // reachable if that chain's second leg didn't complete, so the rider is
+    // never stuck with no visible next step.
     case "picked_up": return { label: "Start delivery", to: "in_transit" };
     case "in_transit":
     case "delivering":
-      return { label: "Mark delivered", to: "delivered", needsPin: true };
+      return { label: "Confirm delivery", to: "delivered", needsPin: true, needsAmount: job.paymentMethod === "cod" };
     case "location_changed": return { label: "Resume delivery", to: "in_transit" };
     default: return null; // no_answer / failed: staff/rider judgement call only, via secondary actions
   }
+}
+
+/** Statuses where the rider is actually en route to (or at) the customer's
+ *  door, so "Customer unavailable" (spec item 6) is promoted out of "Other
+ *  options" into its own clearly-visible button rather than hidden away. */
+const DELIVERY_ATTEMPT_STATUSES: JobStatus[] = ["picked_up", "in_transit", "delivering", "location_changed"];
+
+function customerUnavailableActionFor(job: JobDto): Action | null {
+  return DELIVERY_ATTEMPT_STATUSES.includes(job.status) ? { label: "Customer unavailable", to: "no_answer" } : null;
 }
 
 function secondaryActionsFor(job: JobDto): Action[] {
   switch (job.status) {
     case "assigned": return [{ label: "Not Answering", to: "no_answer" }, { label: "Customer Changed Location", to: "location_changed", location: true }, { label: "Failed", to: "failed", failed: true }];
     case "accepted": return [{ label: "Not Answering", to: "no_answer" }, { label: "Customer Changed Location", to: "location_changed", location: true }, { label: "Failed", to: "failed", failed: true }];
-    case "picked_up": return [{ label: "Not Answering", to: "no_answer" }, { label: "Customer Changed Location", to: "location_changed", location: true }, { label: "Failed", to: "failed", failed: true }];
+    // "Customer unavailable" (same transition as "Not Answering") is already
+    // promoted above for these statuses — not repeated here.
+    case "picked_up": return [{ label: "Customer Changed Location", to: "location_changed", location: true }, { label: "Failed", to: "failed", failed: true }];
     case "in_transit":
     case "delivering":
-      return [{ label: "Not Answering", to: "no_answer" }, { label: "Customer Changed Location", to: "location_changed", location: true }, { label: "Failed", to: "failed", failed: true }];
+      return [{ label: "Customer Changed Location", to: "location_changed", location: true }, { label: "Failed", to: "failed", failed: true }];
     case "no_answer": return [{ label: "Returned to store", to: "returned" }, { label: "Failed", to: "failed", failed: true }];
-    case "location_changed": return [{ label: "Not Answering", to: "no_answer" }, { label: "Failed", to: "failed", failed: true }];
+    case "location_changed": return [{ label: "Failed", to: "failed", failed: true }];
     case "failed": return [{ label: "Returned to store", to: "returned" }];
     default: return [];
   }
@@ -165,6 +197,20 @@ export function RiderDashboard(): React.JSX.Element {
       </div>
       {atCapacity ? <span className="whitespace-nowrap rounded bg-amber-900/40 px-2 py-1 text-xs font-medium text-amber-300">At capacity</span> : null}
     </section>
+    {availabilityChange.error ? <p className="text-sm text-red-400">{availabilityChange.error instanceof ApiError ? availabilityChange.error.message : "Could not update availability"}</p> : null}
+
+    {/* Spec item 4 — a clear, unmissable "Available Jobs" section: jobs
+     *  dispatch has offered that this rider can tap to accept. Placed above
+     *  everything else on the dashboard since it's the most actionable thing
+     *  a rider not already mid-delivery needs to see first. */}
+    <SectionHeading label="Available jobs" count={offerCount} />
+    {offers.isLoading ? <p className="text-sm text-zinc-400">Checking for available jobs…</p> : null}
+    {offerCount === 0 ? (
+      <p className="text-sm text-zinc-500">No jobs available right now — they'll appear here the moment dispatch offers one.</p>
+    ) : (
+      <div className="space-y-2">{offers.data!.offers.map((offer) => <OfferCard key={offer.id} offer={offer} onChanged={refreshOffersAndJobs} />)}</div>
+    )}
+
     {activeJobs.length > 0 ? (
       <section className="space-y-2">
         <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-400">Route queue</h2>
@@ -174,15 +220,6 @@ export function RiderDashboard(): React.JSX.Element {
     ) : null}
     <CashSummary />
     <LocationSharing riderId={rider.id} />
-    {availabilityChange.error ? <p className="text-sm text-red-400">{availabilityChange.error instanceof ApiError ? availabilityChange.error.message : "Could not update availability"}</p> : null}
-
-    <SectionHeading label="Job offers" count={offerCount} />
-    {offers.isLoading ? <p className="text-sm text-zinc-400">Checking for offers…</p> : null}
-    {offerCount === 0 ? (
-      <p className="text-sm text-zinc-500">No offers waiting right now — they'll appear here the moment dispatch sends one.</p>
-    ) : (
-      <div className="space-y-2">{offers.data!.offers.map((offer) => <OfferCard key={offer.id} offer={offer} onChanged={refreshOffersAndJobs} />)}</div>
-    )}
 
     <SectionHeading label="To pick up" count={toPickUp.length} />
     {jobs.isLoading ? <p className="text-sm text-zinc-400">Loading assigned jobs…</p> : null}
@@ -362,6 +399,7 @@ function RiderJobCard({ job, onChanged }: { job: JobDto; onChanged: () => void }
   const [sheet, setSheet] = useState<Action | null>(null);
   const [note, setNote] = useState("");
   const [pin, setPin] = useState("");
+  const [amount, setAmount] = useState(() => String(job.amountExpected ? majorOf(job.amountExpected) : ""));
   const [addressText, setAddressText] = useState(job.addressText ?? "");
   const [landmark, setLandmark] = useState(job.landmark ?? "");
   const [showMore, setShowMore] = useState(false);
@@ -369,7 +407,23 @@ function RiderJobCard({ job, onChanged }: { job: JobDto; onChanged: () => void }
   const mutation = useMutation({
     mutationFn: async (next: Action) => {
       if (next.label === "Accept job") return apiFetch(API.bearer.accept(job.id), { method: "POST", body: JSON.stringify({}) });
-      return apiFetch(API.bearer.transition(job.id), { method: "POST", body: JSON.stringify({ to: next.to, note, ...(next.needsPin ? { pin } : {}), ...(next.location ? { addressText, landmark } : {}), ...(next.failed ? { failureReason: "other", failureNote: note } : {}) }) });
+      const result = await apiFetch(API.bearer.transition(job.id), {
+        method: "POST",
+        body: JSON.stringify({
+          to: next.to,
+          note,
+          ...(next.needsPin ? { pin } : {}),
+          ...(next.needsAmount && amount.trim() !== "" ? { amountCollected: Number(amount) } : {}),
+          ...(next.location ? { addressText, landmark } : {}),
+          ...(next.failed ? { failureReason: "other", failureNote: note } : {}),
+        }),
+      });
+      // Collapses "Confirm pickup" (picked_up) straight into in_transit — one
+      // rider-facing tap instead of two (spec item 1). If this second leg
+      // fails, the job is left at `picked_up` and "Start delivery" appears
+      // as a normal fallback next step rather than the rider being stuck.
+      if (next.chainTo) return apiFetch(API.bearer.transition(job.id), { method: "POST", body: JSON.stringify({ to: next.chainTo }) });
+      return result;
     },
     // Data entered in the sheet (note/pin/etc.) is deliberately left in place
     // on success too — closing it clears the sheet, not what was typed, so a
@@ -378,6 +432,7 @@ function RiderJobCard({ job, onChanged }: { job: JobDto; onChanged: () => void }
   });
   const urgent = job.priority === "urgent";
   const primary = primaryActionFor(job);
+  const unavailable = customerUnavailableActionFor(job);
   const secondary = secondaryActionsFor(job);
   const jobLabel = job.jobNumber ?? job.id.slice(0, 8);
 
@@ -413,7 +468,11 @@ function RiderJobCard({ job, onChanged }: { job: JobDto; onChanged: () => void }
 
     <div className="flex flex-wrap gap-2">
       <a className="btn !px-3 !py-1.5 text-sm" href={navigateHref(job)} target="_blank" rel="noreferrer">📍 Navigate</a>
-      <button className="btn !px-3 !py-1.5 text-sm" onClick={() => setShowChat((v) => !v)}>💬 Message customer</button>
+      {/* Opens both the Customer and Dispatch conversations (tabs) — see
+       *  RiderJobChat below. Labeled plainly as "Messages" rather than
+       *  "Message customer" so dispatch messaging isn't hidden behind a
+       *  button that only names the other party (spec item 5). */}
+      <button className="btn !px-3 !py-1.5 text-sm" onClick={() => setShowChat((v) => !v)}>💬 Messages</button>
     </div>
     {ACTIVE_JOB_STATUSES.includes(job.status) ? <ContactDispatch jobId={job.id} jobLabel={jobLabel} /> : null}
     {showChat ? (
@@ -427,6 +486,16 @@ function RiderJobCard({ job, onChanged }: { job: JobDto; onChanged: () => void }
     {primary ? (
       <button className="btn-accent w-full !py-3 text-base font-semibold" onClick={() => setSheet(primary)}>
         {primary.label}
+      </button>
+    ) : null}
+
+    {/* Promoted out of "Other options" (spec item 6) — a rider trying to
+     *  deliver and failing to reach the customer needs this as obviously as
+     *  the primary action, not buried behind a toggle. Never marks the
+     *  delivery complete; just flags it for dispatch. */}
+    {unavailable ? (
+      <button className="btn w-full !border-amber-800/60 !bg-amber-950/20 !py-2.5 text-sm font-medium text-amber-300" onClick={() => setSheet(unavailable)}>
+        🚫 Customer unavailable
       </button>
     ) : null}
 
@@ -452,6 +521,8 @@ function RiderJobCard({ job, onChanged }: { job: JobDto; onChanged: () => void }
         setNote={setNote}
         pin={pin}
         setPin={setPin}
+        amount={amount}
+        setAmount={setAmount}
         addressText={addressText}
         setAddressText={setAddressText}
         landmark={landmark}
@@ -466,10 +537,11 @@ function RiderJobCard({ job, onChanged }: { job: JobDto; onChanged: () => void }
 }
 
 const PRIMARY_SHEET_COPY: Record<string, { question: string; confirmLabel: string }> = {
-  "Confirm collection": { question: "Confirm you have the correct package in hand before marking it collected.", confirmLabel: "Yes, mark collected" },
+  "Confirm pickup": { question: "Confirm you have the correct package in hand before heading out.", confirmLabel: "Yes, confirm pickup" },
   "Start delivery": { question: "Confirm you're heading out with this package now.", confirmLabel: "Start delivery" },
-  "Mark delivered": { question: "Enter the delivery PIN from the customer to confirm handoff.", confirmLabel: "Confirm delivered" },
+  "Confirm delivery": { question: "Enter the delivery PIN from the customer to confirm handoff.", confirmLabel: "Confirm delivered" },
   "Accept job": { question: "Confirm you can pick up and deliver this job.", confirmLabel: "Accept" },
+  "Customer unavailable": { question: "This records that you tried to reach the customer and lets dispatch know — it does NOT mark the delivery complete. You'll still have the package.", confirmLabel: "Confirm customer unavailable" },
 };
 
 /**
@@ -488,6 +560,8 @@ function ActionSheet(props: {
   setNote: (v: string) => void;
   pin: string;
   setPin: (v: string) => void;
+  amount: string;
+  setAmount: (v: string) => void;
   addressText: string;
   setAddressText: (v: string) => void;
   landmark: string;
@@ -497,7 +571,7 @@ function ActionSheet(props: {
   onConfirm: () => void;
   onDismiss: () => void;
 }): React.JSX.Element {
-  const { job, businessName, action, note, setNote, pin, setPin, addressText, setAddressText, landmark, setLandmark, pending, error, onConfirm, onDismiss } = props;
+  const { job, businessName, action, note, setNote, pin, setPin, amount, setAmount, addressText, setAddressText, landmark, setLandmark, pending, error, onConfirm, onDismiss } = props;
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onDismiss(); };
     window.addEventListener("keydown", onKey);
@@ -518,6 +592,13 @@ function ActionSheet(props: {
         </dl>
         {copy ? <p className="mt-3 rounded-lg bg-zinc-800/60 p-2.5 text-sm text-zinc-300">{copy.question}</p> : null}
 
+        {action.needsAmount ? (
+          <div className="mt-3">
+            <label className="label" htmlFor={`amount-${job.id}`}>Cash collected</label>
+            <input id={`amount-${job.id}`} className="input" type="number" min={0} step="any" inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} />
+            <p className="mt-1 text-xs text-zinc-500">Defaults to the order total — change it only if the customer actually paid a different amount.</p>
+          </div>
+        ) : null}
         {action.needsPin ? (
           <div className="mt-3">
             <label className="label" htmlFor={`pin-${job.id}`}>Delivery PIN</label>
@@ -562,36 +643,35 @@ const COD_STATUS_BADGE: Record<string, string> = {
 };
 
 /**
- * COD reconciliation actions for one job's card — kept deliberately separate
- * from "Your delivery fee" above it (this is only the cash-in-hand side of
- * the job: what was collected from the customer, and what's been handed
- * over to the office; it is never the rider's own earnings, which is a
- * different figure entirely, shown on the offer card before acceptance and
- * as "Your delivery fee" above once assigned).
+ * Cash-drop-off panel for one job's card (spec items 1 &amp; 8) — kept
+ * deliberately separate from "Your delivery fee" above it (this is only the
+ * cash-in-hand side of the job: what was collected from the customer, and
+ * what's been handed over to the office; it is never the rider's own
+ * earnings, which is a different figure entirely, shown on the offer card
+ * before acceptance and as "Your delivery fee" above once assigned).
+ *
+ * There is no separate "Record collected" step here anymore — confirming
+ * delivery (the ActionSheet's amount field above) already records the
+ * collection automatically. This panel picks up from there: the rider
+ * presses "Confirm Cash Drop-Off" once the money is actually handed over,
+ * and dispatch approves it from their side (COD reconciliation page).
  */
 function CodPanel({ job, onChanged }: { job: JobDto; onChanged: () => void }): React.JSX.Element {
-  const [collectOpen, setCollectOpen] = useState(false);
-  const [collectAmount, setCollectAmount] = useState(() => String(job.amountExpected ? majorOf(job.amountExpected) : ""));
   const [handInOpen, setHandInOpen] = useState(false);
   const [handInAmount, setHandInAmount] = useState(() => String(job.amountCollected ? majorOf(job.amountCollected) : ""));
 
-  const collect = useMutation({
-    mutationFn: () => apiFetch(API.jobs.collect(job.id), { method: "POST", body: JSON.stringify({ amountCollected: Number(collectAmount) }) }),
-    onSuccess: () => { setCollectOpen(false); onChanged(); },
-  });
   const handIn = useMutation({
     mutationFn: () => apiFetch(API.cod.handIn(job.id), { method: "POST", body: JSON.stringify({ amountHandedIn: Number(handInAmount) }) }),
     onSuccess: () => { setHandInOpen(false); onChanged(); },
   });
 
   const locked = job.codStatus === "approved";
-  const canCollect = !locked && job.codStatus !== "handed_in" && job.codStatus !== "disputed";
   const canHandIn = !locked && (job.codStatus === "collected" || job.codStatus === "handed_in");
 
   return (
     <div className="space-y-2 rounded-lg border border-zinc-700 bg-zinc-900/40 p-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <p className="text-sm font-medium text-zinc-200">COD reconciliation</p>
+        <p className="text-sm font-medium text-zinc-200">Cash on delivery</p>
         <span className={`rounded px-2 py-0.5 text-xs font-medium ${COD_STATUS_BADGE[job.codStatus]}`}>{COD_STATUS_LABEL[job.codStatus]}</span>
       </div>
       <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm sm:grid-cols-3">
@@ -606,23 +686,16 @@ function CodPanel({ job, onChanged }: { job: JobDto; onChanged: () => void }): R
       ) : null}
       {job.codAccountantNote ? <p className="text-xs text-zinc-400">Accountant note: {job.codAccountantNote}</p> : null}
       {locked ? (
-        <p className="text-xs text-zinc-500">Approved — locked. Contact an accountant if this needs correcting.</p>
-      ) : (
+        <p className="text-xs text-zinc-500">Approved by dispatch — locked. Contact an accountant if this needs correcting.</p>
+      ) : job.codStatus === "handed_in" ? (
+        <p className="text-xs text-zinc-500">Waiting on dispatch to approve this drop-off.</p>
+      ) : canHandIn ? (
         <div className="flex flex-wrap gap-2">
-          {canCollect ? <button className="btn !px-3 !py-1 text-xs" onClick={() => setCollectOpen((v) => !v)}>Record collected</button> : null}
-          {canHandIn ? <button className="btn !px-3 !py-1 text-xs" onClick={() => setHandInOpen((v) => !v)}>Record handed in</button> : null}
+          <button className="btn-accent !px-3 !py-1 text-xs" onClick={() => setHandInOpen((v) => !v)}>Confirm cash drop-off</button>
         </div>
+      ) : (
+        <p className="text-xs text-zinc-500">Nothing to hand over yet — this is recorded automatically once you confirm delivery.</p>
       )}
-      {collectOpen ? (
-        <div className="flex flex-wrap items-end gap-2 rounded border border-zinc-700 p-2">
-          <div>
-            <label className="label" htmlFor={`collect-${job.id}`}>Amount collected from customer</label>
-            <input id={`collect-${job.id}`} className="input w-32" type="number" min={0} step="any" value={collectAmount} onChange={(e) => setCollectAmount(e.target.value)} />
-          </div>
-          <button className="btn-accent !px-3 !py-1 text-xs" disabled={collect.isPending} onClick={() => void collect.mutate()}>{collect.isPending ? "Saving…" : "Save"}</button>
-          {collect.error ? <p className="w-full text-xs text-red-400">{collect.error instanceof ApiError ? collect.error.message : "Could not record collection"}</p> : null}
-        </div>
-      ) : null}
       {handInOpen ? (
         <div className="flex flex-wrap items-end gap-2 rounded border border-zinc-700 p-2">
           <div>
@@ -643,6 +716,9 @@ function RiderJobChat({ jobId }: { jobId: string }): React.JSX.Element {
     <ConversationTabs
       storageKey={`rider-${jobId}`}
       fetchSummary={() => apiFetch<ConversationsDto>(API.messages.bearerConversations(jobId))}
+      // A rider's own two conversations, named plainly from their side
+      // (spec item 5) — not "Customer ↔ Rider" / "Rider ↔ Dispatch".
+      labelFor={{ customer_rider: "Customer", rider_dispatch: "Dispatch" }}
       renderChat={({ kind }) => (
         <DeliveryChat
           queryKey={`rider-${jobId}-${kind}`}

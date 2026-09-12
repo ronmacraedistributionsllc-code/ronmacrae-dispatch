@@ -211,6 +211,13 @@ export async function transitionJob(
   // actual figure via `amountCollected`.
   const cashDefault = input.amountCollected ?? majorOf(money(row.amountExpected ?? 0, row.currency));
   const cash = to === "delivered" ? resolveCollection(row, cashDefault) : undefined;
+  // Delivery confirmation IS the collection report for a COD job (spec item 1 —
+  // "Record Collected" was a separate, confusing step the rider had to
+  // remember to do afterward). If nothing was recorded yet, confirming
+  // delivery moves codStatus straight to `collected` using the same amount
+  // just resolved above — a rider who already reported a different figure
+  // mid-route (rare) keeps that codStatus untouched here.
+  const codAutoCollect = to === "delivered" && row.paymentMethod === "cod" && row.codStatus === "pending_collection";
   const eta =
     to === "in_transit" || to === "delivering"
       ? new Date(Date.now() + legDurationS(await latestRiderPoint(ctx, row.riderId ?? ""), row.point ? pointFromJson(row.point) : null) * 1000)
@@ -240,11 +247,26 @@ export async function transitionJob(
             }
           : {}),
         ...(cash ? { amountCollected: cash.amountCollected, paymentStatus: cash.paymentStatus } : {}),
+        ...(codAutoCollect ? { codStatus: "collected", codCollectedAt: new Date() } : {}),
         ...(eta ? { routeEta: eta } : {}),
       },
     });
     if (guarded.count === 0) {
       throw httpErrors.createError(409, `This job already moved on from '${from}' — refresh and try again`);
+    }
+    if (codAutoCollect) {
+      await tx.codEvent.create({
+        data: {
+          jobId,
+          from: "pending_collection",
+          to: "collected",
+          actorType: actorType(actor.role),
+          actorId: actor.id,
+          actorName: actor.name,
+          note: "recorded automatically on delivery confirmation",
+          meta: { amountCollectedMajor: cashDefault, currency: row.currency } as object,
+        },
+      });
     }
     const job = await tx.job.findUniqueOrThrow({ where: { id: jobId }, include: jobInclude });
     const event = await tx.jobEvent.create({

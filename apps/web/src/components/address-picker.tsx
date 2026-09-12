@@ -122,10 +122,11 @@ export function AddressPicker({ title, value, onChange, bias, required }: Addres
         setProviderAddress(first.label);
         setDegraded(r.degraded);
       } else {
-        // The backend's own fallback chain always returns something for a
-        // non-blank query — reaching here means something upstream is broken,
-        // not just "address not found". Fall back to a plain pin the user
-        // positions manually, and say so plainly rather than pretending.
+        // A genuinely unrecognized address is an expected, honest outcome
+        // now (spec item 7: the backend would rather say "no match" than
+        // guess a location it can't verify) — not a sign something's
+        // broken. Either way, the user can still finish: drop a plain pin
+        // here and let them drag it into position themselves.
         setPoint(bias ?? ISLAND_FALLBACK_POINT);
         setProviderAddress(null);
         setDegraded(true);

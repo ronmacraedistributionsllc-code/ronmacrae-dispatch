@@ -26,6 +26,12 @@ export class GoogleProvider implements GeoProvider {
     await this.limiter.wait();
     const url = new URL("https://maps.googleapis.com/maps/api/geocode/json");
     url.searchParams.set("address", query);
+    // This app is Jamaica-only — without a country restriction, Google's
+    // geocoder can match a same-named place elsewhere (the "wrong parish"
+    // bug, spec item 7, isn't a bad Jamaican match, it's not Jamaica at
+    // all). `region` biases; `components` actually filters.
+    url.searchParams.set("region", "jm");
+    url.searchParams.set("components", "country:JM");
     if (bias) url.searchParams.set("bounds", `${bias.lat - 0.5},${bias.lng - 0.5}|${bias.lat + 0.5},${bias.lng + 0.5}`);
     url.searchParams.set("key", this.apiKey);
     const data = (await fetchJson(url.toString())) as {

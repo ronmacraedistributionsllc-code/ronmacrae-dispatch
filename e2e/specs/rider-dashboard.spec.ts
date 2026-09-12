@@ -57,18 +57,17 @@ test("rider sees only assigned delivery details and completes the PIN-protected 
   await sheet.getByRole("button", { name: "Accept", exact: true }).click();
   await expect(sheet).not.toBeVisible();
   await expect(card.getByText("accepted")).toBeVisible();
-  // Acceptance never silently advances further — still needs an explicit collect.
-  await expect(card.getByRole("button", { name: "Confirm collection" })).toBeVisible();
+  // Acceptance never silently advances further — still needs an explicit confirmation.
+  await expect(card.getByRole("button", { name: "Confirm pickup" })).toBeVisible();
 
-  // Step 1: Collected (the popup asks the rider to confirm the right package).
-  await card.getByRole("button", { name: "Confirm collection" }).click();
+  // Step 1: Confirm pickup — one rider-facing tap collapses the old two-step
+  // "collected" -> "start delivery" flow into a single "Confirm pickup"
+  // (spec item 1's four-step flow: Accept -> Confirm Pickup -> Confirm
+  // Delivery -> Confirm Cash Drop-Off), so the card goes straight to "in
+  // transit" without a separate "Start delivery" tap in between.
+  await card.getByRole("button", { name: "Confirm pickup" }).click();
   await expect(sheet.getByText(/correct package/i)).toBeVisible();
-  await sheet.getByRole("button", { name: "Yes, mark collected" }).click();
-  await expect(card.getByText("picked up")).toBeVisible();
-
-  // Step 2: In transit.
-  await card.getByRole("button", { name: "Start delivery" }).click();
-  await sheet.getByRole("button", { name: "Start delivery", exact: true }).click();
+  await sheet.getByRole("button", { name: "Yes, confirm pickup" }).click();
   await expect(card.getByText("in transit")).toBeVisible();
 
   // A rider double-tapping the same primary action (e.g. a slow connection,

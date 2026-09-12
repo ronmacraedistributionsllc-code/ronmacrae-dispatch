@@ -3,7 +3,7 @@ import { haversineM, type GeoProvider, type GeocodeResult, type MatrixCell, type
 import { OfflineProvider } from "./offline.js";
 import { OsmProvider } from "./osm.js";
 import { GoogleProvider } from "./google.js";
-import { JamnavProvider } from "./jamnav.js";
+import { JamnavProvider, inJamaica } from "./jamnav.js";
 import { SimulatedProvider } from "./simulated.js";
 
 export interface GeoConfig {
@@ -14,6 +14,26 @@ export interface GeoConfig {
   osrMRouteBase?: string;
   /** per-step geocode budget; a step that exceeds it is skipped for the next fallback (default 5s) */
   geocodeTimeoutMs?: number;
+}
+
+/**
+ * A result outside Jamaica's own bounding box is never a real match, no
+ * matter how confidently the provider returned it — an unrestricted
+ * geocoder can (and does) resolve a same-named place in another country
+ * entirely (spec item 7: "wrong parish" is really "not Jamaica at all").
+ * The country-restriction params on OSM/Google narrow the *query*; this is
+ * the belt-and-braces check on the *result*, since neither restriction is
+ * airtight (Google's `components` filter has known edge cases, and a
+ * provider called without those params — JAMNAV, a future addition — gets
+ * no such guarantee at all). A rejected result here just falls through to
+ * the next step in the chain, same as a real network failure.
+ */
+export function filterResultInJamaica(r: GeocodeResult | null): GeocodeResult | null {
+  return r && inJamaica(r.point) ? r : null;
+}
+
+export function filterResultsInJamaica(results: GeocodeResult[]): GeocodeResult[] {
+  return results.filter((r) => inJamaica(r.point));
 }
 
 async function withTimeout<T>(p: Promise<T>, ms: number, fallback: T): Promise<T> {
@@ -57,7 +77,7 @@ export class CompositeGeoProvider implements GeoProvider {
     this.geocodeTimeoutMs = cfg.geocodeTimeoutMs ?? 5_000;
 
     const bounded = (step: (q: string, b?: GeoPoint) => Promise<GeocodeResult | null>) =>
-      (q: string, b?: GeoPoint) => withTimeout(step(q, b), this.geocodeTimeoutMs, null);
+      (q: string, b?: GeoPoint) => withTimeout(step(q, b), this.geocodeTimeoutMs, null).then(filterResultInJamaica);
     /** A provider without native multi-result support falls back to its single geocode(). */
     const boundedSearch = (provider: Pick<GeoProvider, "geocode" | "searchAddresses">) =>
       (q: string, b?: GeoPoint, limit?: number) =>
@@ -67,7 +87,7 @@ export class CompositeGeoProvider implements GeoProvider {
             : provider.geocode(q, b).then((r) => (r ? [r] : [])),
           this.geocodeTimeoutMs,
           [] as GeocodeResult[],
-        );
+        ).then(filterResultsInJamaica);
 
     const chain: ((q: string, bias?: GeoPoint) => Promise<GeocodeResult | null>)[] = [
       bounded((q, b) => this.primary.geocode(q, b)),

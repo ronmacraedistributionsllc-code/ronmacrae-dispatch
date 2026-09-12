@@ -41,7 +41,11 @@ function variance(job: JobSummaryDto): number | null {
  */
 export function CodReconciliation(): React.JSX.Element {
   const { user } = useAuth();
-  const canDecide = user?.role === "admin" || user?.role === "accountant";
+  // Approve is dispatch's day-to-day job (they're the one actually handed the
+  // cash); dispute stays an accountant/admin-only escalation — see cod.ts's
+  // matching split between `approver` and `disputer`.
+  const canApprove = user?.role === "admin" || user?.role === "dispatcher" || user?.role === "accountant";
+  const canDispute = user?.role === "admin" || user?.role === "accountant";
   const [status, setStatus] = useState<CodStatus | "">("");
   const qc = useQueryClient();
 
@@ -74,14 +78,14 @@ export function CodReconciliation(): React.JSX.Element {
       {list.data && list.data.jobs.length === 0 ? <section className="card text-sm text-zinc-400">No COD jobs match this filter.</section> : null}
       <div className="space-y-2">
         {list.data?.jobs.map((job) => (
-          <CodRow key={job.id} job={job} canDecide={canDecide} onChanged={() => void qc.invalidateQueries({ queryKey: ["cod"] })} />
+          <CodRow key={job.id} job={job} canApprove={canApprove} canDispute={canDispute} onChanged={() => void qc.invalidateQueries({ queryKey: ["cod"] })} />
         ))}
       </div>
     </div>
   );
 }
 
-function CodRow({ job, canDecide, onChanged }: { job: JobSummaryDto; canDecide: boolean; onChanged: () => void }): React.JSX.Element {
+function CodRow({ job, canApprove, canDispute, onChanged }: { job: JobSummaryDto; canApprove: boolean; canDispute: boolean; onChanged: () => void }): React.JSX.Element {
   const [note, setNote] = useState("");
   const [showDispute, setShowDispute] = useState(false);
   const approve = useMutation({
@@ -93,7 +97,8 @@ function CodRow({ job, canDecide, onChanged }: { job: JobSummaryDto; canDecide: 
     onSuccess: () => { setNote(""); setShowDispute(false); onChanged(); },
   });
   const v = variance(job);
-  const canAct = canDecide && (job.codStatus === "collected" || job.codStatus === "handed_in" || job.codStatus === "disputed");
+  const actionable = job.codStatus === "collected" || job.codStatus === "handed_in" || job.codStatus === "disputed";
+  const canAct = (canApprove || canDispute) && actionable;
   const error = approve.error ?? dispute.error;
 
   return (
@@ -133,10 +138,12 @@ function CodRow({ job, canDecide, onChanged }: { job: JobSummaryDto; canDecide: 
             </div>
           ) : (
             <div className="flex flex-wrap gap-2">
-              <button className="btn-accent !px-3 !py-1 text-xs" disabled={approve.isPending} onClick={() => void approve.mutate()}>
-                {approve.isPending ? "Saving…" : "Approve"}
-              </button>
-              <button className="btn !px-3 !py-1 text-xs" onClick={() => setShowDispute(true)}>Dispute</button>
+              {canApprove ? (
+                <button className="btn-accent !px-3 !py-1 text-xs" disabled={approve.isPending} onClick={() => void approve.mutate()}>
+                  {approve.isPending ? "Saving…" : "Approve cash drop-off"}
+                </button>
+              ) : null}
+              {canDispute ? <button className="btn !px-3 !py-1 text-xs" onClick={() => setShowDispute(true)}>Dispute</button> : null}
             </div>
           )}
         </div>

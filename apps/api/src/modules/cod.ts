@@ -65,7 +65,13 @@ async function writeCodEvent(
 
 export async function codRoutes(app: FastifyInstance, ctx: AppCtx): Promise<void> {
   const monitor = ctx.requireStaff("admin", "dispatcher", "accountant", "viewer");
-  const approver = ctx.requireStaff("admin", "accountant");
+  // Dispatch is the one actually handed the cash day-to-day (spec item 8 —
+  // "Dispatch must press Approve Cash Drop-Off"), so they approve alongside
+  // accountant/admin. Disputing a mismatch stays an accountant/admin-only
+  // escalation — a deliberate, separate judgment call, not day-to-day
+  // reconciliation.
+  const approver = ctx.requireStaff("admin", "dispatcher", "accountant");
+  const disputer = ctx.requireStaff("admin", "accountant");
 
   // Dispatcher/owner/accountant board: every COD job, optionally filtered by
   // reconciliation status (e.g. "handed_in" = awaiting approval).
@@ -169,7 +175,7 @@ export async function codRoutes(app: FastifyInstance, ctx: AppCtx): Promise<void
     return { job: jobToDto(updated, viewerFor(req), ctx.config.APP_ORIGIN) };
   });
 
-  app.post<{ Params: { id: string } }>("/api/jobs/:id/cod/dispute", { preHandler: approver }, async (req) => {
+  app.post<{ Params: { id: string } }>("/api/jobs/:id/cod/dispute", { preHandler: disputer }, async (req) => {
     const body = DisputeBody.parse(req.body);
     const actor = actorFor(req);
     const row = await getRow(ctx, req.params.id, actor);

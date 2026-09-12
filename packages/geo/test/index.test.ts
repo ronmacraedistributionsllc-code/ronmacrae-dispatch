@@ -10,6 +10,8 @@ import {
   optimizeStops,
   formatDistance,
   formatDuration,
+  filterResultInJamaica,
+  filterResultsInJamaica,
   type GeoProvider,
   type GeoPoint,
   type GeocodeResult,
@@ -137,6 +139,43 @@ describe("SimulatedProvider", () => {
   });
 });
 
+describe("SimulatedProvider.searchAddresses (spec item 7 — no fabricated suggestions)", () => {
+  const p = new SimulatedProvider();
+
+  it("returns a real known place for a recognized Jamaican town", async () => {
+    const results = await p.searchAddresses("Portmore");
+    expect(results).toHaveLength(1);
+    expect(results[0]!.label).toBe("Portmore, St. Catherine");
+  });
+
+  it("returns NO results for a query it doesn't actually recognize — never a guessed pin dressed up as a suggestion", async () => {
+    const results = await p.searchAddresses("17 Some Made Up Lane, Nowhere");
+    expect(results).toEqual([]);
+  });
+
+  it("never suggests a place outside Jamaica (the old Basseterre/St. Kitts entry is gone for good)", async () => {
+    const results = await p.searchAddresses("Basseterre");
+    expect(results).toEqual([]);
+  });
+});
+
+describe("known-place parishes are each in their own real, correct parish", () => {
+  // Regression guard for spec item 7's actual bug: several real places used
+  // to share one regex/point, so at least one of them always resolved to
+  // someone else's location. Each of these must resolve to ITS OWN point,
+  // not a neighbor's.
+  it.each([
+    ["Half Way Tree", "St. Andrew"],
+    ["Constant Spring", "St. Andrew"],
+    ["Old Harbour", "St. Catherine"],
+    ["Linstead", "St. Catherine"],
+    ["Moore Town", "Portland"],
+  ])("%s resolves to its own real parish (%s)", async (place, parish) => {
+    const r = await new SimulatedProvider().geocode(place);
+    expect(r?.label).toContain(parish);
+  });
+});
+
 describe("createGeoProvider geocode chain", () => {
   it("falls back to the simulated provider when the primary fails", async () => {
     const p = createGeoProvider({ geocodeTimeoutMs: 50 });
@@ -155,5 +194,26 @@ describe("createGeoProvider geocode chain", () => {
     ];
     const r = await p.geocode("somewhere in jamaica");
     expect(r?.provider).toBe("simulated");
+  });
+
+});
+
+describe("filterResultInJamaica / filterResultsInJamaica (spec item 7)", () => {
+  const outOfCountry: GeocodeResult = {
+    point: { lat: 40.7128, lng: -74.006 }, // New York — a confident, real, wrong-country match
+    label: "Not actually in Jamaica",
+    confidence: "high",
+    provider: "fake",
+  };
+  const inCountry: GeocodeResult = { point: { lat: 17.9714, lng: -76.7932 }, label: "Kingston", confidence: "high", provider: "fake" };
+
+  it("rejects a confident result outside Jamaica's bounding box rather than accepting it as-is", () => {
+    expect(filterResultInJamaica(outOfCountry)).toBeNull();
+    expect(filterResultInJamaica(inCountry)).toBe(inCountry);
+    expect(filterResultInJamaica(null)).toBeNull();
+  });
+
+  it("filters a mixed result list down to only the in-Jamaica candidates", () => {
+    expect(filterResultsInJamaica([outOfCountry, inCountry])).toEqual([inCountry]);
   });
 });

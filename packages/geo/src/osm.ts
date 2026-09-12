@@ -36,6 +36,11 @@ export class OsmProvider implements GeoProvider {
     url.searchParams.set("q", query);
     url.searchParams.set("format", "jsonv2");
     url.searchParams.set("limit", String(Math.max(1, Math.min(10, limit))));
+    // This app is Jamaica-only — an unrestricted global Nominatim search can
+    // (and does) match a same-named street/town in another country entirely,
+    // which is exactly the "wrong parish" bug (spec item 7): the result
+    // isn't a bad Jamaican match, it's not in Jamaica at all.
+    url.searchParams.set("countrycodes", "jm");
     if (bias) {
       url.searchParams.set("viewbox", `${bias.lng - 0.2},${bias.lat - 0.2},${bias.lng + 0.2},${bias.lat + 0.2}`);
       url.searchParams.set("bounded", "1");

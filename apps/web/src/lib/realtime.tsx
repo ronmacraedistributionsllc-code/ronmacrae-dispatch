@@ -40,6 +40,14 @@ function isAlertWorthy(msg: { type: string; payload?: unknown }, role: string | 
     return isRider ? source === "assign" : true;
   }
   if (msg.type === "sos") return true;
+  // Spec item 5 — a rider or dispatcher who has no idea a message came in
+  // can't know to go check for one. Skip a rider's own just-sent message
+  // (there's only ever one active rider session); staff is a shared role
+  // across several real people, so any delivery_message counts for them.
+  if (msg.type === "delivery_message") {
+    const senderRole = (msg.payload as { senderRole?: string } | undefined)?.senderRole;
+    return isRider ? senderRole !== "rider" : true;
+  }
   return false;
 }
 

@@ -14,22 +14,31 @@ import { OfflineProvider } from "./offline.js";
  * map key (Google/OSM/JAMNAV) always wins when it resolves.
  */
 
+/**
+ * Real Jamaican towns only, each in its own actual parish — one real place
+ * per entry, never several distinct places bundled under one regex/point
+ * (that was the root of spec item 7's "wrong parish" bug: a match on, say,
+ * "Constant Spring Rd" used to silently resolve to a *different* place's
+ * coordinates because it shared a regex with "downtown Kingston"). A place
+ * genuinely outside Jamaica (the previous list had one — Basseterre, which
+ * is the capital of St. Kitts, not a Jamaican town at all) is never listed
+ * here, on the same principle as searchAddresses()'s own rule below: this
+ * fallback would rather resolve nothing than resolve confidently wrong.
+ */
 const KNOWN_PLACES: { match: RegExp; label: string; point: GeoPoint }[] = [
-  { match: /kingston (central|180)|downtown (kingston|st.(elmo|catherine))|constant spring rd/i, label: "Kingston Central, Kingston", point: { lat: 17.9714, lng: -76.7932 } },
+  { match: /kingston (central|180)|downtown kingston/i, label: "Kingston Central, Kingston", point: { lat: 17.9714, lng: -76.7932 } },
   { match: /portmore/i, label: "Portmore, St. Catherine", point: { lat: 17.9266, lng: -76.803 } },
-  { match: /spanish (town|town )/i, label: "Spanish Town, St. Catherine", point: { lat: 17.9986, lng: -76.8393 } },
-  { match: /constant spring/i, label: "Constant Spring, St. Catherine", point: { lat: 17.995, lng: -76.78 } },
-  { match: /new kingston/i, label: "New Kingston, Kingston", point: { lat: 17.9765, lng: -76.806 } },
-  { match: /half way tree/i, label: "Half Way Tree, St. Catherine", point: { lat: 17.976, lng: -76.813 } },
-  { match: /harbour view/i, label: "Harbour View, Kingston", point: { lat: 17.964, lng: -76.799 } },
-  { match: /trelawny/i, label: "Trelawny, Kingston", point: { lat: 17.984, lng: -76.794 } },
-  { match: /holywood/i, label: "Holywood, Kingston", point: { lat: 17.966, lng: -76.826 } },
-  { match: /moore town/i, label: "Moore Town, St. Catherine", point: { lat: 17.862, lng: -76.786 } },
-  { match: /basseterre/i, label: "Basseterre, St. Elizabeth", point: { lat: 17.912, lng: -77.348 } },
-  { match: /linstead/i, label: "Linstead, St. Elizabeth", point: { lat: 17.916, lng: -77.326 } },
-  { match: /montego (bay)?/i, label: "Montego Bay, St. James", point: { lat: 18.4762, lng: -77.9263 } },
-  { match: /ocho (rios)?/i, label: "Ocho Rios, St. Ann", point: { lat: 18.2186, lng: -77.3136 } },
-  { match: /old harbour/i, label: "Old Harbour, St. Ann", point: { lat: 18.2716, lng: -77.296 } },
+  { match: /spanish town/i, label: "Spanish Town, St. Catherine", point: { lat: 17.9986, lng: -76.8393 } },
+  { match: /constant spring/i, label: "Constant Spring, St. Andrew", point: { lat: 18.0333, lng: -76.7833 } },
+  { match: /new kingston/i, label: "New Kingston, St. Andrew", point: { lat: 17.9905, lng: -76.7909 } },
+  { match: /half way tree/i, label: "Half Way Tree, St. Andrew", point: { lat: 17.9909, lng: -76.7973 } },
+  { match: /harbour view/i, label: "Harbour View, St. Andrew", point: { lat: 17.964, lng: -76.746 } },
+  { match: /falmouth/i, label: "Falmouth, Trelawny", point: { lat: 18.4941, lng: -77.6636 } },
+  { match: /moore town/i, label: "Moore Town, Portland", point: { lat: 18.052, lng: -76.417 } },
+  { match: /linstead/i, label: "Linstead, St. Catherine", point: { lat: 18.1341, lng: -77.0339 } },
+  { match: /montego bay/i, label: "Montego Bay, St. James", point: { lat: 18.4762, lng: -77.9263 } },
+  { match: /ocho rios/i, label: "Ocho Rios, St. Ann", point: { lat: 18.4074, lng: -77.1032 } },
+  { match: /old harbour/i, label: "Old Harbour, St. Catherine", point: { lat: 17.941, lng: -77.1058 } },
 ];
 
 // Jamaica bounding box (deg), used for the deterministic fallback
@@ -87,10 +96,18 @@ export class SimulatedProvider extends OfflineProvider {
     return { point, label, confidence, provider: this.name };
   }
 
-  /** Always exactly one candidate — there's no real search index to rank against offline. */
-  async searchAddresses(query: string, bias?: GeoPoint): Promise<GeocodeResult[]> {
-    const result = await this.geocode(query, bias);
-    return result ? [result] : [];
+  /**
+   * Spec item 7 — a real suggestion, not a guess: only ever returns a
+   * candidate when the query actually matches one of the known real places
+   * above. An address search this fallback doesn't recognize returns no
+   * results at all rather than a hash-jittered pin dressed up as a match —
+   * the frontend's own "no suggestions matched, place a pin manually"
+   * path (see AddressPicker) is the honest way to handle that, not a fake
+   * suggestion the rider/dispatcher might mistake for a real one.
+   */
+  async searchAddresses(query: string): Promise<GeocodeResult[]> {
+    const known = KNOWN_PLACES.find((p) => p.match.test(query.trim()));
+    return known ? [{ point: known.point, label: known.label, confidence: "high", provider: this.name }] : [];
   }
 
   override async reverseGeocode(point: GeoPoint): Promise<string | null> {

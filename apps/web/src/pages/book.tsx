@@ -2,6 +2,18 @@ import React, { useState } from "react";
 import { Link } from "react-router-dom";
 import { ApiError } from "../lib/api.js";
 
+/** Today at 12:00 PM, formatted for an `<input type="datetime-local">` — spec
+ *  item 2's default (today + noon); the customer can still change either the
+ *  date or the time. Local time throughout, never UTC. */
+function defaultRequestedTime(): string {
+  const d = new Date();
+  d.setHours(12, 0, 0, 0);
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}T12:00`;
+}
+
 /** Public "book a delivery" form for the store's customers (no sign-in). */
 export function Book(): React.JSX.Element {
   const [form, setForm] = useState({
@@ -16,7 +28,7 @@ export function Book(): React.JSX.Element {
     quantity: "1",
     orderValue: "",
     payment: "cod" as "cod" | "online",
-    requestedTime: "",
+    requestedTime: defaultRequestedTime(),
     instructions: "",
     consent: true,
   });

@@ -14,6 +14,15 @@ async function login(page: Page, identifier: string, password: string): Promise<
   await page.getByRole("button", { name: "Sign in" }).click();
 }
 
+/** A conversation tab's accessible name is its plain label plus an optional
+ *  trailing " <unread count>" — `exact: true` breaks the moment a tab
+ *  actually has something unread, which several of these legitimately do by
+ *  the time this spec checks them. Anchored so "Customer" never also
+ *  matches the separate "Customer & Rider" monitor tab. */
+function tab(container: import("@playwright/test").Locator, name: string) {
+  return container.getByRole("tab", { name: new RegExp(`^${name}( \\d+)?$`) });
+}
+
 test("customer, rider, and dispatcher exchange messages across the three real conversations, and a customer's address-change request is reviewed before it takes effect", async ({ page, request, browser }) => {
   const auth = await dispatcherAuth(request);
   const customers = ((await (await request.get("/api/customers", { headers: auth })).json()) as { customers: { id: string; phone: string }[] }).customers;
@@ -30,12 +39,13 @@ test("customer, rider, and dispatcher exchange messages across the three real co
   const linkRes = await request.post(`/api/jobs/${jobId}/tracking-link`, { headers: auth });
   const trackToken = ((await linkRes.json()) as { link: { token: string } }).link.token;
 
-  // Customer's page defaults to the Customer↔Dispatch tab.
+  // Customer's page defaults to the Dispatch tab (customer_dispatch, labeled
+  // plainly from the customer's own point of view — spec item 5).
   const customerCtx = await browser.newContext();
   const customerPage = await customerCtx.newPage();
   await customerPage.goto(`/track/${trackToken}`);
   await expect(customerPage.getByRole("heading", { name: jobNumber })).toBeVisible();
-  await expect(customerPage.getByRole("tab", { name: /Customer ↔ Dispatch/ })).toHaveAttribute("aria-selected", "true");
+  await expect(tab(customerPage, "Dispatch")).toHaveAttribute("aria-selected", "true");
   await customerPage.getByPlaceholder("Type a message…").fill("Please hurry, I have a flight to catch");
   await customerPage.getByRole("button", { name: "Send" }).click();
   await expect(customerPage.getByText("Please hurry, I have a flight to catch")).toBeVisible();
@@ -45,31 +55,32 @@ test("customer, rider, and dispatcher exchange messages across the three real co
   await customerPage.getByRole("button", { name: "Send request" }).click();
   await expect(customerPage.getByText(/Waiting for dispatch to confirm/)).toBeVisible();
 
-  // Customer switches to the Customer↔Rider tab and messages the rider directly —
-  // this must never show up in the dispatcher's Customer↔Dispatch view.
-  await customerPage.getByRole("tab", { name: /Customer ↔ Rider/ }).click();
+  // Customer switches to the Rider tab and messages the rider directly —
+  // this must never show up in the dispatcher's Dispatch-conversation view.
+  await tab(customerPage, "Rider").click();
   await customerPage.getByPlaceholder("Type a message…").fill("Please call when you arrive");
   await customerPage.getByRole("button", { name: "Send" }).click();
   await expect(customerPage.getByText("Please call when you arrive")).toBeVisible();
 
-  // Dispatcher sees the customer's Customer↔Dispatch message and the pending
-  // address-change request — but never the Customer↔Rider message.
+  // Dispatcher sees the customer's Dispatch-conversation message and the
+  // pending address-change request — but never the Customer↔Rider message.
   await login(page, "dispatcher@ronmacrae.example", "dispatch1234");
   await expect(page.getByRole("heading", { name: /welcome back/i })).toBeVisible();
   await page.goto("/jobs");
   const row = page.getByRole("row", { name: jobNumber });
   await row.getByRole("button", { name: "Messages" }).click();
   const chatPanel = page.getByTestId(`chat-panel-${jobId}`);
-  await expect(chatPanel.getByRole("tab", { name: /Customer ↔ Dispatch/ })).toHaveAttribute("aria-selected", "true");
+  // Staff sees this conversation labeled "Customer" (they're the other party).
+  await expect(tab(chatPanel, "Customer")).toHaveAttribute("aria-selected", "true");
   await expect(chatPanel.getByText("Please hurry, I have a flight to catch")).toBeVisible();
   await expect(chatPanel.getByText("Chat E2E New Address").first()).toBeVisible();
   await expect(chatPanel.getByText("Please call when you arrive")).not.toBeVisible();
 
   // Staff can monitor Customer↔Rider (read-only) but it's clearly marked as such.
-  await chatPanel.getByRole("tab", { name: /Customer ↔ Rider/ }).click();
+  await chatPanel.getByRole("tab", { name: "Customer & Rider" }).click();
   await expect(chatPanel.getByText("Please call when you arrive")).toBeVisible();
   await expect(chatPanel.getByText("Monitor-only")).toBeVisible();
-  await chatPanel.getByRole("tab", { name: /Customer ↔ Dispatch/ }).click();
+  await tab(chatPanel, "Customer").click();
 
   // Confirming the address change actually updates the job — not silently, only via this explicit action.
   await chatPanel.getByRole("button", { name: "Confirm change" }).click();
@@ -83,8 +94,9 @@ test("customer, rider, and dispatcher exchange messages across the three real co
   await chatPanel.getByRole("button", { name: "Send" }).click();
   await expect(chatPanel.getByText("On it — sending our fastest rider!")).toBeVisible();
 
-  // Rider, once assigned, sees Customer↔Rider (default tab) and Rider↔Dispatch —
-  // never Customer↔Dispatch at all.
+  // Rider, once assigned, sees Customer (customer_rider, default tab) and
+  // Dispatch (rider_dispatch) — exactly two tabs, never a third one for the
+  // customer_dispatch conversation they're not a party to at all.
   // (Sign out first — the dispatcher session is still live, and /login redirects
   // an already-authenticated user instead of showing the form.)
   await page.getByRole("button", { name: "Sign out" }).click();
@@ -92,23 +104,26 @@ test("customer, rider, and dispatcher exchange messages across the three real co
   await login(page, "+8765550001", "rider1234");
   await expect(page.getByRole("heading", { name: "My deliveries" })).toBeVisible();
   const card = page.locator("section.card").filter({ has: page.getByRole("heading", { name: jobNumber }) });
-  await card.getByRole("button", { name: "Message customer" }).click();
-  await expect(card.getByRole("tab", { name: /Customer ↔ Rider/ })).toHaveAttribute("aria-selected", "true");
+  // Labeled plainly as "Messages" (not "Message customer") since it opens
+  // both the Customer and Dispatch conversations, not just the customer one.
+  await card.getByRole("button", { name: "💬 Messages" }).click();
+  await expect(tab(card, "Customer")).toHaveAttribute("aria-selected", "true");
   await expect(card.getByText("Please call when you arrive")).toBeVisible();
-  await expect(card.getByRole("tab", { name: /Customer ↔ Dispatch/ })).toHaveCount(0);
+  await expect(card.getByRole("tab")).toHaveCount(2);
   await card.getByRole("button", { name: "Heading to you" }).click();
   await expect(card.locator("p.whitespace-pre-wrap", { hasText: "Heading to you" })).toBeVisible();
 
-  // The address-change confirmation reached the rider too, on Rider↔Dispatch —
-  // riders need it for navigation, even though they weren't part of the review.
-  await card.getByRole("tab", { name: /Rider ↔ Dispatch/ }).click();
+  // The address-change confirmation reached the rider too, on the Dispatch
+  // tab (rider_dispatch) — riders need it for navigation, even though they
+  // weren't part of the review.
+  await tab(card, "Dispatch").click();
   await expect(card.getByText(/Dispatch confirmed the new delivery address/)).toBeVisible();
 
-  // Customer's Customer↔Rider tab (still open, polling) eventually shows the
-  // rider's "Heading to you" reply.
-  await customerPage.getByRole("tab", { name: /Customer ↔ Rider/ }).click();
+  // Customer's Rider tab (still open, polling) eventually shows the rider's
+  // "Heading to you" reply.
+  await tab(customerPage, "Rider").click();
   await expect(customerPage.getByText("Heading to you")).toBeVisible({ timeout: 20_000 });
-  // ...but the dispatcher's earlier Customer↔Dispatch reply never leaks in here.
+  // ...but the dispatcher's earlier Dispatch-conversation reply never leaks in here.
   await expect(customerPage.getByText("On it — sending our fastest rider!")).not.toBeVisible();
 
   await customerCtx.close();

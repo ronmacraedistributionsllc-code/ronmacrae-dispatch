@@ -15,6 +15,12 @@ export interface ConversationTabsProps {
    *  read-only, even though the caller can write into its other tabs. */
   renderChat: (conversation: ConversationSummaryDto) => React.ReactNode;
   pollMs?: number;
+  /** Overrides the generic "X ↔ Y" tab label with the plain name of the
+   *  OTHER party, from this particular viewer's own point of view (a rider
+   *  sees "Customer" and "Dispatch", not "Customer ↔ Rider" — spec item 5:
+   *  who you're talking to should be obvious at a glance). Falls back to
+   *  CONVERSATION_KIND_LABELS for any kind not covered. */
+  labelFor?: Partial<Record<ConversationKind, string>>;
 }
 
 /**
@@ -24,7 +30,7 @@ export interface ConversationTabsProps {
  * Dispatch. Shows an unread-count badge per tab from the conversations
  * summary endpoint, independent of which tab is currently open.
  */
-export function ConversationTabs({ storageKey, fetchSummary, renderChat, pollMs = 20_000 }: ConversationTabsProps): React.JSX.Element {
+export function ConversationTabs({ storageKey, fetchSummary, renderChat, pollMs = 20_000, labelFor }: ConversationTabsProps): React.JSX.Element {
   const summary = useQuery({
     queryKey: ["conversations", storageKey],
     queryFn: fetchSummary,
@@ -52,7 +58,7 @@ export function ConversationTabs({ storageKey, fetchSummary, renderChat, pollMs 
             }`}
             onClick={() => setSelected(c.kind)}
           >
-            {CONVERSATION_KIND_LABELS[c.kind]}
+            {labelFor?.[c.kind] ?? CONVERSATION_KIND_LABELS[c.kind]}
             {!c.canWrite ? <span className="ml-1 opacity-70">(monitor)</span> : null}
             {c.unreadCount > 0 ? (
               <span className="ml-1.5 inline-flex min-w-4 items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-bold text-white">

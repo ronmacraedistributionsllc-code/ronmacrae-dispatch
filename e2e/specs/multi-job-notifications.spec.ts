@@ -79,7 +79,7 @@ test("a rider carrying a job still gets new offers live, while an unavailable ri
   // busyRider — despite already carrying a job — gets the new offer live: card,
   // and the unread badge increments (no reload, no waiting for the poll).
   await expect(busyPage.getByText("Multi-job second parcel — offer test")).toBeVisible({ timeout: 5_000 });
-  await expect(busyPage.getByRole("heading", { name: "Job offers" })).toBeVisible();
+  await expect(busyPage.getByRole("heading", { name: "Available jobs" })).toBeVisible();
   const busyBadge = busyPage.getByRole("link", { name: "Dashboard" }).getByText("1", { exact: true });
   await expect(busyBadge).toBeVisible();
 
@@ -87,11 +87,11 @@ test("a rider carrying a job still gets new offers live, while an unavailable ri
   // (wrongly) received it, then assert it never did.
   await unavailablePage.waitForTimeout(2_000);
   await expect(unavailablePage.getByText("Multi-job second parcel — offer test")).not.toBeVisible();
-  // The "Job offers" section itself is always shown (with a count), per the
-  // dashboard's three-always-visible-sections design — so the real signal
-  // that this rider never received it is the empty-state copy, not the
-  // section heading disappearing.
-  await expect(unavailablePage.getByText("No offers waiting right now")).toBeVisible();
+  // The "Available jobs" section itself is always shown (with a count), per
+  // the dashboard's three-always-visible-sections design — so the real
+  // signal that this rider never received it is the empty-state copy, not
+  // the section heading disappearing.
+  await expect(unavailablePage.getByText("No jobs available right now")).toBeVisible();
 
   // busyRider accepts the second offer too, going to exactly capacity (2/2), and
   // the dashboard reflects it without a reload. Scoped to the offer card itself —

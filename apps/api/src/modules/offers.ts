@@ -207,9 +207,16 @@ export async function offerRoutes(app: FastifyInstance, ctx: AppCtx): Promise<vo
       // Conditional claim: only succeeds if the job is still unassigned `new`. This is the
       // single point of truth that prevents two riders (or a rider and a dispatcher manual
       // assignment) from both winning the same job.
+      // Straight to `accepted` (not the intermediate `assigned`) — a rider who
+      // just accepted an offer has already said yes; making them tap a second
+      // "Accept job" button on the very next screen was the confusing
+      // double-accept this flow used to force. A job a dispatcher assigns
+      // *without* an offer still lands on `assigned` (see assignJob) and does
+      // need that one rider confirmation — this is the only path that gets to
+      // skip it, because the offer itself already was that confirmation.
       const claimed = await tx.job.updateMany({
         where: { id: offer.jobId, status: "new", riderId: null },
-        data: { riderId, status: "assigned", stage: "heading_to_pickup" },
+        data: { riderId, status: "accepted", stage: "heading_to_pickup" },
       });
       if (!claimed.count) throw httpErrors.createError(409, "Another rider has already claimed this job");
       // Capacity was checked when this offer (and any others still open for this
@@ -232,7 +239,7 @@ export async function offerRoutes(app: FastifyInstance, ctx: AppCtx): Promise<vo
         data: {
           jobId: offer.jobId,
           from: "new",
-          to: "assigned",
+          to: "accepted",
           actorType: actorType("rider"),
           actorId: actor.id,
           actorName: actor.name,

@@ -42,28 +42,45 @@ interface FormState {
   deliveryFee: string;
   payment: "cod" | "online";
   requestedDate: string;
+  requestedTime: string;
   urgent: boolean;
   channel: JobSource;
   instructions: string;
 }
 
-const EMPTY_FORM: FormState = {
-  firstName: "",
-  lastName: "",
-  customerPhone: "",
-  landmark: "",
-  product: "",
-  colour: "",
-  size: "",
-  quantity: "1",
-  orderValue: "",
-  deliveryFee: "",
-  payment: "cod",
-  requestedDate: "",
-  urgent: false,
-  channel: "courier",
-  instructions: "",
-};
+/** Today, in the browser's own local date — never UTC, or a Jamaica evening
+ *  booking could default to tomorrow. */
+function todayLocalDate(): string {
+  const d = new Date();
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+/** Spec item 2 — today + 12:00 PM by default; the dispatcher can change
+ *  either field, but doing nothing books for noon today. A function (not a
+ *  static constant) so "today" is recomputed every time the form resets. */
+function makeEmptyForm(): FormState {
+  return {
+    firstName: "",
+    lastName: "",
+    customerPhone: "",
+    landmark: "",
+    product: "",
+    colour: "",
+    size: "",
+    quantity: "1",
+    orderValue: "",
+    deliveryFee: "",
+    payment: "cod",
+    requestedDate: todayLocalDate(),
+    requestedTime: "12:00",
+    urgent: false,
+    channel: "courier",
+    instructions: "",
+  };
+}
 
 export interface BookingResult {
   job: JobDto;
@@ -79,7 +96,7 @@ export function NewJob(): React.JSX.Element {
   const [pickup, setPickup] = useState<ConfirmedLocation | null>(null);
   const [pickupLoadError, setPickupLoadError] = useState(false);
 
-  const [form, setForm] = useState<FormState>(EMPTY_FORM);
+  const [form, setForm] = useState<FormState>(makeEmptyForm);
   const [selected, setSelected] = useState<CustomerDto | null>(null);
   const [matches, setMatches] = useState<CustomerDto[]>([]);
   const [feeAutoFilled, setFeeAutoFilled] = useState(true);
@@ -214,7 +231,11 @@ export function NewJob(): React.JSX.Element {
           fee: money(form.deliveryFee),
           paymentMethod: form.payment,
           // Date-only in the UI; store at local noon so no timezone rollover flips the date.
-          scheduledAt: form.requestedDate ? new Date(`${form.requestedDate}T12:00:00`).toISOString() : undefined,
+          // Date-only + a separate time-of-day in the UI (spec item 2: today +
+          // noon by default, either field independently editable) — combined
+          // here into one instant. Local-noon-if-no-time-given so a blank time
+          // never rolls the date over across a timezone boundary.
+          scheduledAt: form.requestedDate ? new Date(`${form.requestedDate}T${form.requestedTime || "12:00"}:00`).toISOString() : undefined,
           instructions: form.instructions.trim() || undefined,
         }),
       });
@@ -227,7 +248,7 @@ export function NewJob(): React.JSX.Element {
         setLinkError(err instanceof ApiError ? err.message : "tracking request failed");
       }
       setResult({ job: job.job, link });
-      setForm(EMPTY_FORM);
+      setForm(makeEmptyForm());
       setSelected(null);
       setMatches([]);
       setDestination(null);
@@ -437,7 +458,13 @@ export function NewJob(): React.JSX.Element {
                 </label>
                 <input id="nj-date" className="input" type="date" value={form.requestedDate} onChange={(e) => set({ requestedDate: e.target.value })} />
               </div>
-              <div className="flex items-end pb-2 md:col-span-2">
+              <div>
+                <label className="label" htmlFor="nj-time">
+                  Requested time <span className="text-zinc-500">(defaults to 12:00 PM)</span>
+                </label>
+                <input id="nj-time" className="input" type="time" value={form.requestedTime} onChange={(e) => set({ requestedTime: e.target.value })} />
+              </div>
+              <div className="flex items-end pb-2">
                 <label className="flex items-center gap-2 text-sm text-zinc-200">
                   <input type="checkbox" checked={form.urgent} onChange={(e) => set({ urgent: e.target.checked })} />
                   <span>
@@ -533,7 +560,7 @@ export function NewJob(): React.JSX.Element {
               type="button"
               disabled={busy}
               onClick={() => {
-                setForm((f) => ({ ...EMPTY_FORM, channel: f.channel }));
+                setForm((f) => ({ ...makeEmptyForm(), channel: f.channel }));
                 setDestination(null);
                 setFeeAutoFilled(true);
               }}

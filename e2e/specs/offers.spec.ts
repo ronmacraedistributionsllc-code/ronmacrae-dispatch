@@ -62,11 +62,11 @@ test("dispatcher broadcasts an offer and the rider accepts it from their dashboa
   const riderContext = await browser.newContext();
   const riderPage = await riderContext.newPage();
   await login(riderPage, uniquePhone, riderPassword);
-  await expect(riderPage.getByRole("heading", { name: "Job offers" })).toBeVisible();
+  await expect(riderPage.getByRole("heading", { name: "Available jobs" })).toBeVisible();
   const offerCard = riderPage.locator("section.card").filter({ hasText: "Offer flow test parcel" });
   await expect(offerCard).toBeVisible();
   await offerCard.getByRole("button", { name: "Accept" }).click();
-  // The "Job offers" section itself stays visible (always-shown, with a
+  // The "Available jobs" section itself stays visible (always-shown, with a
   // count) and the accepted job's card keeps the same item-summary text —
   // so the real signal that the *offer* is gone (not just any card with
   // this text) is that there's no more "Decline" button anywhere: only an
@@ -75,10 +75,13 @@ test("dispatcher broadcasts an offer and the rider accepts it from their dashboa
   await expect(riderPage.getByRole("heading", { name: label })).toBeVisible();
   await riderContext.close();
 
-  // --- back on the dispatcher Jobs screen: the job is now assigned to the new rider ---
+  // --- back on the dispatcher Jobs screen: the job is now the new rider's, and
+  //     already `accepted` — accepting the offer IS the rider's one accept
+  //     step (spec item 1), so there's no separate `assigned`-awaiting-accept
+  //     state to pass through for this path (unlike a direct dispatcher assign).
   await page.reload();
   const assignedRow = page.getByRole("row", { name: label });
-  await expect(assignedRow.getByText("assigned", { exact: true })).toBeVisible();
+  await expect(assignedRow.getByText("accepted", { exact: true })).toBeVisible();
   await expect(assignedRow.getByText("Offer Test Rider", { exact: true })).toBeVisible();
 });
 

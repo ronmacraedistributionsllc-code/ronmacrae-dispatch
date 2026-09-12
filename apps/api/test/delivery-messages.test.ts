@@ -312,6 +312,53 @@ describe("conversation closure", () => {
     expect(body.open).toBe(false);
   });
 
+  it("customer_rider stays open for 24 hours after delivery, unlike every other conversation (spec item 5)", async () => {
+    const customer = await makeCustomer(harness);
+    const { rider, token: riderTok } = await makeRider(harness);
+    const recentlyDelivered = await harness.prisma.job.create({
+      data: { businessId: harness.business.id, customerId: customer.id, riderId: rider.id, status: "delivered", completedAt: new Date(Date.now() - 60_000) },
+    });
+    const link = await harness.prisma.trackingLink.create({ data: { jobId: recentlyDelivered.id, token: `tok-${uniq()}`, expiresAt: new Date(Date.now() + 3600_000) } });
+
+    // Still well inside the 24h window: both sides can still send.
+    const riderSend = await harness.app.inject({
+      method: "POST",
+      url: `/api/bearer/jobs/${recentlyDelivered.id}/messages/customer_rider`,
+      headers: { authorization: `Bearer ${riderTok}` },
+      payload: { body: "left it at the gate" },
+    });
+    expect(riderSend.statusCode).toBe(200);
+    const customerSend = await harness.app.inject({ method: "POST", url: `/api/tracking/${link.token}/messages/customer_rider`, payload: { body: "thanks!" } });
+    expect(customerSend.statusCode).toBe(200);
+
+    // But every OTHER conversation on the same job is already closed —
+    // the grace period is customer_rider-only.
+    const dispatchSend = await harness.app.inject({
+      method: "POST",
+      url: `/api/bearer/jobs/${recentlyDelivered.id}/messages/rider_dispatch`,
+      headers: { authorization: `Bearer ${riderTok}` },
+      payload: { body: "hello" },
+    });
+    expect(dispatchSend.statusCode).toBe(409);
+
+    // Now the same delivery, but completed more than 24h ago: closed for
+    // both sides, history intact.
+    const longDelivered = await harness.prisma.job.create({
+      data: { businessId: harness.business.id, customerId: customer.id, riderId: rider.id, status: "delivered", completedAt: new Date(Date.now() - 25 * 60 * 60_000) },
+    });
+    const oldLink = await harness.prisma.trackingLink.create({ data: { jobId: longDelivered.id, token: `tok-${uniq()}`, expiresAt: new Date(Date.now() + 3600_000) } });
+    const staleRiderSend = await harness.app.inject({
+      method: "POST",
+      url: `/api/bearer/jobs/${longDelivered.id}/messages/customer_rider`,
+      headers: { authorization: `Bearer ${riderTok}` },
+      payload: { body: "too late" },
+    });
+    expect(staleRiderSend.statusCode).toBe(409);
+    const staleCustomerRead = await harness.app.inject({ method: "GET", url: `/api/tracking/${oldLink.token}/messages/customer_rider` });
+    expect(staleCustomerRead.statusCode).toBe(200);
+    expect((staleCustomerRead.json() as { open: boolean }).open).toBe(false);
+  });
+
   it("closes to the customer once the tracking link has expired (read-only history remains)", async () => {
     const customer = await makeCustomer(harness);
     const job = await harness.prisma.job.create({ data: { businessId: harness.business.id, customerId: customer.id, status: "assigned" } });

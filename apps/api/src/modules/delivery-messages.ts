@@ -10,11 +10,24 @@ import type {
   ConversationsDto,
   DeliveryMessageDto,
   DeliveryMessagesDto,
+  JobStatus,
   MessageSenderRole,
 } from "@ronmacrae/contracts";
 import { CONVERSATION_KINDS } from "@ronmacrae/contracts";
 
 const MAX_MESSAGE_LENGTH = 1000;
+/** Spec item 5 — a rider may contact the customer only while assigned to the
+ *  delivery and for up to 24 hours after it completes; after that the
+ *  conversation closes for good (history stays visible, nothing new can be
+ *  sent). Every OTHER conversation kind still closes the instant the job
+ *  goes terminal, same as before — this grace period is customer_rider-only. */
+const RIDER_CUSTOMER_CONTACT_GRACE_MS = 24 * 60 * 60 * 1000;
+
+function conversationOpenFor(kind: ConversationKind, status: JobStatus, completedAt: Date | null): boolean {
+  if (!TERMINAL_JOB_STATUSES.includes(status)) return true;
+  if (kind !== "customer_rider" || !completedAt) return false;
+  return Date.now() - completedAt.getTime() < RIDER_CUSTOMER_CONTACT_GRACE_MS;
+}
 /** Abuse protection: a burst cap per job+conversation+sending role, not a
  *  hard global limit — a busy exchange between two real people over a live
  *  delivery is still well under this in normal use. */
@@ -144,7 +157,7 @@ async function assertNotRateLimited(ctx: AppCtx, jobId: string, kind: Conversati
 async function loadJobForMessaging(ctx: AppCtx, jobId: string) {
   // A trashed job (Stage 26) closes messaging entirely, for every side —
   // restoring it reopens exactly what was there before, untouched.
-  const job = await ctx.prisma.job.findUnique({ where: { id: jobId, deletedAt: null }, select: { id: true, status: true, riderId: true, addressText: true, businessId: true } });
+  const job = await ctx.prisma.job.findUnique({ where: { id: jobId, deletedAt: null }, select: { id: true, status: true, riderId: true, addressText: true, businessId: true, completedAt: true } });
   if (!job) throw httpErrors.createError(404, "Job not found");
   return job;
 }
@@ -288,38 +301,46 @@ export async function deliveryMessageRoutes(app: FastifyInstance, ctx: AppCtx): 
   // ---------------------------------------------------------------------
   // Customer side — gated entirely by the tracking token, never a login.
   // ---------------------------------------------------------------------
-  async function resolveCustomerLink(token: string): Promise<{ jobId: string; businessId: string; riderId: string | null; open: boolean }> {
+  async function resolveCustomerLink(
+    token: string,
+  ): Promise<{ jobId: string; businessId: string; riderId: string | null; status: JobStatus; completedAt: Date | null; linkOpen: boolean; open: boolean }> {
     const link = await ctx.prisma.trackingLink.findUnique({ where: { token } });
     if (!link) throw httpErrors.createError(410, "This tracking link is no longer valid");
     if (link.revoked) throw httpErrors.createError(410, "This tracking link has been revoked");
     // Same "no longer valid" response for a trashed job as any other
     // unreachable link — see tracking.ts's matching comment.
-    const job = await ctx.prisma.job.findUnique({ where: { id: link.jobId, deletedAt: null }, select: { status: true, businessId: true, riderId: true } });
+    const job = await ctx.prisma.job.findUnique({ where: { id: link.jobId, deletedAt: null }, select: { status: true, businessId: true, riderId: true, completedAt: true } });
     if (!job) throw httpErrors.createError(410, "This tracking link is no longer valid");
     const linkOpen = link.expiresAt > new Date();
+    // `open` here is the job/link-level gate (address-change requests, and
+    // the legacy read-only archive, don't have a per-kind concept, so they
+    // use this directly) — the two messages routes below use `linkOpen`
+    // combined with conversationOpenFor's per-kind grace instead, since
+    // `open` itself closes the instant the job goes terminal with no grace.
     const jobOpen = !TERMINAL_JOB_STATUSES.includes(job.status);
-    return { jobId: link.jobId, businessId: job.businessId, riderId: job.riderId, open: linkOpen && jobOpen };
+    return { jobId: link.jobId, businessId: job.businessId, riderId: job.riderId, status: job.status, completedAt: job.completedAt, linkOpen, open: linkOpen && jobOpen };
   }
 
   app.get<{ Params: { token: string; kind: string } }>("/api/tracking/:token/messages/:kind", async (req, reply) => {
     reply.header("cache-control", "no-store");
-    const { jobId, open } = await resolveCustomerLink(req.params.token);
+    const { jobId, status, completedAt, linkOpen, open } = await resolveCustomerLink(req.params.token);
     const viewer: ViewerIdentity = { role: "customer", id: null };
     if (req.params.kind === "legacy") return listLegacyMessages(ctx, jobId, viewer, open);
     const kind = assertKind(req.params.kind);
     assertReadable(viewer, kind);
-    return listMessages(ctx, jobId, kind, viewer, open, true);
+    return listMessages(ctx, jobId, kind, viewer, linkOpen && conversationOpenFor(kind, status, completedAt), true);
   });
 
   app.post<{ Params: { token: string; kind: string } }>("/api/tracking/:token/messages/:kind", async (req) => {
-    const { jobId, businessId, riderId, open } = await resolveCustomerLink(req.params.token);
-    if (!open) throw httpErrors.createError(409, "This delivery's conversation is closed");
-    const viewer: ViewerIdentity = { role: "customer", id: null };
+    const { jobId, businessId, riderId, status, completedAt, linkOpen } = await resolveCustomerLink(req.params.token);
     const kind = assertKind(req.params.kind);
+    const conversationOpen = linkOpen && conversationOpenFor(kind, status, completedAt);
+    if (!conversationOpen) throw httpErrors.createError(409, "This delivery's conversation is closed");
+    const viewer: ViewerIdentity = { role: "customer", id: null };
     assertWritable(viewer, kind);
     const body = SendBody.parse(req.body);
     await sendMessage(ctx, jobId, businessId, kind, "customer", null, body.body, riderId, body.clientToken);
-    return listMessages(ctx, jobId, kind, viewer, open, true);
+    return listMessages(ctx, jobId, kind, viewer, conversationOpen, true);
   });
 
   app.get<{ Params: { token: string } }>("/api/tracking/:token/conversations", async (req, reply) => {
@@ -353,7 +374,7 @@ export async function deliveryMessageRoutes(app: FastifyInstance, ctx: AppCtx): 
     // A dispatcher/admin monitoring customer_rider never registers a
     // read receipt on a conversation they aren't a party to.
     const marksRead = PARTY_KINDS.dispatcher.includes(kind);
-    return listMessages(ctx, req.params.id, kind, viewer, !TERMINAL_JOB_STATUSES.includes(job.status), marksRead);
+    return listMessages(ctx, req.params.id, kind, viewer, conversationOpenFor(kind, job.status, job.completedAt), marksRead);
   });
 
   app.post<{ Params: { id: string; kind: string } }>("/api/jobs/:id/messages/:kind", { preHandler: staffWrite }, async (req) => {
@@ -449,15 +470,15 @@ export async function deliveryMessageRoutes(app: FastifyInstance, ctx: AppCtx): 
     if (req.params.kind === "legacy") return listLegacyMessages(ctx, req.params.id, viewer, !TERMINAL_JOB_STATUSES.includes(job.status));
     const kind = assertKind(req.params.kind);
     assertReadable(viewer, kind);
-    return listMessages(ctx, req.params.id, kind, viewer, !TERMINAL_JOB_STATUSES.includes(job.status), true);
+    return listMessages(ctx, req.params.id, kind, viewer, conversationOpenFor(kind, job.status, job.completedAt), true);
   });
 
   app.post<{ Params: { id: string; kind: string } }>("/api/bearer/jobs/:id/messages/:kind", { preHandler: ctx.requireRider }, async (req) => {
     const job = await loadJobForMessaging(ctx, req.params.id);
     assertOwnJob(req, job);
-    if (TERMINAL_JOB_STATUSES.includes(job.status)) throw httpErrors.createError(409, "This delivery's conversation is closed");
     const viewer: ViewerIdentity = { role: "rider", id: req.user!.riderId! };
     const kind = assertKind(req.params.kind);
+    if (!conversationOpenFor(kind, job.status, job.completedAt)) throw httpErrors.createError(409, "This delivery's conversation is closed");
     assertWritable(viewer, kind);
     const body = SendBody.parse(req.body);
     await sendMessage(ctx, req.params.id, job.businessId, kind, "rider", req.user!.riderId!, body.body, job.riderId, body.clientToken);

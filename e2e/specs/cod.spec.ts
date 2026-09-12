@@ -14,7 +14,7 @@ async function login(page: Page, identifier: string, password: string): Promise<
   await page.getByRole("button", { name: "Sign in" }).click();
 }
 
-test("rider records a COD collection and handover, then an accountant approves it from the reconciliation board", async ({ page, request }) => {
+test("rider records a COD collection and handover, then dispatch approves it from the reconciliation board", async ({ page, request }) => {
   const auth = await dispatcherAuth(request);
   const customers = ((await (await request.get("/api/customers", { headers: auth })).json()) as { customers: { id: string; phone: string }[] }).customers;
   const customer = customers.find((c) => c.phone === "+8765551234")!;
@@ -47,7 +47,9 @@ test("rider records a COD collection and handover, then an accountant approves i
   const handInRes = await request.post(`/api/jobs/${jobId}/cod/hand-in`, { headers: riderToken, data: { amountHandedIn: 1950 } });
   expect(handInRes.ok()).toBe(true);
 
-  // Dispatcher can see it on the board (monitor-only — no approve/dispute buttons).
+  // Dispatch sees it on the board and can approve the drop-off themselves
+  // (spec item 8 — "Dispatch must press Approve Cash Drop-Off"), but not
+  // dispute it — that stays an accountant/admin-only escalation.
   await login(page, "dispatcher@ronmacrae.example", "dispatch1234");
   await expect(page.getByRole("heading", { name: /welcome back/i })).toBeVisible();
   await page.goto("/cod");
@@ -58,22 +60,11 @@ test("rider records a COD collection and handover, then an accountant approves i
   await expect(row.locator("span").filter({ hasText: "Handed in" })).toBeVisible();
   // 50 short (1950 handed in vs 2000 collected)
   await expect(row.getByText(/short/)).toBeVisible();
-  await expect(row.getByRole("button", { name: "Approve" })).not.toBeVisible();
-
-  // Switch sessions: sign out the dispatcher before logging in as the accountant.
-  await page.getByRole("button", { name: "Sign out" }).click();
-  await expect(page).toHaveURL(/\/login/);
-
-  // Accountant sees the same row and can approve it.
-  await login(page, "accountant@ronmacrae.example", "account1234");
-  await expect(page.getByRole("heading", { name: /welcome back/i })).toBeVisible();
-  await page.goto("/cod");
-  await page.getByRole("button", { name: "Awaiting approval" }).click();
-  const accountantRow = page.locator("section.card").filter({ hasText: label });
-  await expect(accountantRow.getByRole("button", { name: "Approve" })).toBeVisible();
-  await accountantRow.getByRole("button", { name: "Approve" }).click();
+  await expect(row.getByRole("button", { name: "Approve cash drop-off" })).toBeVisible();
+  await expect(row.getByRole("button", { name: "Dispute" })).toHaveCount(0);
+  await row.getByRole("button", { name: "Approve cash drop-off" }).click();
   // Approving moves it out of the "Awaiting approval" (handed_in) filter entirely.
-  await expect(accountantRow).not.toBeVisible();
+  await expect(row).not.toBeVisible();
   await page.getByRole("button", { name: "Approved", exact: true }).click();
   const approvedRow = page.locator("section.card").filter({ hasText: label });
   await expect(approvedRow.locator("span").filter({ hasText: "Approved" })).toBeVisible();

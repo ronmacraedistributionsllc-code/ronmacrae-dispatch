@@ -459,6 +459,9 @@ function DispatcherJobChat({ jobId, canWrite }: { jobId: string; canWrite: boole
       <ConversationTabs
         storageKey={`staff-${jobId}`}
         fetchSummary={() => apiFetch<ConversationsDto>(API.messages.conversations(jobId))}
+        // Staff is a party to two of these (Customer, Rider) and only
+        // monitors the third — named plainly either way (spec item 5).
+        labelFor={{ customer_dispatch: "Customer", customer_rider: "Customer & Rider", rider_dispatch: "Rider" }}
         renderChat={({ kind, canWrite: conversationWritable }) => (
           <DeliveryChat
             queryKey={`staff-${jobId}-${kind}`}

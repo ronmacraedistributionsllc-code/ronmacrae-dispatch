@@ -91,7 +91,10 @@ describe("offer broadcast + accept — concurrency", () => {
     const loserRiderId = winnerRiderId === riderA.id ? riderB.id : riderA.id;
 
     const finalJob = await harness.prisma.job.findUniqueOrThrow({ where: { id: job.id } });
-    expect(finalJob.status).toBe("assigned");
+    // Accepting an offer is the rider's one and only accept step (spec item
+    // 1) — it lands straight on `accepted`, not the intermediate `assigned`
+    // a dispatcher's direct assignment still uses.
+    expect(finalJob.status).toBe("accepted");
     expect(finalJob.riderId).toBe(winnerRiderId);
 
     const winnerOffer = await harness.prisma.jobOffer.findUniqueOrThrow({ where: { id: offerFor(winnerRiderId).id } });
@@ -140,7 +143,11 @@ describe("offer broadcast + accept — concurrency", () => {
     expect(statuses).toEqual([200, 409]);
 
     const finalJob = await harness.prisma.job.findUniqueOrThrow({ where: { id: job.id } });
-    expect(finalJob.status).toBe("assigned");
+    // Whichever path won determines the status: the rider's own offer-accept
+    // lands on `accepted` directly (their one accept step already happened),
+    // a dispatcher's direct assignment still lands on `assigned` pending the
+    // rider's separate accept.
+    expect(finalJob.status).toBe(finalJob.riderId === riderA.id ? "accepted" : "assigned");
     expect([riderA.id, riderB.id]).toContain(finalJob.riderId);
 
     const assignments = await harness.prisma.riderAssignment.findMany({ where: { jobId: job.id } });

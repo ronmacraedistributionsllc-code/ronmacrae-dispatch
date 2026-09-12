@@ -153,6 +153,8 @@ export function Track(): React.JSX.Element {
             <ConversationTabs
               storageKey={`customer-${token}`}
               fetchSummary={() => apiFetch<ConversationsDto>(API.tracking.conversations(token))}
+              // A customer's own two conversations, named plainly (spec item 5).
+              labelFor={{ customer_dispatch: "Dispatch", customer_rider: "Rider" }}
               renderChat={({ kind }) => (
                 <DeliveryChat
                   queryKey={`customer-${token}-${kind}`}
