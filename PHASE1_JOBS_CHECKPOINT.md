@@ -2378,3 +2378,43 @@ merchant selector was added there). Real email delivery, the
 production-grade geocoding all need credentials only the account owner
 can supply. Full narrative is in `WORK_IN_PROGRESS.md`'s own Stage 30
 section.
+
+## Stage 31 — real-deployment hardening + rider/merchant self-service
+
+Ten commits (`43d76c0`..`b46b393`) responding directly to actually
+deploying Stage 30 to Render and using it, not a pre-planned stage.
+Full narrative — every bug found, why each one was invisible to the
+Stage 30 test suite, and what was built beyond the original scope
+(rider self-signup with email verification, the full merchant portal)
+— is in `WORK_IN_PROGRESS.md`'s own Stage 31 section.
+
+## Commands run and results (Stage 31)
+
+| # | Command | Result |
+| --- | --- | --- |
+| 1 | `npm run typecheck --workspace apps/api --workspace apps/web` | **PASS** — 0 errors, checked after every commit in this stage |
+| 2 | `npx vitest run` (apps/api) | **PASS** — 225/225 across 33 files, up from Stage 30's 213/28 (12 net new tests, 5 net new files: bootstrap-prod, users, dispatch-notify, rider-signup, merchant-portal) |
+| 3 | `npm run build --workspace apps/api --workspace apps/web` | **PASS** — clean, checked after every commit |
+| 4 | Live verification against the real Render deployment | **PASS** — each fix/feature confirmed with a real API call or browser check against `https://ronmacrae-dispatch.onrender.com`, not just the local suite (see individual commit messages for which specific check each one passed) |
+| 5 | `npm run lint` / full e2e suite | **Not re-run this stage** — no e2e specs exist yet for any Stage 30/31 screen (merchants, order, settlements, team, settings, rider signup, merchant portal), so a re-run would only re-confirm Stage 30's own already-recorded baseline, not add real coverage of this stage's work |
+
+## Re-verify (Stage 31)
+
+```bash
+npm run typecheck --workspace apps/api --workspace apps/web
+npm run test --workspace @ronmacrae/api
+npm run build --workspace apps/api --workspace apps/web
+```
+
+**Not done in this stage**: messaging for the merchant portal;
+rider-to-merchant preferred/dedicated assignment; e2e coverage for any
+screen built in Stage 30 or 31; upgrading the Render database off its
+free (30-day-expiring) plan — flagged to the user, not yet acted on;
+Twilio (real SMS/WhatsApp) still not connected. A much larger
+platform-rebuild spec was given after this stage (unified login across
+merchant/logistics/rider/admin roles, a platform-admin console, a
+bearer/logistics-company account type, ratings, full messaging
+authorization matrix, financial dispute/archival workflow) — see
+`WORK_IN_PROGRESS.md` for where that stands; it is a multi-stage effort
+of its own, tracked separately rather than folded into this stage's
+count.

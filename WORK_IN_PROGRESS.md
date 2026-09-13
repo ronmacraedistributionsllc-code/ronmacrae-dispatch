@@ -3412,3 +3412,140 @@ selector was added there — multi-item entry exists on the new public
 deployment, and (optionally) production-grade geocoding all need
 credentials only the account owner can supply — the code for all three
 is complete and waiting on configuration, not further development.
+
+## Stage 31 — real-deployment hardening + rider/merchant self-service (DONE)
+
+Not a planned stage — a direct response to actually deploying Stage 30
+to Render and using it for real, which surfaced several genuine gaps
+that automated tests hadn't (and, given the test harness, couldn't
+easily) caught. Documented here as one stage since it happened as one
+continuous session responding to live findings, commits `43d76c0` through
+`b46b393`.
+
+**Real bugs found via live use, not tests, and fixed:**
+
+- `POST /api/users` (staff account creation) created a bare `User` row
+  and stopped — no `StaffMembership` — so every account created through
+  it (via curl, since no UI called it before this stage) could never
+  actually log in: `resolveStaffContext` rejects any non-rider staff
+  login with zero active memberships ("no active business membership",
+  403). This endpoint had zero test coverage, which is exactly how it
+  went unnoticed. Fixed: creating a non-rider staff user now also
+  creates an active `StaffMembership` in the creating admin's own
+  business. Added `apps/api/test/users.test.ts` — a real create-then-
+  login round trip, not just asserting the create call returns 200.
+- `bootstrap-prod.ts` (new: a one-time production-database setup
+  script, distinct from `seed.ts`'s dev/demo data — creates only the
+  real business record and one real admin login) crashed on any re-run
+  with `TypeError: the "password" argument must be of type string` —
+  an eagerly-evaluated `upsert().create` object called
+  `hashPassword(password!)` even on the update branch, where `password`
+  was genuinely `null` at runtime (the `!` only silences TypeScript).
+  Rewritten with explicit branching: an existing admin's password is
+  never touched. Root-caused and fixed based on a very precise bug
+  report from the user, who traced the exact evaluation-order bug
+  themselves. Added a direct regression test (calling
+  `bootstrapProduction` twice against a database the first call already
+  bootstrapped).
+- The live login page was still showing a hardcoded
+  `Demo: admin@ronmacrae.example / admin1234` hint — fine in a local
+  demo, actively bad once this became a real public production login
+  page. Removed.
+- `Business.dispatchNotificationEmail` didn't exist at all: an order
+  notified its merchant (if any) but never dispatch itself, and never
+  fired for a direct (no-merchant) order at all. Added
+  `dispatch-notify.ts` (independent of, and in addition to, the
+  existing merchant email — a direct order fires only this one, a
+  merchant order fires both), guarded against duplicate sends the same
+  way (`Job.dispatchNotifiedAt`), with a manual-resend endpoint.
+- No screen anywhere called `POST /api/riders` either — an admin had no
+  way to add a working rider account, matching the same "endpoint
+  exists, nothing calls it" pattern as the `/api/users` bug above.
+
+**New self-service admin screens** (the actual proximate cause of "why
+can't I create a dispatcher/rider" — the backend mostly could, nothing
+in the UI ever asked it to):
+- `apps/web/src/pages/team.tsx` — create staff logins and riders,
+  approve/reject pending rider applications.
+- `apps/web/src/pages/settings.tsx` — business contact details and the
+  new dispatch-alert email, previously backend-only with no screen.
+
+**Public rider self-signup** (`/join/rider`, linked from the login
+page) — genuinely new, not previously scoped for Stage 30. A rider can
+apply without any staff involvement: submits details, proves ownership
+of their email via a 6-digit code (reusing the existing customer-
+account `CustomerEmailCode` verification system rather than building a
+parallel one — the table is generic, email+purpose+code, not actually
+FK'd to `CustomerAccount` despite its name), then lands as a `pending`
+`RiderMembership` an admin/dispatcher must explicitly approve or reject
+from the Team screen. Deliberately different from a staff-created
+rider (`RidersService.create`), where the creating staff member is
+themselves the vouching, so that membership goes active immediately —
+nobody vouches for a self-signup, so it always starts pending
+regardless of any other status. Email became the rider login
+credential going forward (phone remains the identity/coordination key,
+per the user's explicit design: "phone number is just how the system
+finds out who — login is by email").
+
+**Merchant portal** (`/merchant`) — the largest net-new piece, not in
+the original Stage 30 scope: a merchant's own login, deliberately a
+separate auth "face" from staff (its own `merchant_portal` JWT type,
+same pattern this app already used for the rider bearer face and the
+customer dashboard — verified per-route, not through the shared staff
+auth hook). An admin grants access from the Merchants screen. Scoped
+strictly to that merchant's own data:
+- View own orders — a narrower DTO than the staff `JobDto` (no COD
+  accountant notes/approvals, no rider payout figures, nothing about
+  other customers or merchants).
+- Manage own catalog (add/edit/activate/deactivate/delete products) —
+  reuses the staff-side validation/DTO shaping (`CreateProduct`,
+  `productToDto`, moved to module scope and exported) rather than
+  duplicating it; the only real difference is authorization, always the
+  merchant on the caller's own token, never a client-supplied one.
+- New `MerchantStaff` model (reuses the shared `User` table — email +
+  password — rather than a parallel identity table, same pattern as
+  `StaffMembership`/`RiderMembership`).
+
+Messaging for the merchant portal (merchant ↔ dispatch/rider about an
+order) was scoped for this piece but not yet built — see the newer,
+much larger platform-rebuild spec below for where this now sits in
+priority.
+
+**Verification**: `npm run typecheck --workspace apps/api --workspace
+apps/web` clean throughout every commit in this stage. `apps/api`
+vitest grew from 213 (Stage 30's end) to **225/225** across 33 files (12
+net new: 2 bootstrap-prod, 2 users, 2 dispatch-notify, 3 rider-signup, 3
+merchant-portal — some counts include tests added then extended in a
+later commit within this same stage, e.g. rider-signup grew from 2 to 3
+as email verification was added). `npm run build --workspace apps/api
+--workspace apps/web` clean at every commit. All work was verified live
+against the actual Render deployment as it happened (real curl/browser
+checks against `https://ronmacrae-dispatch.onrender.com`), not only
+against the local test suite — see this stage's own commit messages for
+the specific live checks each one passed (e.g. the dispatcher StaffMembership fix
+was confirmed by actually creating a dispatcher and logging in as them
+against the live API, not just the test suite).
+
+**Real production incidents during this stage, not bugs in the delivered
+code**: Render's free-tier database warning (30-day auto-delete) is
+still live and still needs the user to upgrade it — flagged repeatedly,
+not yet acted on as of this stage. A significant amount of session time
+went to an admin-password confusion loop that turned out to be a
+genuine environment-configuration mistake, not a code bug: the Render
+Start Command was left pointed at a one-time password-reset script
+(which exits, unlike the real server) for longer than intended, causing
+Render to silently keep serving an older deployment while quietly
+regenerating a fresh random password on every restart of the stuck
+script — each one invalidating the last before it could be used. No
+code fix was needed; the resolution was reverting the Start Command and,
+for the final handoff, adding a `RESET_ADMIN_PASSWORD` env-var override
+to `reset-admin-password.ts` so a known password can be set and verified
+directly (via a live API call) rather than transcribed by hand from a
+log viewer.
+
+**Not done in this stage**: messaging for the merchant portal;
+rider-to-merchant preferred/dedicated assignment; upgrading the Render
+database off its free (30-day-expiring) plan; connecting Twilio for
+real SMS/WhatsApp (`NOTIFICATION_PROVIDER` is still `memory`); the
+`orders.ronmacraedistributions.com` custom domain was connected during
+this stage but is a DNS/Render-dashboard action, not code.
