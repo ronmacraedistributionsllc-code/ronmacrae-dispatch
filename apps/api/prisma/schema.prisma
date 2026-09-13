@@ -150,6 +150,7 @@ model User {
 
   rider     Rider?
   staffMemberships StaffMembership[]
+  merchantStaffMemberships MerchantStaff[]
   riderMembershipApprovals RiderMembership[] @relation("riderMembershipApprover")
   sessions  Session[]
   audits    AuditLog[]
@@ -312,8 +313,31 @@ model Merchant {
   products Product[]
   jobs     Job[]
   settlements Settlement[]
+  staff    MerchantStaff[]
 
   @@unique([businessId, slug])
+}
+
+/** A merchant's own login — a distinct "face" from staff (StaffMembership)
+ *  and rider (RiderMembership), same pattern: its own auth (jwt.ts's
+ *  merchant_portal token, merchant-portal.ts), scoped to exactly one
+ *  merchant, never a whole Business. Reuses the shared User table (email +
+ *  password) rather than a parallel identity table — `User.role` is
+ *  irrelevant here (merchant-portal auth never reads it, unlike staff
+ *  login's resolveStaffContext), same as it's already irrelevant for a
+ *  rider once RiderMembership exists. */
+model MerchantStaff {
+  id         String   @id @default(cuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  merchantId String
+  merchant   Merchant @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+  active     Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([userId, merchantId])
+  @@index([merchantId])
 }
 
 model Product {

@@ -84,6 +84,7 @@ function CreateMerchantForm({ onDone }: { onDone: () => void }): React.JSX.Eleme
 function MerchantRow({ merchant, canEdit, onChanged }: { merchant: MerchantDto; canEdit: boolean; onChanged: () => void }): React.JSX.Element {
   const [copied, setCopied] = useState(false);
   const [showQr, setShowQr] = useState(false);
+  const [showPortalForm, setShowPortalForm] = useState(false);
   const toggleActive = useMutation({
     mutationFn: () => apiFetch(API.merchants.update(merchant.id), { method: "PATCH", body: JSON.stringify({ active: !merchant.active }) }),
     onSuccess: onChanged,
@@ -121,6 +122,11 @@ function MerchantRow({ merchant, canEdit, onChanged }: { merchant: MerchantDto; 
             {merchant.active ? "Disable link" : "Re-enable link"}
           </button>
         ) : null}
+        {canEdit ? (
+          <button type="button" className="btn !px-3 !py-1 text-xs" onClick={() => setShowPortalForm((v) => !v)}>
+            {showPortalForm ? "Cancel" : "Portal access"}
+          </button>
+        ) : null}
       </div>
       {showQr ? (
         <div className="flex flex-col items-start gap-1">
@@ -128,6 +134,30 @@ function MerchantRow({ merchant, canEdit, onChanged }: { merchant: MerchantDto; 
           <p className="text-xs text-zinc-500">Print this or share it — scanning opens this store's order form directly.</p>
         </div>
       ) : null}
+      {showPortalForm ? <GrantPortalAccessForm merchantId={merchant.id} onDone={() => setShowPortalForm(false)} /> : null}
     </section>
+  );
+}
+
+function GrantPortalAccessForm({ merchantId, onDone }: { merchantId: string; onDone: () => void }): React.JSX.Element {
+  const [email, setEmail] = useState("");
+  const [name, setName] = useState("");
+  const [password, setPassword] = useState("");
+  const grant = useMutation({
+    mutationFn: () => apiFetch(API.merchants.grantStaff(merchantId), { method: "POST", body: JSON.stringify({ email, name: name || undefined, password }) }),
+    onSuccess: onDone,
+  });
+  return (
+    <form className="space-y-2 rounded-lg border border-zinc-700 p-3" onSubmit={(e) => { e.preventDefault(); void grant.mutate(); }}>
+      <p className="text-xs text-zinc-400">Lets this store sign in at <code>/merchant</code> to view their own orders.</p>
+      <div className="grid gap-2 sm:grid-cols-3">
+        <input className="input" type="email" required placeholder="Login email" value={email} onChange={(e) => setEmail(e.target.value)} />
+        <input className="input" placeholder="Contact name (optional)" value={name} onChange={(e) => setName(e.target.value)} />
+        <input className="input" type="password" required minLength={8} placeholder="Password (8+ chars)" value={password} onChange={(e) => setPassword(e.target.value)} />
+      </div>
+      {grant.error ? <p className="text-sm text-red-400">{grant.error instanceof ApiError ? grant.error.message : "Could not grant access"}</p> : null}
+      {grant.isSuccess ? <p className="text-sm text-emerald-400">Access granted — share the email/password with them directly.</p> : null}
+      <button className="btn-accent !px-3 !py-1 text-xs" disabled={grant.isPending || !email || password.length < 8}>{grant.isPending ? "Saving…" : "Grant access"}</button>
+    </form>
   );
 }

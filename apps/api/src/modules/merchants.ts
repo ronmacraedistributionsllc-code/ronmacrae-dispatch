@@ -5,6 +5,7 @@ import type { AppCtx } from "../ctx.js";
 import { minorOf, money } from "@ronmacrae/money";
 import type { MerchantDto, MerchantPublicDto, ProductDto, ProductVariantDto } from "@ronmacrae/contracts";
 import { pointFromJson, pointToJson } from "../geo-mappers.js";
+import { hashPassword } from "../lib/password.js";
 
 /**
  * Store/merchant clients of the courier business (spec section 3: "MULTI-
@@ -31,6 +32,12 @@ const CreateMerchant = z.object({
 });
 
 const UpdateMerchant = CreateMerchant.partial();
+
+const MerchantStaffBody = z.object({
+  email: z.string().email().max(160),
+  name: z.string().max(120).optional(),
+  password: z.string().min(8).max(128),
+});
 
 function slugify(name: string): string {
   return name
@@ -206,6 +213,37 @@ export async function merchantRoutes(app: FastifyInstance, ctx: AppCtx): Promise
     });
     await ctx.audit.record({ id: req.user!.sub, role: req.user!.role }, "merchant.update", "merchant", merchant.id);
     return { merchant: merchantToDto(merchant, ctx.config.APP_ORIGIN) };
+  });
+
+  // Grants (or updates the password for) this merchant's own portal login
+  // — a distinct "face" from staff, see merchant-portal.ts. Admin-only:
+  // creating someone else's login credential is itself the vouching, same
+  // rule as staff/rider account creation elsewhere.
+  app.post<{ Params: { id: string } }>("/api/merchants/:id/staff", { preHandler: owner }, async (req) => {
+    const body = MerchantStaffBody.parse(req.body);
+    const businessId = req.user!.businessId!;
+    const merchant = await ctx.prisma.merchant.findFirst({ where: { id: req.params.id, businessId } });
+    if (!merchant) throw httpErrors.createError(404, "Merchant not found");
+    const email = body.email.trim().toLowerCase();
+    const existingOwner = await ctx.prisma.user.findUnique({ where: { email } });
+    if (existingOwner) {
+      const existingMembership = await ctx.prisma.merchantStaff.findUnique({ where: { userId_merchantId: { userId: existingOwner.id, merchantId: merchant.id } } });
+      if (!existingMembership && (await ctx.prisma.merchantStaff.findFirst({ where: { userId: existingOwner.id } }))) {
+        throw httpErrors.createError(409, "This email already has portal access at a different merchant");
+      }
+    }
+    const user = await ctx.prisma.user.upsert({
+      where: { email },
+      create: { email, name: body.name || merchant.name, passwordHash: hashPassword(body.password), role: "viewer" },
+      update: { passwordHash: hashPassword(body.password), name: body.name || undefined },
+    });
+    await ctx.prisma.merchantStaff.upsert({
+      where: { userId_merchantId: { userId: user.id, merchantId: merchant.id } },
+      create: { userId: user.id, merchantId: merchant.id, active: true },
+      update: { active: true },
+    });
+    await ctx.audit.record({ id: req.user!.sub, role: req.user!.role }, "merchant.staff.grant", "merchant", merchant.id, { email });
+    return { ok: true, email };
   });
 
   // ---------------------------------------------------------------------

@@ -319,6 +319,11 @@ export function registerAuthHook(app: FastifyInstance, ctx: AppCtx): void {
     // Public rider application — no login (this IS how a rider gets one).
     if (url === "/api/rider-signup" && method === "POST") return true;
     if ((url === "/api/rider-signup/verify" || url === "/api/rider-signup/resend") && method === "POST") return true;
+    // Merchant portal — login is public by nature; every other route under
+    // this prefix is gated by its own merchant_portal Bearer token inside
+    // the handler (requireMerchantAuth in merchant-portal.ts), same
+    // "self-gated, not the staff hook" pattern as /api/customer-account/.
+    if (url.startsWith("/api/merchant-portal/") && (method === "POST" || method === "GET")) return true;
     // Twilio's own delivery-status webhook — unauthenticated by nature (Twilio
     // isn't a logged-in user), verified instead by its own signature header
     // when TWILIO_AUTH_TOKEN is configured (see notify.ts).

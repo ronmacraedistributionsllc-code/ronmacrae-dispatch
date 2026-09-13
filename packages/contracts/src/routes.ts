@@ -114,6 +114,18 @@ export const API = {
     /** public, no auth — resolves a slug for the /order/:slug page */
     public: (slug: string) => `/api/merchants/public/${slug}`,
     products: (merchantId: string) => `/api/merchants/${merchantId}/products`,
+    /** admin-only: grants (or updates the password for) this merchant's
+     *  own portal login — see merchantPortal below, the "face" that uses it. */
+    grantStaff: (merchantId: string) => `/api/merchants/${merchantId}/staff`,
+  },
+
+  /** A merchant's own login — its own auth "face" (a merchant_portal
+   *  token, not a staff access token), scoped to exactly one merchant.
+   *  See merchant-portal.ts. */
+  merchantPortal: {
+    login: "/api/merchant-portal/login",
+    me: "/api/merchant-portal/me",
+    orders: "/api/merchant-portal/orders",
   },
 
   products: {

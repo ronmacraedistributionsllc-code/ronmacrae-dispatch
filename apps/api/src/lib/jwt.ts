@@ -38,9 +38,20 @@ export interface CustomerDashboardTokenPayload {
   type: "customer_dashboard";
 }
 
+/** A merchant's own portal session — its own token `type`, same rationale
+ *  as CustomerDashboardTokenPayload: structurally cannot satisfy
+ *  verifyAccess()/requireStaff() no matter what a guard forgets to check.
+ *  Scoped to exactly one merchant, never a whole Business. */
+export interface MerchantPortalTokenPayload {
+  sub: string; // user id
+  merchantId: string;
+  type: "merchant_portal";
+}
+
 const ACCESS_TTL_S = 15 * 60;
 const REFRESH_TTL_DAYS = 30;
 export const CUSTOMER_DASHBOARD_TTL_S = 24 * 3600;
+export const MERCHANT_PORTAL_TTL_S = 24 * 3600;
 
 export class JwtIssuer {
   private secret: Uint8Array;
@@ -111,6 +122,25 @@ export class JwtIssuer {
       const { payload } = await jwtVerify(token, this.secret);
       if (payload.type !== "customer_dashboard" || typeof payload.phone !== "string") return null;
       return payload as unknown as CustomerDashboardTokenPayload;
+    } catch {
+      return null;
+    }
+  }
+
+  async issueMerchantPortal(userId: string, merchantId: string): Promise<string> {
+    return new SignJWT({ merchantId, type: "merchant_portal" } as JWTPayload)
+      .setProtectedHeader({ alg: "HS256" })
+      .setSubject(userId)
+      .setIssuedAt()
+      .setExpirationTime(`${MERCHANT_PORTAL_TTL_S}s`)
+      .sign(this.secret);
+  }
+
+  async verifyMerchantPortal(token: string): Promise<MerchantPortalTokenPayload | null> {
+    try {
+      const { payload } = await jwtVerify(token, this.secret);
+      if (payload.type !== "merchant_portal" || typeof payload.merchantId !== "string" || typeof payload.sub !== "string") return null;
+      return payload as unknown as MerchantPortalTokenPayload;
     } catch {
       return null;
     }
