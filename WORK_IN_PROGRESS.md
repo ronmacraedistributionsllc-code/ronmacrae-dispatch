@@ -4125,3 +4125,47 @@ purge window); shortage/overage broken out by rider or by date range in
 the summary (business-wide total only); the full messaging authorization
 matrix's remaining pieces; order-form/address refinements; reports
 broken out by logistics company.
+
+## Stage 39 — operating reports broken out by logistics company (DONE)
+
+Spec: "reports broken out by logistics company." A job has no direct
+link to a logistics company — only the rider who completes it does
+(`Rider.attachedLogisticsCompanyId`, Stage 36) — so `byLogisticsCompany`
+groups the report's already-computed completed-job set by whichever
+company the completing rider is *currently* attached to, the same
+indirection `byRider` already uses to pull in a rider's pay rate. A
+rider who was freelance or merchant-attached when they completed jobs
+contributes to neither this table nor any company's total; those are
+counted separately (`summary.unattachedJobsCompleted`) so nobody reads
+`byLogisticsCompany`'s sum as the full completed-delivery count.
+
+- `reports.ts`: new `logisticsCompanyId` filter (restricts the whole
+  report — rows, CSV, every total — to jobs completed by a rider
+  currently attached to that one company, via a `rider: {
+  attachedLogisticsCompanyId }` relation filter, since `Job` itself
+  carries no such column); new `byLogisticsCompany` breakdown
+  (jobs completed + distinct rider count per company, sorted by volume).
+- `reports.tsx`: a "Logistics company" filter dropdown (reuses the
+  existing business-scoped `/api/logistics-companies` list, same one
+  the admin console's own page fetches) and a "By logistics company"
+  table alongside the existing "By rider" one, with an honest note for
+  the unattached remainder.
+
+**Verification**: `npm run typecheck --workspace apps/api --workspace
+apps/web` clean. `apps/api` vitest **272/272** across 39 files (2 net
+new in `reports.test.ts`: the grouping/counting itself across two
+companies plus an unattached rider, and the `logisticsCompanyId` filter
+actually restricting which job rows come back). `npm run build
+--workspace apps/api --workspace apps/web` clean. Full e2e suite
+re-run (serially, `--workers=1`, fresh `e2e-test.db`, since
+`reports.tsx` changed): **34/35**, the one failure the same already-
+confirmed-unrelated `booking.spec.ts` address-lookup flake seen every
+prior stage.
+
+**Not done in this stage**: a per-logistics-company earnings/payout
+figure (this app has no payout-to-logistics-company concept at all,
+only rider pay rates — inventing one would be worse than omitting it);
+date-range or rider-level drill-down *within* one company's row (the
+existing date/rider filters still apply to the whole report, just not
+crossed with this breakdown); the full messaging authorization matrix's
+remaining pieces; order-form/address refinements.

@@ -154,6 +154,10 @@ export interface OperatingReportFilters {
   /** one of the three report buckets, or omitted for all */
   bucket: "completed" | "active" | "failed_cancelled" | null;
   paymentMethod: string | null;
+  /** Stage 39: restricts to jobs completed by a rider attached to this one
+   *  logistics company — see OperatingReportLogisticsRowDto's own doc
+   *  comment for how a job maps to a company (via its rider, not directly). */
+  logisticsCompanyId: string | null;
 }
 
 /** One job row in the report — deliberately excludes the delivery PIN and
@@ -193,6 +197,22 @@ export interface OperatingReportRiderRowDto {
   estimatedEarnings: Money | null;
 }
 
+/** One logistics company's completed-delivery share of the report (spec:
+ *  "reports broken out by logistics company") — a job has no direct link
+ *  to a logistics company; this groups by whichever company the *rider who
+ *  completed it* was attached to at query time (Rider.attachedLogisticsCompanyId),
+ *  same indirection `byRider` already uses for pay rate. A rider who was
+ *  freelance or merchant-attached when they completed jobs contributes to
+ *  neither this table nor any company's total — see `unattachedJobsCompleted`
+ *  on the summary for that honest remainder. */
+export interface OperatingReportLogisticsRowDto {
+  logisticsCompanyId: string;
+  logisticsCompanyName: string;
+  jobsCompleted: number;
+  /** distinct riders (attached to this company) who contributed at least one completed job */
+  riderCount: number;
+}
+
 export interface OperatingReportSummaryDto {
   deliveriesCompleted: number;
   deliveriesActive: number;
@@ -211,12 +231,18 @@ export interface OperatingReportSummaryDto {
   /** how many completed jobs the average above is actually based on — shown
    *  so a tiny sample doesn't get read as a stable average */
   averageDeliveryTimeSampleSize: number;
+  /** Completed jobs whose rider was freelance or merchant-attached (not a
+   *  logistics company) at query time — the honest remainder so
+   *  `byLogisticsCompany`'s totals are never mistaken for the full
+   *  `deliveriesCompleted` count. */
+  unattachedJobsCompleted: number;
 }
 
 export interface OperatingReportDto {
   filters: OperatingReportFilters;
   summary: OperatingReportSummaryDto;
   byRider: OperatingReportRiderRowDto[];
+  byLogisticsCompany: OperatingReportLogisticsRowDto[];
   rows: OperatingReportRowDto[];
   /** plain-language call-outs for anything that makes a figure above
    *  incomplete or approximate (e.g. riders with no configured pay rate) —

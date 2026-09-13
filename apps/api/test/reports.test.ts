@@ -194,3 +194,58 @@ describe("operating report: CSV export", () => {
     expect(csv).not.toContain(customer.phone);
   });
 });
+
+// Stage 39 (spec: "reports broken out by logistics company") — a job has no
+// direct link to a company, so this groups by whichever company the
+// completing rider is CURRENTLY attached to.
+describe("operating report: broken out by logistics company", () => {
+  async function makeCompany(admin: string) {
+    const res = await harness.app.inject({ method: "POST", url: "/api/logistics-companies", headers: { authorization: `Bearer ${admin}` }, payload: { name: `Fleet ${uniq()}` } });
+    return (res.json() as { logisticsCompany: { id: string } }).logisticsCompany;
+  }
+
+  it("groups completed jobs by the rider's attached logistics company, and counts unattached riders' jobs separately", async () => {
+    const admin = await staffToken(harness, "admin");
+    const customer = await makeCustomer(harness);
+    const companyA = await makeCompany(admin);
+    const companyB = await makeCompany(admin);
+
+    const riderA1 = await makeRider(harness, { attachment: "logistics", attachedLogisticsCompanyId: companyA.id });
+    const riderA2 = await makeRider(harness, { attachment: "logistics", attachedLogisticsCompanyId: companyA.id });
+    const riderB = await makeRider(harness, { attachment: "logistics", attachedLogisticsCompanyId: companyB.id });
+    const freelanceRider = await makeRider(harness); // attachment defaults to freelance
+
+    for (const rider of [riderA1, riderA1, riderA2, riderB, freelanceRider]) {
+      await harness.prisma.job.create({ data: { businessId: harness.business.id, customerId: customer.id, riderId: rider.id, status: "delivered", completedAt: new Date() } });
+    }
+
+    const res = await harness.app.inject({ method: "GET", url: "/api/reports/summary", headers: { authorization: `Bearer ${admin}` } });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { byLogisticsCompany: { logisticsCompanyId: string; jobsCompleted: number; riderCount: number }[]; summary: { unattachedJobsCompleted: number } };
+    const rowA = body.byLogisticsCompany.find((c) => c.logisticsCompanyId === companyA.id)!;
+    const rowB = body.byLogisticsCompany.find((c) => c.logisticsCompanyId === companyB.id)!;
+    expect(rowA.jobsCompleted).toBe(3);
+    expect(rowA.riderCount).toBe(2);
+    expect(rowB.jobsCompleted).toBe(1);
+    expect(rowB.riderCount).toBe(1);
+    expect(body.summary.unattachedJobsCompleted).toBeGreaterThanOrEqual(1);
+  });
+
+  it("the logisticsCompanyId filter restricts the whole report to that company's riders", async () => {
+    const admin = await staffToken(harness, "admin");
+    const customer = await makeCustomer(harness);
+    const companyA = await makeCompany(admin);
+    const companyB = await makeCompany(admin);
+    const riderA = await makeRider(harness, { attachment: "logistics", attachedLogisticsCompanyId: companyA.id });
+    const riderB = await makeRider(harness, { attachment: "logistics", attachedLogisticsCompanyId: companyB.id });
+    const jobA = await harness.prisma.job.create({ data: { businessId: harness.business.id, customerId: customer.id, riderId: riderA.id, status: "delivered", completedAt: new Date() } });
+    const jobB = await harness.prisma.job.create({ data: { businessId: harness.business.id, customerId: customer.id, riderId: riderB.id, status: "delivered", completedAt: new Date() } });
+
+    const res = await harness.app.inject({ method: "GET", url: `/api/reports/summary?logisticsCompanyId=${companyA.id}`, headers: { authorization: `Bearer ${admin}` } });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { rows: { jobId: string }[]; filters: { logisticsCompanyId: string | null } };
+    expect(body.filters.logisticsCompanyId).toBe(companyA.id);
+    expect(body.rows.some((r) => r.jobId === jobA.id)).toBe(true);
+    expect(body.rows.some((r) => r.jobId === jobB.id)).toBe(false);
+  });
+});

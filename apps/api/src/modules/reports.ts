@@ -6,6 +6,7 @@ import type {
   JobStatus,
   OperatingReportDto,
   OperatingReportFilters,
+  OperatingReportLogisticsRowDto,
   OperatingReportRiderRowDto,
   OperatingReportRowDto,
 } from "@ronmacrae/contracts";
@@ -27,6 +28,9 @@ const ReportQuery = z.object({
   zoneId: z.string().optional(),
   bucket: z.enum(["completed", "active", "failed_cancelled"]).optional(),
   paymentMethod: z.string().optional(),
+  /** Stage 39: restricts to jobs completed by a rider currently attached
+   *  to this logistics company — see OperatingReportLogisticsRowDto. */
+  logisticsCompanyId: z.string().optional(),
 });
 type ReportQueryInput = z.infer<typeof ReportQuery>;
 
@@ -38,10 +42,18 @@ async function buildReport(ctx: AppCtx, businessId: string, q: ReportQueryInput)
     ...(q.riderId ? { riderId: q.riderId } : {}),
     ...(q.zoneId ? { zoneId: q.zoneId } : {}),
     ...(q.paymentMethod ? { paymentMethod: q.paymentMethod as Prisma.JobWhereInput["paymentMethod"] } : {}),
+    // A job has no direct link to a logistics company — this filters by
+    // whichever company the assigned rider is CURRENTLY attached to, same
+    // indirection byLogisticsCompany's own grouping below uses.
+    ...(q.logisticsCompanyId ? { rider: { attachedLogisticsCompanyId: q.logisticsCompanyId } } : {}),
   };
   const jobs = await ctx.prisma.job.findMany({
     where,
-    include: { customer: { select: { name: true } }, rider: { select: { id: true, name: true, payRate: true, payCurrency: true } }, zone: { select: { name: true } } },
+    include: {
+      customer: { select: { name: true } },
+      rider: { select: { id: true, name: true, payRate: true, payCurrency: true, attachedLogisticsCompanyId: true, attachedLogisticsCompany: { select: { name: true } } } },
+      zone: { select: { name: true } },
+    },
     orderBy: { createdAt: "desc" },
   });
 
@@ -134,6 +146,37 @@ async function buildReport(ctx: AppCtx, businessId: string, q: ReportQueryInput)
     notes.push(`${noRateCount} rider(s) with completed deliveries have no configured pay rate — their earnings are shown as "not set", not $0, and excluded from any earnings total.`);
   }
 
+  // Stage 39 (spec: "reports broken out by logistics company") — a job has
+  // no direct link to a company, so this groups by whichever company the
+  // completing rider is CURRENTLY attached to (Rider.attachedLogisticsCompanyId).
+  // A freelance/merchant-attached rider's completed jobs count toward
+  // neither this table nor any company total — see unattachedJobsCompleted.
+  const byLogisticsCompanyMap = new Map<string, { name: string; jobsCompleted: number; riderIds: Set<string> }>();
+  let unattachedJobsCompleted = 0;
+  for (const j of filteredJobs) {
+    if (j.status !== "delivered" || !j.rider) continue;
+    const companyId = j.rider.attachedLogisticsCompanyId;
+    if (!companyId) {
+      unattachedJobsCompleted += 1;
+      continue;
+    }
+    const existing = byLogisticsCompanyMap.get(companyId);
+    if (existing) {
+      existing.jobsCompleted += 1;
+      existing.riderIds.add(j.rider.id);
+    } else {
+      byLogisticsCompanyMap.set(companyId, { name: j.rider.attachedLogisticsCompany?.name ?? "Unknown", jobsCompleted: 1, riderIds: new Set([j.rider.id]) });
+    }
+  }
+  const byLogisticsCompany: OperatingReportLogisticsRowDto[] = [...byLogisticsCompanyMap.entries()]
+    .map(([logisticsCompanyId, c]): OperatingReportLogisticsRowDto => ({
+      logisticsCompanyId,
+      logisticsCompanyName: c.name,
+      jobsCompleted: c.jobsCompleted,
+      riderCount: c.riderIds.size,
+    }))
+    .sort((a, b) => b.jobsCompleted - a.jobsCompleted);
+
   const completedCount = jobs.filter((j) => bucketFor(j.status) === "completed").length;
   const activeCount = jobs.filter((j) => bucketFor(j.status) === "active").length;
   const failedCancelledCount = jobs.filter((j) => bucketFor(j.status) === "failed_cancelled").length;
@@ -145,6 +188,7 @@ async function buildReport(ctx: AppCtx, businessId: string, q: ReportQueryInput)
     zoneId: q.zoneId ?? null,
     bucket: q.bucket ?? null,
     paymentMethod: q.paymentMethod ?? null,
+    logisticsCompanyId: q.logisticsCompanyId ?? null,
   };
 
   const money = (minor: number): Money => ({ amount: minor, currency: cur });
@@ -165,8 +209,10 @@ async function buildReport(ctx: AppCtx, businessId: string, q: ReportQueryInput)
       codOverageTotal: money(codOverageMinor),
       averageDeliveryTimeMs: deliveryTimes.length > 0 ? Math.round(deliveryTimes.reduce((a, b) => a + b, 0) / deliveryTimes.length) : null,
       averageDeliveryTimeSampleSize: deliveryTimes.length,
+      unattachedJobsCompleted,
     },
     byRider,
+    byLogisticsCompany,
     rows,
     notes,
     generatedAt: new Date().toISOString(),

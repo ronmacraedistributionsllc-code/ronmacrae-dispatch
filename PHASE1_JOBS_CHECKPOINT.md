@@ -2680,3 +2680,35 @@ human's explicit click); a literal 30-day gate on the archive action
 itself; shortage/overage broken out by rider or date range (business-
 wide total only); the remaining messaging-matrix pieces; order-form/
 address refinements; reports broken out by logistics company.
+
+## Stage 39 — operating reports broken out by logistics company
+
+Spec: "reports broken out by logistics company." A job has no direct
+link to a company — only the completing rider does
+(`Rider.attachedLogisticsCompanyId`) — so the breakdown groups by that
+indirection, same pattern `byRider` already uses. Full narrative is in
+`WORK_IN_PROGRESS.md`'s own Stage 39 section.
+
+## Commands run and results (Stage 39)
+
+| # | Command | Result |
+| --- | --- | --- |
+| 1 | `npm run typecheck --workspace apps/api --workspace apps/web` | **PASS** — 0 errors |
+| 2 | `npx vitest run` (apps/api) | **PASS** — 272/272 across 39 files, up from Stage 38's 270/39 (2 net new in `reports.test.ts`) |
+| 3 | `npm run build --workspace apps/api --workspace apps/web` | **PASS** — clean |
+| 4 | Full e2e suite (35 specs), serial (`--workers=1`), fresh `e2e-test.db` | **34/35** — the one failure is the same already-confirmed-unrelated `booking.spec.ts` address-lookup flake seen every prior stage |
+| 5 | schema | No schema change this stage — reuses `Rider.attachedLogisticsCompanyId` (Stage 36) |
+
+## Re-verify (Stage 39)
+
+```bash
+npm run typecheck --workspace apps/api --workspace apps/web
+npm run test --workspace @ronmacrae/api
+npm run build --workspace apps/api --workspace apps/web
+rm -f apps/api/data/e2e-test.db && cd e2e && npx playwright test --workers=1
+```
+
+**Not done in this stage**: a per-logistics-company earnings/payout
+figure (no such concept exists in this app); date-range/rider drill-down
+crossed with the company breakdown; the remaining messaging-matrix
+pieces; order-form/address refinements.

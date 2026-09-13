@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import type { OperatingReportDto, RiderDto, ZoneDto } from "@ronmacrae/contracts";
+import type { LogisticsCompanyDto, OperatingReportDto, RiderDto, ZoneDto } from "@ronmacrae/contracts";
 import { API } from "@ronmacrae/contracts";
 import { apiFetch, formatMoney } from "../lib/api.js";
 import { useAuth } from "../lib/auth.js";
@@ -12,9 +12,10 @@ interface Filters {
   zoneId: string;
   bucket: "" | "completed" | "active" | "failed_cancelled";
   paymentMethod: string;
+  logisticsCompanyId: string;
 }
 
-const EMPTY_FILTERS: Filters = { from: "", to: "", riderId: "", zoneId: "", bucket: "", paymentMethod: "" };
+const EMPTY_FILTERS: Filters = { from: "", to: "", riderId: "", zoneId: "", bucket: "", paymentMethod: "", logisticsCompanyId: "" };
 
 function toQuery(f: Filters): string {
   const p = new URLSearchParams();
@@ -24,6 +25,7 @@ function toQuery(f: Filters): string {
   if (f.zoneId) p.set("zoneId", f.zoneId);
   if (f.bucket) p.set("bucket", f.bucket);
   if (f.paymentMethod) p.set("paymentMethod", f.paymentMethod);
+  if (f.logisticsCompanyId) p.set("logisticsCompanyId", f.logisticsCompanyId);
   return p.toString();
 }
 
@@ -49,6 +51,7 @@ export function Reports(): React.JSX.Element {
 
   const riders = useQuery({ queryKey: ["riders"], queryFn: () => apiFetch<{ riders: RiderDto[] }>(API.riders.list), enabled: canView });
   const zones = useQuery({ queryKey: ["zones"], queryFn: () => apiFetch<{ zones: ZoneDto[] }>(API.zones.list), enabled: canView });
+  const logisticsCompanies = useQuery({ queryKey: ["logisticsCompanies"], queryFn: () => apiFetch<{ logisticsCompanies: LogisticsCompanyDto[] }>(API.logisticsCompanies.list), enabled: canView });
   const report = useQuery({
     queryKey: ["operating-report", query],
     queryFn: () => apiFetch<OperatingReportDto>(`${API.reports.summary}${query ? `?${query}` : ""}`),
@@ -123,8 +126,15 @@ export function Reports(): React.JSX.Element {
               <option value="transfer">Transfer</option>
             </select>
           </div>
+          <div>
+            <label className="label" htmlFor="rp-logistics">Logistics company</label>
+            <select id="rp-logistics" className="input" value={filters.logisticsCompanyId} onChange={(e) => set({ logisticsCompanyId: e.target.value })}>
+              <option value="">All</option>
+              {logisticsCompanies.data?.logisticsCompanies.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+          </div>
         </div>
-        {(filters.from || filters.to || filters.riderId || filters.zoneId || filters.bucket || filters.paymentMethod) ? (
+        {(filters.from || filters.to || filters.riderId || filters.zoneId || filters.bucket || filters.paymentMethod || filters.logisticsCompanyId) ? (
           <button className="btn mt-3 !px-3 !py-1 text-xs" onClick={() => setFilters(EMPTY_FILTERS)}>Clear filters</button>
         ) : null}
       </section>
@@ -180,6 +190,42 @@ export function Reports(): React.JSX.Element {
                   ))}
                 </tbody>
               </table>
+            )}
+          </section>
+
+          <section className="card overflow-x-auto">
+            <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-zinc-400">By logistics company</h2>
+            {report.data.byLogisticsCompany.length === 0 ? (
+              <p className="text-sm text-zinc-500">
+                No completed deliveries by a logistics-company-attached rider in this range
+                {report.data.summary.unattachedJobsCompleted > 0 ? ` (${report.data.summary.unattachedJobsCompleted} completed by freelance/merchant-attached riders instead).` : "."}
+              </p>
+            ) : (
+              <>
+                <table className="w-full text-left text-sm">
+                  <thead>
+                    <tr className="text-xs uppercase tracking-wide text-zinc-500">
+                      <th className="py-1 pr-4">Company</th>
+                      <th className="py-1 pr-4">Riders</th>
+                      <th className="py-1">Jobs completed</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {report.data.byLogisticsCompany.map((c) => (
+                      <tr key={c.logisticsCompanyId} className="border-t border-zinc-800">
+                        <td className="py-2 pr-4 text-zinc-200">{c.logisticsCompanyName}</td>
+                        <td className="py-2 pr-4 text-zinc-200">{c.riderCount}</td>
+                        <td className="py-2 text-zinc-200">{c.jobsCompleted}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {report.data.summary.unattachedJobsCompleted > 0 ? (
+                  <p className="mt-2 text-xs text-zinc-500">
+                    Plus {report.data.summary.unattachedJobsCompleted} job{report.data.summary.unattachedJobsCompleted === 1 ? "" : "s"} completed by a freelance or merchant-attached rider (not counted toward any company above).
+                  </p>
+                ) : null}
+              </>
             )}
           </section>
 
