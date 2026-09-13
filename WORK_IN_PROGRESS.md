@@ -3866,3 +3866,98 @@ comment *content* specifically (moderation today is binary hide/unhide
 after the fact, not automated filtering at submission time); the
 bearer/logistics-company account type; the full messaging authorization
 matrix; financial dispute/archival workflow.
+
+## Stage 36 — Bearer/Logistics Company portal + rider attachment (DONE)
+
+Spec: "Bearer/Logistics Company portal with fleet dashboard and
+rider-attachment rules... Platform Admin controls whether a rider is:
+freelancer/platform-approved and eligible for marketplace work;
+attached only to one merchant; attached to one logistics/bearer
+company."
+
+**Design**: `LogisticsCompany`/`LogisticsCompanyStaff` mirror
+`Merchant`/`MerchantStaff` almost exactly — same child-of-`Business`
+shape, same slug/active pattern, same "grant a portal login without
+touching an existing account's password" rule. The real difference is
+which side of the marketplace it represents: a merchant supplies
+orders, a logistics company supplies riders — so it has no public
+storefront/catalog, and its own portal (`logistics-portal.ts`,
+`logistics_portal` JWT type, same "distinct auth face, own token,
+structurally can't satisfy `requireStaff()`" pattern as
+`merchant-portal.ts`) is a **read-only fleet dashboard**, not an
+order-management screen: it shows whichever riders Platform Admin has
+attached to it (`Rider.attachedLogisticsCompanyId`), their live
+status, and how loaded they are. Attaching a rider to a company (or to
+a merchant) at all is deliberately Platform Admin's call only — same
+"the vouching is someone else's decision" rule used everywhere else
+account access is granted in this app — never something the company
+or the rider grants itself.
+
+New `Rider.attachment` (`freelance` | `merchant` | `logistics`,
+default `freelance`) plus `attachedMerchantId`/
+`attachedLogisticsCompanyId`. `freelance` — every pre-existing rider's
+value — is completely unrestricted, identical to this app's behavior
+before attachment existed. The actual eligibility rule lives in
+`offers.ts`'s `eligibleRiders()`: a rider with `platformStatus:
+"approved"` is always eligible regardless of attachment (the explicit
+"eligible for marketplace work" override); otherwise a
+`merchant`-attached rider is only offered that one merchant's own
+jobs, and a `logistics`-attached rider is only offered direct/in-house
+jobs (`job.merchantId === null`) — a logistics company's riders don't
+automatically also pick up merchant orders unless Platform Admin has
+approved them for the open marketplace.
+
+- `POST/GET/PATCH /api/logistics-companies[/:id]` — staff CRUD
+  (`logistics-companies.ts`), admin(owner)-only to create/edit,
+  dispatcher can read, same split as `merchants.ts`.
+- `POST /api/logistics-companies/:id/staff` — grants (or updates the
+  password for) a company's own portal login; never overwrites an
+  existing account's password on a re-grant.
+- `POST /api/logistics-portal/login`, `GET /me`, `GET /riders` (the
+  fleet dashboard), `POST /switch-to-staff` — `logistics-portal.ts`,
+  mirroring `merchant-portal.ts`'s auth-face routes.
+- Unified login (`auth.ts`) extended for a third workspace type:
+  `merchantWorkspacesFor`/`logisticsWorkspacesFor` are now combined
+  into one list, so an account with several merchant *and* logistics
+  workspaces (and no staff/rider access) still gets one `workspace:
+  "select"` choice across all of them; `POST
+  /api/auth/switch-to-logistics` mirrors `switch-to-merchant`. The
+  login body's `merchantId` selector still works unchanged (existing
+  tests/clients); a generalized `workspaceId` was added alongside it.
+- Platform Admin (`platform-admin.ts`): `GET/PATCH
+  /api/platform/logistics-companies[/:id]` mirrors the merchant
+  section; the rider list/detail responses and the rider `PATCH` now
+  carry `attachment`/`attachedMerchant`/`attachedLogisticsCompany` —
+  switching to `merchant`/`logistics` requires (and validates) the
+  matching id, switching to `freelance` clears both regardless of what
+  was passed.
+- Frontend: `logistics-companies.tsx` (admin CRUD, mirrors
+  `merchants.tsx` minus the QR/order-link bits that don't apply),
+  `logistics-portal.tsx` (fleet dashboard, mirrors
+  `merchant-portal.tsx`), a "Logistics" tab in `platform-admin.tsx`
+  with a per-rider attachment picker, `layout.tsx`'s "Switch
+  workspace" and `login.tsx`'s workspace-picker generalized from
+  merchant-only to either type.
+
+**Verification**: `npm run typecheck --workspace apps/api --workspace
+apps/web` clean. `apps/api` vitest **260/260** across 38 files (12 net
+new: 8 in `logistics.test.ts` covering CRUD/portal-isolation/unified-
+login/attachment-validation, 4 new attachment-eligibility cases added
+to `offers.test.ts` covering the merchant-attached, logistics-
+attached, platform-approved-override, and freelance-unrestricted
+paths). `npm run build --workspace apps/api --workspace apps/web`
+clean. Full e2e suite re-run (serially, `--workers=1`, fresh
+`e2e-test.db`, per this repo's own re-verify recipe): **34/35**, the
+one failure the same already-confirmed-unrelated `booking.spec.ts`
+address-suggestion-timeout flake seen every prior stage. (The default
+parallel-worker run flagged several other specs this time — traced to
+worker contention on the one shared dev server/db/realtime hub the
+whole suite points at, not a real regression; the serial re-run is
+the trustworthy number, matching every previous stage's result.)
+
+**Not done in this stage**: a rider-facing view of their own
+attachment (only staff/Platform Admin can see/set it); a logistics
+company inviting/vouching for its own riders directly (attachment
+stays Platform Admin-only, matching the spec's own wording); the full
+messaging authorization matrix; financial dispute/archival workflow;
+reports broken out by logistics company.

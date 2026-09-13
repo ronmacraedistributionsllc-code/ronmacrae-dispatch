@@ -102,6 +102,13 @@ export type VehicleType = (typeof VEHICLE_TYPES)[number];
 export const RIDER_STATUSES = ["offline", "available", "on_job", "unavailable"] as const;
 export type RiderStatus = (typeof RIDER_STATUSES)[number];
 
+/** Platform Admin-controlled (spec: Bearer/Logistics companies). `freelance`
+ *  (the default, and every pre-existing rider's value) is unrestricted; see
+ *  schema.prisma's RiderAttachment doc comment for the exact eligibility
+ *  rule this drives in offers.ts's eligibleRiders(). */
+export const RIDER_ATTACHMENTS = ["freelance", "merchant", "logistics"] as const;
+export type RiderAttachment = (typeof RIDER_ATTACHMENTS)[number];
+
 /**
  * Sub-progress inside a `JobStatus` for the rider (bearer) face.
  * Stages are recorded as job events with `to` equal to the current status;

@@ -48,10 +48,20 @@ export interface MerchantPortalTokenPayload {
   type: "merchant_portal";
 }
 
+/** A logistics/bearer company's own portal session — identical rationale
+ *  and shape to MerchantPortalTokenPayload, its own token `type`. Scoped
+ *  to exactly one LogisticsCompany, never a whole Business. */
+export interface LogisticsPortalTokenPayload {
+  sub: string; // user id
+  logisticsCompanyId: string;
+  type: "logistics_portal";
+}
+
 const ACCESS_TTL_S = 15 * 60;
 const REFRESH_TTL_DAYS = 30;
 export const CUSTOMER_DASHBOARD_TTL_S = 24 * 3600;
 export const MERCHANT_PORTAL_TTL_S = 24 * 3600;
+export const LOGISTICS_PORTAL_TTL_S = 24 * 3600;
 
 export class JwtIssuer {
   private secret: Uint8Array;
@@ -141,6 +151,25 @@ export class JwtIssuer {
       const { payload } = await jwtVerify(token, this.secret);
       if (payload.type !== "merchant_portal" || typeof payload.merchantId !== "string" || typeof payload.sub !== "string") return null;
       return payload as unknown as MerchantPortalTokenPayload;
+    } catch {
+      return null;
+    }
+  }
+
+  async issueLogisticsPortal(userId: string, logisticsCompanyId: string): Promise<string> {
+    return new SignJWT({ logisticsCompanyId, type: "logistics_portal" } as JWTPayload)
+      .setProtectedHeader({ alg: "HS256" })
+      .setSubject(userId)
+      .setIssuedAt()
+      .setExpirationTime(`${LOGISTICS_PORTAL_TTL_S}s`)
+      .sign(this.secret);
+  }
+
+  async verifyLogisticsPortal(token: string): Promise<LogisticsPortalTokenPayload | null> {
+    try {
+      const { payload } = await jwtVerify(token, this.secret);
+      if (payload.type !== "logistics_portal" || typeof payload.logisticsCompanyId !== "string" || typeof payload.sub !== "string") return null;
+      return payload as unknown as LogisticsPortalTokenPayload;
     } catch {
       return null;
     }

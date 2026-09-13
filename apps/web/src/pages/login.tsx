@@ -21,7 +21,7 @@ export function Login(): React.JSX.Element {
   const [totpCode, setTotpCode] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [options, setOptions] = useState<{ type: "merchant"; id: string; name: string }[] | null>(null);
+  const [options, setOptions] = useState<{ type: "merchant" | "logistics"; id: string; name: string }[] | null>(null);
   const navigate = useNavigate();
 
   if (!loading && user) {
@@ -32,17 +32,17 @@ export function Login(): React.JSX.Element {
     );
   }
 
-  async function attemptLogin(merchantId?: string) {
+  async function attemptLogin(workspaceId?: string) {
     setError(null);
     setBusy(true);
     try {
-      const outcome = await login(identifier.trim(), password, totpCode.trim() || undefined, merchantId);
+      const outcome = await login(identifier.trim(), password, totpCode.trim() || undefined, workspaceId);
       if (outcome.workspace === "select") {
         setOptions(outcome.options);
         return;
       }
       setOptions(null);
-      navigate(outcome.workspace === "merchant" ? "/merchant" : "/", { replace: true });
+      navigate(outcome.workspace === "merchant" ? "/merchant" : outcome.workspace === "logistics" ? "/logistics" : "/", { replace: true });
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Sign-in failed. Is the API running?");
     } finally {
@@ -60,7 +60,7 @@ export function Login(): React.JSX.Element {
       <div className="flex min-h-dvh items-center justify-center bg-zinc-950 p-4">
         <div className="card w-full max-w-sm space-y-3">
           <h1 className="text-center text-lg font-bold text-brand-accent">Choose a workspace</h1>
-          <p className="text-center text-sm text-zinc-400">This login has access to more than one store.</p>
+          <p className="text-center text-sm text-zinc-400">This login has access to more than one workspace.</p>
           {error ? <p className="text-sm text-red-400">{error}</p> : null}
           <div className="space-y-2">
             {options.map((o) => (
@@ -71,6 +71,7 @@ export function Login(): React.JSX.Element {
                 disabled={busy}
                 onClick={() => void attemptLogin(o.id)}
               >
+                {o.type === "logistics" ? "🚚 " : "🏬 "}
                 {o.name}
               </button>
             ))}

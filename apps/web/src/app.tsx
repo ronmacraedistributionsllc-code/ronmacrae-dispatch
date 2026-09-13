@@ -14,9 +14,11 @@ import { NewJob } from "./pages/new-job.js";
 import { PublicOrder } from "./pages/order.js";
 import { JoinRider } from "./pages/join-rider.js";
 import { MerchantPortal } from "./pages/merchant-portal.js";
+import { LogisticsPortal } from "./pages/logistics-portal.js";
 import { AcceptInvite } from "./pages/accept-invite.js";
 import { PlatformAdmin } from "./pages/platform-admin.js";
 import { Merchants } from "./pages/merchants.js";
+import { LogisticsCompanies } from "./pages/logistics-companies.js";
 import { Team } from "./pages/team.js";
 import { Settings } from "./pages/settings.js";
 import { Settlements } from "./pages/settlements.js";
@@ -71,6 +73,7 @@ export default function App(): React.JSX.Element {
               <Route path="/order/:merchantSlug" element={<PublicOrder />} />
               <Route path="/join/rider" element={<JoinRider />} />
               <Route path="/merchant" element={<MerchantPortal />} />
+              <Route path="/logistics" element={<LogisticsPortal />} />
               <Route path="/accept-invite" element={<AcceptInvite />} />
               <Route path="/track/:token" element={<Track />} />
               <Route path="/my-packages" element={<MyPackages />} />
@@ -161,6 +164,14 @@ export default function App(): React.JSX.Element {
                 element={
                   <Protected>
                     <Merchants />
+                  </Protected>
+                }
+              />
+              <Route
+                path="/logistics-companies"
+                element={
+                  <Protected>
+                    <LogisticsCompanies />
                   </Protected>
                 }
               />

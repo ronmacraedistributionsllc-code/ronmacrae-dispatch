@@ -136,6 +136,29 @@ export const API = {
     rate: (jobId: string) => `/api/merchant-portal/orders/${jobId}/rate`,
   },
 
+  /** Fleet-supplier clients of the courier business (spec: "Bearer/
+   *  Logistics companies") — the other side of the marketplace from
+   *  merchants. Staff-managed, same pattern as `merchants` above. */
+  logisticsCompanies: {
+    list: "/api/logistics-companies",
+    create: "/api/logistics-companies",
+    get: (id: string) => `/api/logistics-companies/${id}`,
+    update: (id: string) => `/api/logistics-companies/${id}`,
+    /** admin-only: grants (or updates the password for) this company's own
+     *  portal login — see logisticsPortal below. */
+    grantStaff: (id: string) => `/api/logistics-companies/${id}/staff`,
+  },
+
+  /** A logistics company's own login — its own auth "face" (a
+   *  logistics_portal token, not a staff access token), scoped to exactly
+   *  one LogisticsCompany. See logistics-portal.ts. */
+  logisticsPortal: {
+    login: "/api/logistics-portal/login",
+    me: "/api/logistics-portal/me",
+    riders: "/api/logistics-portal/riders",
+    switchToStaff: "/api/logistics-portal/switch-to-staff",
+  },
+
   products: {
     create: (merchantId: string) => `/api/merchants/${merchantId}/products`,
     update: (id: string) => `/api/products/${id}`,
@@ -326,6 +349,8 @@ export const API = {
     updateBusiness: (id: string) => `/api/platform/businesses/${id}`,
     merchants: "/api/platform/merchants",
     updateMerchant: (id: string) => `/api/platform/merchants/${id}`,
+    logisticsCompanies: "/api/platform/logistics-companies",
+    updateLogisticsCompany: (id: string) => `/api/platform/logistics-companies/${id}`,
     riders: "/api/platform/riders",
     rider: (id: string) => `/api/platform/riders/${id}`,
     updateRider: (id: string) => `/api/platform/riders/${id}`,

@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
-import { useAuth, MERCHANT_PORTAL_TOKEN_KEY } from "../lib/auth.js";
+import { useAuth, MERCHANT_PORTAL_TOKEN_KEY, LOGISTICS_PORTAL_TOKEN_KEY } from "../lib/auth.js";
 import { useRealtime, type ConnectionStatus } from "../lib/realtime.js";
 import { AlertsToaster } from "./alerts-toaster.js";
 import { apiFetch } from "../lib/api.js";
@@ -11,6 +11,7 @@ const TABS = [
   { to: "/jobs", label: "Jobs", icon: "📦", end: true },
   { to: "/jobs/new", label: "New order", icon: "➕" },
   { to: "/merchants", label: "Merchants", icon: "🏬" },
+  { to: "/logistics-companies", label: "Logistics", icon: "🚚" },
   { to: "/team", label: "Team", icon: "👥" },
   { to: "/settings", label: "Settings", icon: "⚙️" },
   { to: "/map", label: "Map", icon: "🗺️" },
@@ -27,7 +28,7 @@ const TABS = [
  *  gated at the route (app.tsx's OwnerOnly) — a non-owner should never
  *  even see the tab exists. */
 const OWNER_ONLY_TABS = new Set(["/platform-admin"]);
-const STAFF_ONLY_TABS = new Set(["/ops", "/jobs", "/jobs/new", "/merchants", "/team", "/settings", "/map", "/zones", "/cod", "/settlements", "/reports", "/trash"]);
+const STAFF_ONLY_TABS = new Set(["/ops", "/jobs", "/jobs/new", "/merchants", "/logistics-companies", "/team", "/settings", "/map", "/zones", "/cod", "/settlements", "/reports", "/trash"]);
 /** Owner/accountant only — matches the backend's own gating on /api/reports/*. */
 const ADMIN_ACCOUNTANT_ONLY_TABS = new Set(["/reports"]);
 /** Primary bottom-nav slots on mobile (thumb-reachable, at most 4 so a 5th
@@ -51,8 +52,14 @@ export function Layout({ children }: { children: React.ReactNode }): React.JSX.E
   const navigate = useNavigate();
   const { unreadCount, markRead, status } = useRealtime();
 
-  async function switchToMerchant(merchantId: string) {
-    const body = await apiFetch<{ token: string }>("/auth/switch-to-merchant", { method: "POST", body: JSON.stringify({ merchantId }) });
+  async function switchWorkspace(w: { type: "merchant" | "logistics"; id: string }) {
+    if (w.type === "logistics") {
+      const body = await apiFetch<{ token: string }>("/auth/switch-to-logistics", { method: "POST", body: JSON.stringify({ logisticsCompanyId: w.id }) });
+      sessionStorage.setItem(LOGISTICS_PORTAL_TOKEN_KEY, body.token);
+      navigate("/logistics");
+      return;
+    }
+    const body = await apiFetch<{ token: string }>("/auth/switch-to-merchant", { method: "POST", body: JSON.stringify({ merchantId: w.id }) });
     sessionStorage.setItem(MERCHANT_PORTAL_TOKEN_KEY, body.token);
     navigate("/merchant");
   }
@@ -126,8 +133,8 @@ export function Layout({ children }: { children: React.ReactNode }): React.JSX.E
             <div className="mt-3 space-y-1">
               <div className="text-xs text-zinc-500">Switch workspace</div>
               {otherWorkspaces.map((w) => (
-                <button key={w.id} className="btn w-full text-left text-xs" onClick={() => void switchToMerchant(w.id)}>
-                  🏬 {w.name}
+                <button key={w.id} className="btn w-full text-left text-xs" onClick={() => void switchWorkspace(w)}>
+                  {w.type === "logistics" ? "🚚" : "🏬"} {w.name}
                 </button>
               ))}
             </div>

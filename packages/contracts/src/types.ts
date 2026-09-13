@@ -1019,6 +1019,23 @@ export interface MerchantPublicDto {
   businessHours: string | null;
 }
 
+/** A fleet operator — supplies riders rather than orders, the other side of
+ *  the marketplace from Merchant (see schema.prisma's own doc comment).
+ *  Staff-managed, same shape/pattern as MerchantDto but with no public
+ *  storefront (no slug-based order link, no logo/catalog/business hours). */
+export interface LogisticsCompanyDto {
+  id: string;
+  businessId: string;
+  name: string;
+  slug: string;
+  phone: string | null;
+  email: string | null;
+  active: boolean;
+  riderCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface ProductVariantDto {
   id: string;
   size: string | null;

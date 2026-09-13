@@ -72,8 +72,21 @@ async function expire(ctx: AppCtx): Promise<void> {
  * RiderMembership at THIS business — being globally `active`/`available`
  * is necessary but not sufficient. A rider who works for two businesses
  * only ever receives the offers of whichever one actually invited them.
+ *
+ * Attachment (spec: Bearer/Logistics companies + merchant-attached riders,
+ * see RiderAttachment's doc comment in schema.prisma): `freelance` (the
+ * default, and every pre-existing rider's value) is unrestricted — identical
+ * to this function's behavior before attachment existed. A rider whose
+ * `platformStatus` is `approved` is always eligible regardless of
+ * attachment — the Platform Admin's explicit "eligible for marketplace
+ * work" override wins over any attachment restriction. Otherwise:
+ * `merchant`-attached riders are only eligible for jobs placed by the one
+ * merchant they're attached to; `logistics`-attached riders are only
+ * eligible for direct/in-house jobs (`job.merchantId === null`) — a
+ * logistics company's riders don't automatically also serve merchant
+ * orders unless the Platform Admin has approved them for marketplace work.
  */
-async function eligibleRiders(ctx: AppCtx, businessId: string, riderIds?: string[]) {
+async function eligibleRiders(ctx: AppCtx, businessId: string, jobMerchantId: string | null, riderIds?: string[]) {
   const riders = await ctx.prisma.rider.findMany({
     where: {
       active: true,
@@ -84,6 +97,10 @@ async function eligibleRiders(ctx: AppCtx, businessId: string, riderIds?: string
   });
   const eligible: typeof riders = [];
   for (const rider of riders) {
+    if (rider.platformStatus !== "approved") {
+      if (rider.attachment === "merchant" && rider.attachedMerchantId !== jobMerchantId) continue;
+      if (rider.attachment === "logistics" && jobMerchantId !== null) continue;
+    }
     const active = await ctx.prisma.job.count({ where: { riderId: rider.id, status: { in: [...ACTIVE_JOB_STATUSES] } } });
     if (active < rider.dailyCapacity) eligible.push(rider);
   }
@@ -134,7 +151,7 @@ export async function offerRoutes(app: FastifyInstance, ctx: AppCtx): Promise<vo
     const job = await ctx.prisma.job.findUnique({ where: { id: req.params.id } });
     if (!job || job.businessId !== businessId) throw httpErrors.createError(404, "Job not found");
     if (job.status !== "new" || job.riderId) throw httpErrors.createError(409, "Only unassigned new jobs can be broadcast");
-    const eligible = await eligibleRiders(ctx, businessId, body.riderIds);
+    const eligible = await eligibleRiders(ctx, businessId, job.merchantId, body.riderIds);
     const expiresAt = new Date(Date.now() + body.expiresInMinutes * 60_000);
     const offers = await createOffers(ctx, job.id, businessId, eligible, expiresAt);
     await ctx.audit.record(actorFor(req), "offer.broadcast", "job", job.id, { eligibleRiders: eligible.length, expiresAt });
@@ -166,7 +183,7 @@ export async function offerRoutes(app: FastifyInstance, ctx: AppCtx): Promise<vo
     const job = await ctx.prisma.job.findUnique({ where: { id: req.params.id } });
     if (!job || job.businessId !== businessId) throw httpErrors.createError(404, "Job not found");
     if (job.status !== "new" || job.riderId) throw httpErrors.createError(409, "Only unassigned new jobs can be rebroadcast");
-    const eligible = await eligibleRiders(ctx, businessId, body.riderIds);
+    const eligible = await eligibleRiders(ctx, businessId, job.merchantId, body.riderIds);
     const expiresAt = new Date(Date.now() + body.expiresInMinutes * 60_000);
     const offers = await createOffers(ctx, job.id, businessId, eligible, expiresAt);
     await ctx.audit.record(actorFor(req), "offer.rebroadcast", "job", job.id, { withdrawn: old.count, offered: offers.length });

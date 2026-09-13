@@ -7,14 +7,19 @@ import { apiFetch, onSessionExpires, setAccessToken } from "./api.js";
  *  (not imported from that page) since login.tsx needs to write it
  *  without pulling in the whole merchant-portal page module. */
 export const MERCHANT_PORTAL_TOKEN_KEY = "merchantPortalToken";
+/** Same idea, for a logistics-company portal session — see logistics-portal.tsx. */
+export const LOGISTICS_PORTAL_TOKEN_KEY = "logisticsPortalToken";
+
+type Workspace = { type: "merchant" | "logistics"; id: string; name: string };
 
 export type LoginOutcome =
   | { workspace: "staff" }
   | { workspace: "merchant" }
-  | { workspace: "select"; options: { type: "merchant"; id: string; name: string }[] };
+  | { workspace: "logistics" }
+  | { workspace: "select"; options: Workspace[] };
 
 interface LoginResponse {
-  workspace: "staff" | "merchant" | "select";
+  workspace: "staff" | "merchant" | "logistics" | "select";
   // staff
   user?: UserDto;
   riderId?: string | null;
@@ -22,25 +27,29 @@ interface LoginResponse {
   // merchant
   token?: string;
   merchant?: { id: string; name: string };
+  // logistics
+  logisticsCompany?: { id: string; name: string };
   // select
-  options?: { type: "merchant"; id: string; name: string }[];
+  options?: Workspace[];
 }
 
 export interface AuthState {
   user: UserDto | null;
   rider: RiderDto | null;
-  /** Merchant workspaces this same account also has access to — shows up
-   *  as a "Switch workspace" control (see layout.tsx) whenever non-empty. */
-  otherWorkspaces: { type: "merchant"; id: string; name: string }[];
+  /** Merchant/logistics workspaces this same account also has access to —
+   *  shows up as a "Switch workspace" control (see layout.tsx) whenever
+   *  non-empty. */
+  otherWorkspaces: Workspace[];
   loading: boolean;
   /** One shared sign-in for every kind of account (spec: "no separate
    *  rider, merchant, logistics, or admin login pages") — the caller
    *  (login.tsx) inspects the returned `workspace` to decide where to go
    *  next; this function itself only ever updates the *staff* session
-   *  state, since a "merchant" outcome routes to an entirely separate
-   *  portal with its own session (see merchant-portal.tsx). Pass
-   *  `merchantId` to finalize a previous "select" outcome. */
-  login: (identifier: string, password: string, totpCode?: string, merchantId?: string) => Promise<LoginOutcome>;
+   *  state, since a "merchant"/"logistics" outcome routes to an entirely
+   *  separate portal with its own session (see merchant-portal.tsx /
+   *  logistics-portal.tsx). Pass `workspaceId` to finalize a previous
+   *  "select" outcome. */
+  login: (identifier: string, password: string, totpCode?: string, workspaceId?: string) => Promise<LoginOutcome>;
   logout: () => Promise<void>;
   /** Re-checks the current session — used after `setAccessToken()` is
    *  called directly (the merchant-portal's "Switch to staff" control:
@@ -55,12 +64,12 @@ const AuthContext = createContext<AuthState | null>(null);
 export function AuthProvider({ children }: { children: ReactNode }): ReactNode {
   const [user, setUser] = useState<UserDto | null>(null);
   const [rider, setRider] = useState<RiderDto | null>(null);
-  const [otherWorkspaces, setOtherWorkspaces] = useState<{ type: "merchant"; id: string; name: string }[]>([]);
+  const [otherWorkspaces, setOtherWorkspaces] = useState<Workspace[]>([]);
   const [loading, setLoading] = useState(true);
 
   const loadMe = useCallback(async () => {
     try {
-      const me = await apiFetch<{ user: UserDto; rider: RiderDto | null; otherWorkspaces: { type: "merchant"; id: string; name: string }[] }>("/auth/me");
+      const me = await apiFetch<{ user: UserDto; rider: RiderDto | null; otherWorkspaces: Workspace[] }>("/auth/me");
       setUser(me.user);
       setRider(me.rider);
       setOtherWorkspaces(me.otherWorkspaces ?? []);
@@ -84,10 +93,10 @@ export function AuthProvider({ children }: { children: ReactNode }): ReactNode {
   }, [loadMe]);
 
   const login = useCallback(
-    async (identifier: string, password: string, totpCode?: string, merchantId?: string): Promise<LoginOutcome> => {
+    async (identifier: string, password: string, totpCode?: string, workspaceId?: string): Promise<LoginOutcome> => {
       const body = await apiFetch<LoginResponse>("/auth/login", {
         method: "POST",
-        body: JSON.stringify({ identifier, password, ...(totpCode ? { totpCode } : {}), ...(merchantId ? { merchantId } : {}) }),
+        body: JSON.stringify({ identifier, password, ...(totpCode ? { totpCode } : {}), ...(workspaceId ? { workspaceId } : {}) }),
       });
       if (body.workspace === "select") {
         return { workspace: "select", options: body.options ?? [] };
@@ -95,6 +104,10 @@ export function AuthProvider({ children }: { children: ReactNode }): ReactNode {
       if (body.workspace === "merchant") {
         sessionStorage.setItem(MERCHANT_PORTAL_TOKEN_KEY, body.token!);
         return { workspace: "merchant" };
+      }
+      if (body.workspace === "logistics") {
+        sessionStorage.setItem(LOGISTICS_PORTAL_TOKEN_KEY, body.token!);
+        return { workspace: "logistics" };
       }
       setAccessToken(body.accessToken!);
       setUser(body.user!);

@@ -13,7 +13,22 @@ import { ApiError, apiFetch } from "../lib/api.js";
 
 interface BusinessRow { id: string; name: string; slug: string | null; active: boolean; merchantCount: number; staffCount: number; riderCount: number; jobCount: number; createdAt: string }
 interface MerchantRow { id: string; name: string; slug: string; active: boolean; business: { id: string; name: string }; jobCount: number; productCount: number; staffCount: number; createdAt: string }
-interface RiderRow { id: string; name: string; phone: string; vehicle: string; active: boolean; platformStatus: "pending" | "approved" | "suspended"; status: string; memberships: { businessId: string; businessName: string; status: string }[]; createdAt: string }
+interface LogisticsCompanyRow { id: string; name: string; slug: string; active: boolean; business: { id: string; name: string }; riderCount: number; staffCount: number; createdAt: string }
+type RiderAttachment = "freelance" | "merchant" | "logistics";
+interface RiderRow {
+  id: string;
+  name: string;
+  phone: string;
+  vehicle: string;
+  active: boolean;
+  platformStatus: "pending" | "approved" | "suspended";
+  status: string;
+  attachment: RiderAttachment;
+  attachedMerchant: { id: string; name: string } | null;
+  attachedLogisticsCompany: { id: string; name: string } | null;
+  memberships: { businessId: string; businessName: string; status: string }[];
+  createdAt: string;
+}
 interface RiderDetail extends RiderRow {
   email: string | null;
   emailVerified: boolean;
@@ -24,13 +39,14 @@ interface RiderDetail extends RiderRow {
 interface StaffRow { id: string; name: string; email: string | null; phone: string | null; active: boolean; platformRole: string | null; businesses: { id: string; name: string; role: string; active: boolean }[]; merchants: { id: string; name: string; active: boolean }[]; createdAt: string }
 interface AuditRow { id: string; userName: string | null; userEmail: string | null; role: string | null; action: string; entityType: string; entityId: string | null; createdAt: string }
 
-type Tab = "businesses" | "merchants" | "riders" | "staff" | "audit";
+type Tab = "businesses" | "merchants" | "logistics" | "riders" | "staff" | "audit";
 
 export function PlatformAdmin(): React.JSX.Element {
   const [tab, setTab] = useState<Tab>("businesses");
   const TABS: { key: Tab; label: string }[] = [
     { key: "businesses", label: "Businesses" },
     { key: "merchants", label: "Merchants" },
+    { key: "logistics", label: "Logistics" },
     { key: "riders", label: "Riders" },
     { key: "staff", label: "Staff" },
     { key: "audit", label: "Audit log" },
@@ -50,6 +66,7 @@ export function PlatformAdmin(): React.JSX.Element {
       </div>
       {tab === "businesses" ? <BusinessesTab /> : null}
       {tab === "merchants" ? <MerchantsTab /> : null}
+      {tab === "logistics" ? <LogisticsTab /> : null}
       {tab === "riders" ? <RidersTab /> : null}
       {tab === "staff" ? <StaffTab /> : null}
       {tab === "audit" ? <AuditTab /> : null}
@@ -133,17 +150,56 @@ function MerchantsTab(): React.JSX.Element {
   );
 }
 
+function LogisticsTab(): React.JSX.Element {
+  const [q, setQ] = useState("");
+  const qc = useQueryClient();
+  const list = useQuery({ queryKey: ["platform", "logistics-companies", q], queryFn: () => apiFetch<{ logisticsCompanies: LogisticsCompanyRow[] }>(`${API.platform.logisticsCompanies}?q=${encodeURIComponent(q)}`) });
+  const toggle = useMutation({
+    mutationFn: ({ id, active }: { id: string; active: boolean }) => apiFetch(API.platform.updateLogisticsCompany(id), { method: "PATCH", body: JSON.stringify({ active }) }),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["platform", "logistics-companies"] }),
+  });
+  return (
+    <div className="space-y-3">
+      <SearchBox value={q} onChange={setQ} />
+      {list.isLoading ? <p className="text-sm text-zinc-400">Loading…</p> : null}
+      <div className="space-y-2">
+        {list.data?.logisticsCompanies.map((c) => (
+          <div key={c.id} className="card flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <p className="font-medium">{c.name} <span className="text-xs text-zinc-500">· {c.business.name}</span></p>
+              <p className="text-xs text-zinc-500">{c.riderCount} attached riders · {c.staffCount} portal logins</p>
+            </div>
+            <div className="flex items-center gap-2">
+              <StatusPill active={c.active} />
+              <button className="btn !px-3 !py-1 text-xs" disabled={toggle.isPending} onClick={() => void toggle.mutate({ id: c.id, active: !c.active })}>
+                {c.active ? "Disable" : "Reactivate"}
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function RidersTab(): React.JSX.Element {
   const [q, setQ] = useState("");
   const [openId, setOpenId] = useState<string | null>(null);
   const qc = useQueryClient();
   const list = useQuery({ queryKey: ["platform", "riders", q], queryFn: () => apiFetch<{ riders: RiderRow[] }>(`${API.platform.riders}?q=${encodeURIComponent(q)}`) });
+  // For the attachment picker below — every merchant/logistics company on
+  // the platform, not just the rider's own business (an owner can attach
+  // any rider to any of them).
+  const merchants = useQuery({ queryKey: ["platform", "merchants", ""], queryFn: () => apiFetch<{ merchants: MerchantRow[] }>(API.platform.merchants) });
+  const companies = useQuery({ queryKey: ["platform", "logistics-companies", ""], queryFn: () => apiFetch<{ logisticsCompanies: LogisticsCompanyRow[] }>(API.platform.logisticsCompanies) });
   const update = useMutation({
-    mutationFn: ({ id, ...body }: { id: string; platformStatus?: string; active?: boolean }) => apiFetch(API.platform.updateRider(id), { method: "PATCH", body: JSON.stringify(body) }),
+    mutationFn: ({ id, ...body }: { id: string; platformStatus?: string; active?: boolean; attachment?: RiderAttachment; attachedMerchantId?: string; attachedLogisticsCompanyId?: string }) =>
+      apiFetch(API.platform.updateRider(id), { method: "PATCH", body: JSON.stringify(body) }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["platform", "riders"] });
       void qc.invalidateQueries({ queryKey: ["platform", "rider"] });
     },
+    onError: (err) => window.alert(err instanceof ApiError ? err.message : "Could not update this rider"),
   });
   return (
     <div className="space-y-3">
@@ -179,10 +235,84 @@ function RidersTab(): React.JSX.Element {
                 {r.active ? "Disable login" : "Re-enable login"}
               </button>
             </div>
+            <AttachmentControl
+              rider={r}
+              merchants={merchants.data?.merchants ?? []}
+              logisticsCompanies={companies.data?.logisticsCompanies ?? []}
+              busy={update.isPending}
+              onChange={(body) => void update.mutate({ id: r.id, ...body })}
+            />
             {openId === r.id ? <RiderDetailPanel id={r.id} /> : null}
           </div>
         ))}
       </div>
+    </div>
+  );
+}
+
+/** Spec: "Platform Admin controls whether a rider is: freelancer/
+ *  platform-approved... attached only to one merchant; attached to one
+ *  logistics/bearer company." A plain select rather than a form — picking
+ *  "Merchant"/"Logistics" immediately shows the matching target picker,
+ *  and choosing a target fires the update right away (no separate Save,
+ *  matching the rest of this tab's one-click controls). */
+function AttachmentControl({
+  rider,
+  merchants,
+  logisticsCompanies,
+  busy,
+  onChange,
+}: {
+  rider: RiderRow;
+  merchants: MerchantRow[];
+  logisticsCompanies: LogisticsCompanyRow[];
+  busy: boolean;
+  onChange: (body: { attachment: RiderAttachment; attachedMerchantId?: string; attachedLogisticsCompanyId?: string }) => void;
+}): React.JSX.Element {
+  const [pending, setPending] = useState<RiderAttachment | null>(null);
+  const mode = pending ?? rider.attachment;
+
+  function setMode(next: RiderAttachment) {
+    setPending(next);
+    if (next === "freelance") onChange({ attachment: "freelance" });
+  }
+
+  return (
+    <div className="flex flex-wrap items-center gap-2 rounded-lg border border-zinc-800 p-2 text-xs">
+      <span className="text-zinc-500">Attachment:</span>
+      <select className="input !w-auto !py-1 text-xs" value={mode} disabled={busy} onChange={(e) => setMode(e.target.value as RiderAttachment)}>
+        <option value="freelance">Freelance (unrestricted)</option>
+        <option value="merchant">One merchant</option>
+        <option value="logistics">One logistics company</option>
+      </select>
+      {mode === "merchant" ? (
+        <select
+          className="input !w-auto !py-1 text-xs"
+          disabled={busy}
+          defaultValue={rider.attachedMerchant?.id ?? ""}
+          onChange={(e) => e.target.value && onChange({ attachment: "merchant", attachedMerchantId: e.target.value })}
+        >
+          <option value="" disabled>Choose a merchant…</option>
+          {merchants.map((m) => (
+            <option key={m.id} value={m.id}>{m.name} · {m.business.name}</option>
+          ))}
+        </select>
+      ) : null}
+      {mode === "logistics" ? (
+        <select
+          className="input !w-auto !py-1 text-xs"
+          disabled={busy}
+          defaultValue={rider.attachedLogisticsCompany?.id ?? ""}
+          onChange={(e) => e.target.value && onChange({ attachment: "logistics", attachedLogisticsCompanyId: e.target.value })}
+        >
+          <option value="" disabled>Choose a logistics company…</option>
+          {logisticsCompanies.map((c) => (
+            <option key={c.id} value={c.id}>{c.name} · {c.business.name}</option>
+          ))}
+        </select>
+      ) : null}
+      {rider.attachment === "merchant" && rider.attachedMerchant ? <span className="text-zinc-500">currently: {rider.attachedMerchant.name}</span> : null}
+      {rider.attachment === "logistics" && rider.attachedLogisticsCompany ? <span className="text-zinc-500">currently: {rider.attachedLogisticsCompany.name}</span> : null}
     </div>
   );
 }

@@ -425,3 +425,71 @@ describe("rider status is rider-controlled, not job-lifecycle-controlled", () =>
     expect(toOffline.statusCode).toBe(409);
   });
 });
+
+// Stage 36 (Bearer/Logistics companies): a rider's attachment restricts
+// which jobs eligibleRiders() (offers.ts) will ever offer them — see that
+// function's own doc comment for the exact rule, including the
+// platformStatus:"approved" override.
+describe("eligibility respects rider attachment (Stage 36)", () => {
+  it("a merchant-attached rider is only eligible for that merchant's own jobs", async () => {
+    const customer = await makeCustomer(harness);
+    const dispatcher = await dispatcherToken(harness);
+    const merchant = await harness.prisma.merchant.create({ data: { businessId: harness.business.id, name: `M ${uniq()}`, slug: `m-${uniq()}` } });
+    const otherMerchant = await harness.prisma.merchant.create({ data: { businessId: harness.business.id, name: `M2 ${uniq()}`, slug: `m2-${uniq()}` } });
+    const rider = await makeRider(harness, { attachment: "merchant", attachedMerchantId: merchant.id });
+
+    const merchantJob = await makeJob(harness, customer.id, { merchantId: merchant.id });
+    const broadcastForOwnMerchant = await harness.app.inject({ method: "POST", url: `/api/jobs/${merchantJob.id}/offers/broadcast`, headers: { authorization: `Bearer ${dispatcher}` }, payload: {} });
+    expect(broadcastForOwnMerchant.statusCode).toBe(200);
+    expect((broadcastForOwnMerchant.json() as { offers: { riderId: string }[] }).offers.map((o) => o.riderId)).toContain(rider.id);
+
+    const otherMerchantJob = await makeJob(harness, customer.id, { merchantId: otherMerchant.id });
+    const broadcastForOtherMerchant = await harness.app.inject({ method: "POST", url: `/api/jobs/${otherMerchantJob.id}/offers/broadcast`, headers: { authorization: `Bearer ${dispatcher}` }, payload: {} });
+    expect(broadcastForOtherMerchant.statusCode).toBe(200);
+    expect((broadcastForOtherMerchant.json() as { offers: { riderId: string }[] }).offers.map((o) => o.riderId)).not.toContain(rider.id);
+
+    const directJob = await makeJob(harness, customer.id, {});
+    const broadcastForDirect = await harness.app.inject({ method: "POST", url: `/api/jobs/${directJob.id}/offers/broadcast`, headers: { authorization: `Bearer ${dispatcher}` }, payload: {} });
+    expect((broadcastForDirect.json() as { offers: { riderId: string }[] }).offers.map((o) => o.riderId)).not.toContain(rider.id);
+  });
+
+  it("a logistics-attached rider is only eligible for direct (no-merchant) jobs", async () => {
+    const customer = await makeCustomer(harness);
+    const dispatcher = await dispatcherToken(harness);
+    const company = await harness.prisma.logisticsCompany.create({ data: { businessId: harness.business.id, name: `L ${uniq()}`, slug: `l-${uniq()}` } });
+    const merchant = await harness.prisma.merchant.create({ data: { businessId: harness.business.id, name: `M3 ${uniq()}`, slug: `m3-${uniq()}` } });
+    const rider = await makeRider(harness, { attachment: "logistics", attachedLogisticsCompanyId: company.id });
+
+    const directJob = await makeJob(harness, customer.id, {});
+    const broadcastDirect = await harness.app.inject({ method: "POST", url: `/api/jobs/${directJob.id}/offers/broadcast`, headers: { authorization: `Bearer ${dispatcher}` }, payload: {} });
+    expect((broadcastDirect.json() as { offers: { riderId: string }[] }).offers.map((o) => o.riderId)).toContain(rider.id);
+
+    const merchantJob = await makeJob(harness, customer.id, { merchantId: merchant.id });
+    const broadcastMerchant = await harness.app.inject({ method: "POST", url: `/api/jobs/${merchantJob.id}/offers/broadcast`, headers: { authorization: `Bearer ${dispatcher}` }, payload: {} });
+    expect((broadcastMerchant.json() as { offers: { riderId: string }[] }).offers.map((o) => o.riderId)).not.toContain(rider.id);
+  });
+
+  it("platformStatus:approved overrides any attachment restriction — eligible for everything", async () => {
+    const customer = await makeCustomer(harness);
+    const dispatcher = await dispatcherToken(harness);
+    const merchant = await harness.prisma.merchant.create({ data: { businessId: harness.business.id, name: `M4 ${uniq()}`, slug: `m4-${uniq()}` } });
+    const otherMerchant = await harness.prisma.merchant.create({ data: { businessId: harness.business.id, name: `M5 ${uniq()}`, slug: `m5-${uniq()}` } });
+    const rider = await makeRider(harness, { attachment: "merchant", attachedMerchantId: merchant.id, platformStatus: "approved" });
+
+    const otherMerchantJob = await makeJob(harness, customer.id, { merchantId: otherMerchant.id });
+    const broadcast = await harness.app.inject({ method: "POST", url: `/api/jobs/${otherMerchantJob.id}/offers/broadcast`, headers: { authorization: `Bearer ${dispatcher}` }, payload: {} });
+    expect((broadcast.json() as { offers: { riderId: string }[] }).offers.map((o) => o.riderId)).toContain(rider.id);
+  });
+
+  it("freelance (the default) is unrestricted — every pre-existing rider's behavior is unchanged", async () => {
+    const customer = await makeCustomer(harness);
+    const dispatcher = await dispatcherToken(harness);
+    const merchant = await harness.prisma.merchant.create({ data: { businessId: harness.business.id, name: `M6 ${uniq()}`, slug: `m6-${uniq()}` } });
+    const rider = await makeRider(harness); // attachment defaults to "freelance"
+    expect(rider.attachment).toBe("freelance");
+
+    const merchantJob = await makeJob(harness, customer.id, { merchantId: merchant.id });
+    const broadcast = await harness.app.inject({ method: "POST", url: `/api/jobs/${merchantJob.id}/offers/broadcast`, headers: { authorization: `Bearer ${dispatcher}` }, payload: {} });
+    expect((broadcast.json() as { offers: { riderId: string }[] }).offers.map((o) => o.riderId)).toContain(rider.id);
+  });
+});

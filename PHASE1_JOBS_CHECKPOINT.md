@@ -2575,3 +2575,38 @@ automated abusive-content filtering at submission (moderation is
 binary hide/unhide after the fact); the bearer/logistics-company
 account type; the full messaging authorization matrix; financial
 dispute/archival workflow.
+
+## Stage 36 — Bearer/Logistics Company portal + rider attachment
+
+Spec: "Bearer/Logistics Company portal with fleet dashboard and
+rider-attachment rules... Platform Admin controls whether a rider is
+freelancer/platform-approved, attached to one merchant, or attached to
+one logistics/bearer company." Full narrative — the mirrors-Merchant
+design, the read-only fleet-dashboard rationale, and the exact
+eligibility rule attachment drives in `offers.ts` — is in
+`WORK_IN_PROGRESS.md`'s own Stage 36 section.
+
+## Commands run and results (Stage 36)
+
+| # | Command | Result |
+| --- | --- | --- |
+| 1 | `npm run typecheck --workspace apps/api --workspace apps/web` | **PASS** — 0 errors |
+| 2 | `npx vitest run` (apps/api) | **PASS** — 260/260 across 38 files, up from Stage 35's 248/37 (12 net new: `logistics.test.ts` (8) + 4 new attachment-eligibility cases in `offers.test.ts`) |
+| 3 | `npm run build --workspace apps/api --workspace apps/web` | **PASS** — clean |
+| 4 | Full e2e suite (35 specs), serial (`--workers=1`), fresh `e2e-test.db` | **34/35** — the one failure is the same already-confirmed-unrelated `booking.spec.ts` address-suggestion-timeout flake. (Note: the default parallel-worker run, `npm run e2e`, showed several unrelated failures this stage — traced to worker contention on the one shared dev server/sqlite db/realtime hub, not a real regression; re-ran serially per this checkpoint's own re-verify recipe below and got the same clean 34/35 every previous stage has seen.) |
+| 5 | `dev.db` via `prisma db push` | New `LogisticsCompany`/`LogisticsCompanyStaff` tables + `RiderAttachment` enum + `Rider.attachment`/`attachedMerchantId`/`attachedLogisticsCompanyId` columns, all additive; no data loss |
+
+## Re-verify (Stage 36)
+
+```bash
+npm run typecheck --workspace apps/api --workspace apps/web
+npm run test --workspace @ronmacrae/api
+npm run build --workspace apps/api --workspace apps/web
+rm -f apps/api/data/e2e-test.db && cd e2e && npx playwright test --workers=1
+```
+
+**Not done in this stage**: a rider-facing view of their own
+attachment; a logistics company vouching for its own riders directly
+(attachment stays Platform Admin-only, per the spec's own wording);
+the full messaging authorization matrix; financial dispute/archival
+workflow; reports broken out by logistics company.

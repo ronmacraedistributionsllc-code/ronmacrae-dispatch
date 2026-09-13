@@ -39,7 +39,7 @@ export async function platformAdminRoutes(app: FastifyInstance, ctx: AppCtx): Pr
     const rows = await ctx.prisma.business.findMany({
       where: q ? { name: { contains: q } } : undefined,
       orderBy: { createdAt: "desc" },
-      include: { _count: { select: { merchants: true, staffMemberships: true, riderMemberships: true, jobs: true } } },
+      include: { _count: { select: { merchants: true, logisticsCompanies: true, staffMemberships: true, riderMemberships: true, jobs: true } } },
     });
     return {
       businesses: rows.map((b) => ({
@@ -49,6 +49,7 @@ export async function platformAdminRoutes(app: FastifyInstance, ctx: AppCtx): Pr
         active: b.active,
         createdAt: b.createdAt.toISOString(),
         merchantCount: b._count.merchants,
+        logisticsCompanyCount: b._count.logisticsCompanies,
         staffCount: b._count.staffMemberships,
         riderCount: b._count.riderMemberships,
         jobCount: b._count.jobs,
@@ -96,6 +97,37 @@ export async function platformAdminRoutes(app: FastifyInstance, ctx: AppCtx): Pr
   });
 
   // ---------------------------------------------------------------------
+  // Logistics companies — across every business, mirrors merchants above.
+  // ---------------------------------------------------------------------
+  app.get("/api/platform/logistics-companies", { preHandler: owner }, async (req) => {
+    const { q } = requireQuery(req.query);
+    const rows = await ctx.prisma.logisticsCompany.findMany({
+      where: q ? { name: { contains: q } } : undefined,
+      orderBy: { createdAt: "desc" },
+      include: { business: businessName, _count: { select: { riders: true, staff: true } } },
+    });
+    return {
+      logisticsCompanies: rows.map((c) => ({
+        id: c.id,
+        name: c.name,
+        slug: c.slug,
+        active: c.active,
+        business: c.business,
+        riderCount: c._count.riders,
+        staffCount: c._count.staff,
+        createdAt: c.createdAt.toISOString(),
+      })),
+    };
+  });
+
+  app.patch<{ Params: { id: string } }>("/api/platform/logistics-companies/:id", { preHandler: owner }, async (req) => {
+    const body = z.object({ active: z.boolean() }).parse(req.body);
+    const company = await ctx.prisma.logisticsCompany.update({ where: { id: req.params.id }, data: { active: body.active } });
+    await ctx.audit.record({ id: req.user!.sub, role: "platform_owner" }, body.active ? "platform.logistics_company.reactivate" : "platform.logistics_company.disable", "logistics_company", company.id);
+    return { ok: true, active: company.active };
+  });
+
+  // ---------------------------------------------------------------------
   // Riders — platform-wide approval/blocking (spec: "Platform Admin
   // controls whether a rider is freelancer/platform-approved... or
   // disabled/blocked"), across every business a rider is a member of.
@@ -105,7 +137,7 @@ export async function platformAdminRoutes(app: FastifyInstance, ctx: AppCtx): Pr
     const rows = await ctx.prisma.rider.findMany({
       where: q ? { OR: [{ name: { contains: q } }, { phone: { contains: q } }] } : undefined,
       orderBy: { createdAt: "desc" },
-      include: { memberships: { include: { business: businessName } } },
+      include: { memberships: { include: { business: businessName } }, attachedMerchant: businessName, attachedLogisticsCompany: businessName },
     });
     return {
       riders: rows.map((r) => ({
@@ -116,6 +148,9 @@ export async function platformAdminRoutes(app: FastifyInstance, ctx: AppCtx): Pr
         active: r.active,
         platformStatus: r.platformStatus,
         status: r.status,
+        attachment: r.attachment,
+        attachedMerchant: r.attachedMerchant ? { id: r.attachedMerchant.id, name: r.attachedMerchant.name } : null,
+        attachedLogisticsCompany: r.attachedLogisticsCompany ? { id: r.attachedLogisticsCompany.id, name: r.attachedLogisticsCompany.name } : null,
         memberships: r.memberships.map((m) => ({ businessId: m.businessId, businessName: m.business.name, status: m.status })),
         createdAt: r.createdAt.toISOString(),
       })),
@@ -125,7 +160,12 @@ export async function platformAdminRoutes(app: FastifyInstance, ctx: AppCtx): Pr
   app.get<{ Params: { id: string } }>("/api/platform/riders/:id", { preHandler: owner }, async (req) => {
     const rider = await ctx.prisma.rider.findUnique({
       where: { id: req.params.id },
-      include: { memberships: { include: { business: businessName } }, user: { select: { email: true, phone: true, emailVerifiedAt: true, active: true } } },
+      include: {
+        memberships: { include: { business: businessName } },
+        user: { select: { email: true, phone: true, emailVerifiedAt: true, active: true } },
+        attachedMerchant: businessName,
+        attachedLogisticsCompany: businessName,
+      },
     });
     if (!rider) throw httpErrors.createError(404, "Rider not found");
     const statusCounts = await ctx.prisma.job.groupBy({ by: ["status"], where: { riderId: rider.id }, _count: true });
@@ -146,6 +186,9 @@ export async function platformAdminRoutes(app: FastifyInstance, ctx: AppCtx): Pr
         active: rider.active,
         platformStatus: rider.platformStatus,
         status: rider.status,
+        attachment: rider.attachment,
+        attachedMerchant: rider.attachedMerchant ? { id: rider.attachedMerchant.id, name: rider.attachedMerchant.name } : null,
+        attachedLogisticsCompany: rider.attachedLogisticsCompany ? { id: rider.attachedLogisticsCompany.id, name: rider.attachedLogisticsCompany.name } : null,
         email: rider.user?.email ?? null,
         emailVerified: rider.user?.emailVerifiedAt != null,
         loginActive: rider.user?.active ?? null,
@@ -174,26 +217,54 @@ export async function platformAdminRoutes(app: FastifyInstance, ctx: AppCtx): Pr
     return { ok: true, hidden: rating.hidden };
   });
 
+  // Spec: "Platform Admin controls whether a rider is: freelancer/
+  // platform-approved... attached only to one merchant; attached to one
+  // logistics/bearer company." `attachment` and its matching id go
+  // together — see the RiderAttachment doc comment in schema.prisma for
+  // the eligibility rule this drives. Switching to `merchant`/`logistics`
+  // requires the matching id (and clears the other); switching to
+  // `freelance` clears both, regardless of what was passed.
   app.patch<{ Params: { id: string } }>("/api/platform/riders/:id", { preHandler: owner }, async (req) => {
     const body = z
       .object({
         platformStatus: z.enum(["pending", "approved", "suspended"]).optional(),
         active: z.boolean().optional(),
+        attachment: z.enum(["freelance", "merchant", "logistics"]).optional(),
+        attachedMerchantId: z.string().optional().nullable(),
+        attachedLogisticsCompanyId: z.string().optional().nullable(),
       })
       .parse(req.body);
-    if (body.platformStatus === undefined && body.active === undefined) throw httpErrors.createError(400, "Nothing to update");
+    if (Object.values(body).every((v) => v === undefined)) throw httpErrors.createError(400, "Nothing to update");
+
+    let attachmentData: { attachment?: "freelance" | "merchant" | "logistics"; attachedMerchantId?: string | null; attachedLogisticsCompanyId?: string | null } = {};
+    if (body.attachment !== undefined) {
+      if (body.attachment === "merchant") {
+        if (!body.attachedMerchantId) throw httpErrors.createError(400, "attachedMerchantId is required for attachment \"merchant\"");
+        const merchant = await ctx.prisma.merchant.findUnique({ where: { id: body.attachedMerchantId } });
+        if (!merchant) throw httpErrors.createError(404, "Merchant not found");
+        attachmentData = { attachment: "merchant", attachedMerchantId: merchant.id, attachedLogisticsCompanyId: null };
+      } else if (body.attachment === "logistics") {
+        if (!body.attachedLogisticsCompanyId) throw httpErrors.createError(400, "attachedLogisticsCompanyId is required for attachment \"logistics\"");
+        const company = await ctx.prisma.logisticsCompany.findUnique({ where: { id: body.attachedLogisticsCompanyId } });
+        if (!company) throw httpErrors.createError(404, "Logistics company not found");
+        attachmentData = { attachment: "logistics", attachedMerchantId: null, attachedLogisticsCompanyId: company.id };
+      } else {
+        attachmentData = { attachment: "freelance", attachedMerchantId: null, attachedLogisticsCompanyId: null };
+      }
+    }
+
     const rider = await ctx.prisma.rider.update({
       where: { id: req.params.id },
-      data: { platformStatus: body.platformStatus, active: body.active },
+      data: { platformStatus: body.platformStatus, active: body.active, ...attachmentData },
     });
     await ctx.audit.record(
       { id: req.user!.sub, role: "platform_owner" },
       "platform.rider.update",
       "rider",
       rider.id,
-      { platformStatus: body.platformStatus, active: body.active },
+      { platformStatus: body.platformStatus, active: body.active, ...attachmentData },
     );
-    return { ok: true, platformStatus: rider.platformStatus, active: rider.active };
+    return { ok: true, platformStatus: rider.platformStatus, active: rider.active, attachment: rider.attachment, attachedMerchantId: rider.attachedMerchantId, attachedLogisticsCompanyId: rider.attachedLogisticsCompanyId };
   });
 
   // ---------------------------------------------------------------------

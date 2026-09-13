@@ -46,11 +46,15 @@ const LoginBody = z.object({
    *  log in again with this to reach a second business. */
   businessId: z.string().optional(),
   /** Finalizes a workspace:"select" response (an account with more than
-   *  one merchant workspace and no staff/rider access at all) — the
-   *  frontend re-submits the exact same credentials plus the chosen id,
-   *  rather than a separate confirm endpoint. Ignored for an account that
-   *  has staff/rider access (that path never returns "select" today). */
+   *  one merchant/logistics workspace and no staff/rider access at all) —
+   *  the frontend re-submits the exact same credentials plus the chosen
+   *  id, rather than a separate confirm endpoint. Ignored for an account
+   *  that has staff/rider access (that path never returns "select" today).
+   *  `merchantId` is the original, kept for backward compatibility;
+   *  `workspaceId` is the generalized name (works for either type) — both
+   *  are checked against the combined list. */
   merchantId: z.string().optional(),
+  workspaceId: z.string().optional(),
 });
 
 interface StaffContext {
@@ -117,6 +121,16 @@ async function merchantWorkspacesFor(ctx: AppCtx, userId: string) {
   return rows.map((r) => ({ type: "merchant" as const, id: r.merchant.id, name: r.merchant.name }));
 }
 
+/** Same idea as merchantWorkspacesFor, for a logistics-company portal
+ *  workspace — see /api/auth/login and /api/auth/switch-to-logistics. */
+async function logisticsWorkspacesFor(ctx: AppCtx, userId: string) {
+  const rows = await ctx.prisma.logisticsCompanyStaff.findMany({
+    where: { userId, active: true, logisticsCompany: { active: true } },
+    include: { logisticsCompany: { select: { id: true, name: true } } },
+  });
+  return rows.map((r) => ({ type: "logistics" as const, id: r.logisticsCompany.id, name: r.logisticsCompany.name }));
+}
+
 export async function authRoutes(app: FastifyInstance, ctx: AppCtx): Promise<void> {
   app.post("/api/auth/login", async (req, reply) => {
     const body = LoginBody.parse(req.body);
@@ -144,14 +158,16 @@ export async function authRoutes(app: FastifyInstance, ctx: AppCtx): Promise<voi
     }
     // One shared sign-in for everyone (spec: "no separate rider, merchant,
     // logistics, or admin login pages") — the same credentials are checked
-    // against staff/rider access first, then merchant-portal access,
-    // rather than the caller having to know in advance which kind of
-    // account this is or visit a different page for each.
+    // against staff/rider access first, then merchant/logistics-portal
+    // access, rather than the caller having to know in advance which kind
+    // of account this is or visit a different page for each.
     const staffContext = await resolveStaffContext(ctx, user, body.businessId);
     const merchantWorkspaces = await merchantWorkspacesFor(ctx, user.id);
+    const logisticsWorkspaces = await logisticsWorkspacesFor(ctx, user.id);
+    const otherWorkspaces = [...merchantWorkspaces, ...logisticsWorkspaces];
 
     if (!staffContext) {
-      if (merchantWorkspaces.length === 0) {
+      if (otherWorkspaces.length === 0) {
         // Genuinely no accessible workspace — a clear, honest explanation,
         // never a silent or generic failure (spec: "if they genuinely have
         // no membership, give a clear explanation and no unauthorized access").
@@ -160,13 +176,19 @@ export async function authRoutes(app: FastifyInstance, ctx: AppCtx): Promise<voi
           "This account isn't connected to any business yet. Ask an admin to add you, or check for an invite.",
         );
       }
-      const chosen = body.merchantId ? merchantWorkspaces.find((w) => w.id === body.merchantId) : undefined;
-      if (merchantWorkspaces.length > 1 && !chosen) {
-        // More than one merchant workspace and no staff access at all —
-        // needs an explicit choice, no token issued yet.
-        return { workspace: "select" as const, options: merchantWorkspaces };
+      const requestedId = body.workspaceId ?? body.merchantId;
+      const chosen = requestedId ? otherWorkspaces.find((w) => w.id === requestedId) : undefined;
+      if (otherWorkspaces.length > 1 && !chosen) {
+        // More than one merchant/logistics workspace and no staff access at
+        // all — needs an explicit choice, no token issued yet.
+        return { workspace: "select" as const, options: otherWorkspaces };
       }
-      const only = chosen ?? merchantWorkspaces[0]!;
+      const only = chosen ?? otherWorkspaces[0]!;
+      if (only.type === "logistics") {
+        const token = await ctx.jwt.issueLogisticsPortal(user.id, only.id);
+        await ctx.audit.record({ id: user.id, role: "logistics" }, "auth.login", "user", user.id);
+        return { workspace: "logistics" as const, token, logisticsCompany: { id: only.id, name: only.name } };
+      }
       const token = await ctx.jwt.issueMerchantPortal(user.id, only.id);
       await ctx.audit.record({ id: user.id, role: "merchant" }, "auth.login", "user", user.id);
       return { workspace: "merchant" as const, token, merchant: { id: only.id, name: only.name } };
@@ -190,9 +212,9 @@ export async function authRoutes(app: FastifyInstance, ctx: AppCtx): Promise<voi
       memberships: staffContext.memberships,
       accessToken: tokenPair.access,
       // Surfaced so the app can offer "Switch workspace" without a second
-      // login — see /api/auth/switch-to-merchant. Empty for the common
-      // single-workspace case.
-      otherWorkspaces: merchantWorkspaces,
+      // login — see /api/auth/switch-to-merchant and switch-to-logistics.
+      // Empty for the common single-workspace case.
+      otherWorkspaces,
     };
   });
 
@@ -208,6 +230,18 @@ export async function authRoutes(app: FastifyInstance, ctx: AppCtx): Promise<voi
     const token = await ctx.jwt.issueMerchantPortal(req.user!.sub, target.id);
     await ctx.audit.record({ id: req.user!.sub, role: req.user!.role }, "auth.switch_workspace", "merchant", target.id);
     return { token, merchant: { id: target.id, name: target.name } };
+  });
+
+  // Same as switch-to-merchant, for a logistics-company workspace.
+  app.post("/api/auth/switch-to-logistics", { preHandler: ctx.requireAuth }, async (req) => {
+    const body = z.object({ logisticsCompanyId: z.string().optional() }).parse(req.body ?? {});
+    const workspaces = await logisticsWorkspacesFor(ctx, req.user!.sub);
+    if (workspaces.length === 0) throw httpErrors.createError(403, "This account has no logistics company access to switch to.");
+    const target = body.logisticsCompanyId ? workspaces.find((w) => w.id === body.logisticsCompanyId) : workspaces[0];
+    if (!target) throw httpErrors.createError(404, "Logistics company workspace not found");
+    const token = await ctx.jwt.issueLogisticsPortal(req.user!.sub, target.id);
+    await ctx.audit.record({ id: req.user!.sub, role: req.user!.role }, "auth.switch_workspace", "logistics_company", target.id);
+    return { token, logisticsCompany: { id: target.id, name: target.name } };
   });
 
   app.post("/api/auth/refresh", async (req, reply) => {
@@ -274,7 +308,7 @@ export async function authRoutes(app: FastifyInstance, ctx: AppCtx): Promise<voi
     // Kept available for the whole session (not just the login instant) so
     // a "Switch workspace" control can show up anywhere in the app, not
     // only right after signing in.
-    const otherWorkspaces = await merchantWorkspacesFor(ctx, user.id);
+    const otherWorkspaces = [...(await merchantWorkspacesFor(ctx, user.id)), ...(await logisticsWorkspacesFor(ctx, user.id))];
     return { user: toUserDto(user), rider, otherWorkspaces };
   });
 
@@ -412,6 +446,9 @@ export function registerAuthHook(app: FastifyInstance, ctx: AppCtx): void {
     // the handler (requireMerchantAuth in merchant-portal.ts), same
     // "self-gated, not the staff hook" pattern as /api/customer-account/.
     if (url.startsWith("/api/merchant-portal/")) return true;
+    // Logistics/bearer-company portal — same "self-gated" pattern as the
+    // merchant portal above (requireLogisticsAuth in logistics-portal.ts).
+    if (url.startsWith("/api/logistics-portal/")) return true;
     // Invite acceptance — the invite token itself is the credential, same
     // "self-gated, not the staff hook" pattern as the merchant portal.
     if (url.startsWith("/api/invites/check/") && method === "GET") return true;
