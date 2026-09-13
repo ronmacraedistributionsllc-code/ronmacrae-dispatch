@@ -4,21 +4,27 @@ import { ApiError, apiFetch } from "../lib/api.js";
 
 /**
  * Public rider application — no login, no app (spec: "no way for a rider
- * to sign up which it should"). Never goes straight to active: a genuinely
- * new applicant lands as a `pending` RiderMembership (see
- * RidersService.selfSignup), reviewed from the admin's Team screen before
- * they can accept any job.
+ * to sign up which it should"). Two real steps, not just a form:
+ *   1. Submit details -> lands as a `pending` RiderMembership.
+ *   2. Prove ownership of the email just given (a code, valid 10 minutes)
+ *      before the account can ever sign in at all — see auth.ts's login
+ *      route, which blocks a rider with an unverified email outright.
+ * Verifying the email is separate from a dispatcher approving the
+ * application (Team screen) — both have to happen, in either order.
  */
 export function JoinRider(): React.JSX.Element {
+  const [step, setStep] = useState<"form" | "verify" | "done">("form");
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [email, setEmail] = useState("");
   const [vehicle, setVehicle] = useState<"motorcycle" | "car">("motorcycle");
   const [plate, setPlate] = useState("");
   const [password, setPassword] = useState("");
+  const [code, setCode] = useState("");
+  const [status, setStatus] = useState<"pending" | "active">("pending");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [result, setResult] = useState<{ status: "pending" | "active" } | null>(null);
+  const [resent, setResent] = useState(false);
 
   const canSubmit = name.trim().length > 0 && phone.replace(/[^\d]/g, "").length >= 7 && /\S+@\S+\.\S+/.test(email) && password.length >= 8;
 
@@ -31,7 +37,8 @@ export function JoinRider(): React.JSX.Element {
         method: "POST",
         body: JSON.stringify({ name, phone, email, vehicle, plate: plate || undefined, password }),
       });
-      setResult(res);
+      setStatus(res.status);
+      setStep("verify");
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Could not submit your application");
     } finally {
@@ -39,18 +46,66 @@ export function JoinRider(): React.JSX.Element {
     }
   }
 
-  if (result) {
+  async function verify(e: React.FormEvent) {
+    e.preventDefault();
+    setError(null);
+    setBusy(true);
+    try {
+      await apiFetch(API.riders.signupVerify, { method: "POST", body: JSON.stringify({ email, code: code.trim() }) });
+      setStep("done");
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Could not verify that code");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function resend() {
+    setError(null);
+    try {
+      await apiFetch(API.riders.signupResend, { method: "POST", body: JSON.stringify({ email }) });
+      setResent(true);
+      setTimeout(() => setResent(false), 4000);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Could not resend the code");
+    }
+  }
+
+  if (step === "done") {
     return (
       <div className="flex min-h-dvh items-center justify-center bg-zinc-950 p-4">
         <div className="card w-full max-w-sm space-y-2 text-center">
-          <h1 className="text-lg font-bold text-emerald-400">Application received</h1>
+          <h1 className="text-lg font-bold text-emerald-400">Email verified</h1>
           <p className="text-sm text-zinc-300">
-            {result.status === "active"
+            {status === "active"
               ? "You're already approved and ready to go — sign in with your email and password."
-              : "A dispatcher will review your application shortly. You'll be able to sign in with your email and password once approved."}
+              : "A dispatcher will review your application shortly. You'll be able to sign in once approved."}
           </p>
           <a href="/" className="btn-accent mt-2 inline-block">Back to sign-in</a>
         </div>
+      </div>
+    );
+  }
+
+  if (step === "verify") {
+    return (
+      <div className="flex min-h-dvh items-center justify-center bg-zinc-950 p-4">
+        <form onSubmit={(e) => void verify(e)} className="card w-full max-w-sm space-y-4">
+          <div className="text-center">
+            <h1 className="text-lg font-bold text-brand-accent">Check your email</h1>
+            <p className="text-sm text-zinc-400">We sent a code to {email}. It expires in 10 minutes.</p>
+          </div>
+          <div>
+            <label className="label" htmlFor="jr-code">Verification code</label>
+            <input id="jr-code" className="input" inputMode="numeric" autoFocus required value={code} onChange={(e) => setCode(e.target.value)} />
+          </div>
+          {error ? <p className="text-sm text-red-400">{error}</p> : null}
+          <button className="btn-accent w-full" disabled={busy || code.trim().length < 4}>{busy ? "Verifying…" : "Verify"}</button>
+          <p className="text-center text-xs text-zinc-500">
+            Didn't get it?{" "}
+            <button type="button" className="underline" onClick={() => void resend()}>{resent ? "Sent!" : "Resend code"}</button>
+          </p>
+        </form>
       </div>
     );
   }

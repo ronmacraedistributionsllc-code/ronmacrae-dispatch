@@ -48,7 +48,12 @@ async function requireIdentityIdForPhone(ctx: AppCtx, phone: string): Promise<st
   return identity.id;
 }
 
-async function sendEmailCode(ctx: AppCtx, email: string, purpose: "verify_email" | "password_reset", subject: string, bodyFor: (code: string) => string): Promise<void> {
+/** Reused outside this module too (riders.ts's public self-signup) — the
+ *  backing table (CustomerEmailCode) is generic (email + purpose + code),
+ *  not actually tied to CustomerAccount by any foreign key, despite its
+ *  name. `purpose` is a free string on purpose (heh) — add a new one per
+ *  use case rather than widening this union forever. */
+export async function sendEmailCode(ctx: AppCtx, email: string, purpose: string, subject: string, bodyFor: (code: string) => string): Promise<void> {
   const recent = await ctx.prisma.customerEmailCode.findFirst({ where: { email, purpose }, orderBy: { createdAt: "desc" } });
   if (recent && Date.now() - recent.createdAt.getTime() < REQUEST_COOLDOWN_MS) {
     throw httpErrors.createError(429, "Please wait a moment before requesting another code.");
@@ -59,7 +64,7 @@ async function sendEmailCode(ctx: AppCtx, email: string, purpose: "verify_email"
   await ctx.email.send({ to: email, subject, text: bodyFor(code) });
 }
 
-async function consumeEmailCode(ctx: AppCtx, email: string, purpose: "verify_email" | "password_reset", code: string): Promise<void> {
+export async function consumeEmailCode(ctx: AppCtx, email: string, purpose: string, code: string): Promise<void> {
   const row = await ctx.prisma.customerEmailCode.findFirst({ where: { email, purpose, consumedAt: null, expiresAt: { gt: new Date() } }, orderBy: { createdAt: "desc" } });
   if (!row) throw httpErrors.createError(400, "That code has expired or wasn't found — request a new one.");
   if (row.attempts >= MAX_VERIFY_ATTEMPTS) {

@@ -94,6 +94,13 @@ export async function authRoutes(app: FastifyInstance, ctx: AppCtx): Promise<voi
       throw httpErrors.createError(401, "Invalid credentials");
     }
     if (!user.active) throw httpErrors.createError(403, "Account disabled");
+    // Only a rider's own public self-signup (riders.ts) ever leaves email
+    // unverified — an admin/dispatcher directly creating any login (staff
+    // or rider) is itself the vouching, and sets emailVerifiedAt right
+    // away, so this never blocks those.
+    if (user.role === "rider" && user.email && !user.emailVerifiedAt) {
+      throw httpErrors.createError(403, "Please verify your email before signing in — check your inbox for the code.");
+    }
     if (user.totpEnabled && user.totpSecret) {
       if (!body.totpCode || !verifyTotp(user.totpSecret, body.totpCode)) {
         throw httpErrors.createError(401, "TOTP code required");
@@ -311,6 +318,7 @@ export function registerAuthHook(app: FastifyInstance, ctx: AppCtx): void {
     if (url.startsWith("/api/merchants/public/") && method === "GET") return true;
     // Public rider application — no login (this IS how a rider gets one).
     if (url === "/api/rider-signup" && method === "POST") return true;
+    if ((url === "/api/rider-signup/verify" || url === "/api/rider-signup/resend") && method === "POST") return true;
     // Twilio's own delivery-status webhook — unauthenticated by nature (Twilio
     // isn't a logged-in user), verified instead by its own signature header
     // when TWILIO_AUTH_TOKEN is configured (see notify.ts).

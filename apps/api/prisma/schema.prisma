@@ -123,6 +123,13 @@ model RiderMembership {
 model User {
   id           String   @id @default(cuid())
   email        String?  @unique
+  /** Set once this user has proven ownership of `email` via a code (see
+   *  CustomerEmailCode, reused generically for this — not customer-only
+   *  despite the model's name). Only enforced today for a rider's own
+   *  public self-signup (riders.ts) — an admin directly creating a staff
+   *  or rider login is itself the vouching, so that path sets this
+   *  immediately instead of making them go through a code. */
+  emailVerifiedAt DateTime?
   phone        String?  @unique
   passwordHash String
   name         String

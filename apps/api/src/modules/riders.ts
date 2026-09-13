@@ -4,6 +4,9 @@ import { httpErrors } from "@fastify/sensible";
 import type { AppCtx } from "../ctx.js";
 import { normalizePhone } from "./auth.js";
 import { DEFAULT_PUBLIC_BUSINESS_SLUG } from "./order.js";
+import { sendEmailCode, consumeEmailCode } from "./customer-account.js";
+
+const RIDER_EMAIL_VERIFY_PURPOSE = "verify_rider_email";
 import { pointFromJson, pointToJson, moneyField } from "../geo-mappers.js";
 import { minorOf } from "@ronmacrae/money";
 import { hashPassword } from "../lib/password.js";
@@ -117,6 +120,15 @@ const ApproveBody = z.object({
   approve: z.boolean(),
 });
 
+const VerifyBody = z.object({
+  email: z.string().email().max(160),
+  code: z.string().min(4).max(10),
+});
+
+const ResendBody = z.object({
+  email: z.string().email().max(160),
+});
+
 export class RidersService {
   constructor(private readonly app: AppCtx) {}
 
@@ -191,10 +203,12 @@ export class RidersService {
           throw httpErrors.createError(409, "This email is already associated with a different account");
         }
       }
+      // An admin/dispatcher setting this email is itself the vouching — no
+      // code-verification step, unlike the public self-signup path below.
       const user = await this.app.prisma.user.upsert({
         where: { phone },
-        create: { phone, email, name: input.name, role: "rider", passwordHash: hashPassword(input.password) },
-        update: { name: input.name, ...(email ? { email } : {}) },
+        create: { phone, email, emailVerifiedAt: email ? new Date() : null, name: input.name, role: "rider", passwordHash: hashPassword(input.password) },
+        update: { name: input.name, ...(email ? { email, emailVerifiedAt: new Date() } : {}) },
       });
       userId = user.id;
     }
@@ -283,7 +297,24 @@ export class RidersService {
       create: { riderId: rider.id, businessId, status: "pending" },
       update: { status: "pending" },
     });
+    await sendEmailCode(this.app, input.email, RIDER_EMAIL_VERIFY_PURPOSE, "Verify your email", (code) => `Your Ronmacrae rider sign-up code is ${code}. It expires in 10 minutes.`);
     return { status: "pending", riderId: rider.id };
+  }
+
+  /** Resend the verification code — same cooldown as sendEmailCode's own
+   *  guard, so this is safe to expose without extra rate-limiting logic
+   *  here specifically. */
+  async resendVerification(email: string): Promise<void> {
+    await sendEmailCode(this.app, email, RIDER_EMAIL_VERIFY_PURPOSE, "Verify your email", (code) => `Your Ronmacrae rider sign-up code is ${code}. It expires in 10 minutes.`);
+  }
+
+  /** Proves ownership of the email given at signup — required before this
+   *  rider's account can log in (see auth.ts's login route). Does not by
+   *  itself approve the membership; that's still a separate admin
+   *  decision (decideMembership above). */
+  async verifyEmail(email: string, code: string): Promise<void> {
+    await consumeEmailCode(this.app, email, RIDER_EMAIL_VERIFY_PURPOSE, code);
+    await this.app.prisma.user.updateMany({ where: { email, role: "rider" }, data: { emailVerifiedAt: new Date() } });
   }
 
   /** Pending applications waiting on this business's own approval — not
@@ -519,6 +550,26 @@ export async function riderRoutes(app: FastifyInstance, ctx: AppCtx): Promise<vo
       const result = await svc.selfSignup(business.id, body);
       await ctx.audit.record({ id: null, role: "anonymous" }, "rider.signup", "rider", result.riderId, { status: result.status });
       return result;
+    },
+  );
+
+  app.post(
+    "/api/rider-signup/verify",
+    { config: { rateLimit: { max: 20, timeWindow: "1 minute" } } },
+    async (req) => {
+      const body = VerifyBody.parse(req.body);
+      await svc.verifyEmail(body.email, body.code);
+      return { ok: true };
+    },
+  );
+
+  app.post(
+    "/api/rider-signup/resend",
+    { config: { rateLimit: { max: 5, timeWindow: "1 minute" } } },
+    async (req) => {
+      const body = ResendBody.parse(req.body);
+      await svc.resendVerification(body.email);
+      return { ok: true };
     },
   );
 

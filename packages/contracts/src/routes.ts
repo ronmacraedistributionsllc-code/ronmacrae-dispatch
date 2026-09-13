@@ -56,6 +56,8 @@ export const API = {
     status: (id: string) => `/api/riders/${id}/status`,
     /** public — no login required */
     signup: "/api/rider-signup",
+    signupVerify: "/api/rider-signup/verify",
+    signupResend: "/api/rider-signup/resend",
     pending: "/api/riders/pending",
     decide: (id: string) => `/api/riders/${id}/decide`,
     locations: "/api/rider-locations",
