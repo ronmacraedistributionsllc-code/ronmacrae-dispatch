@@ -20,7 +20,13 @@ const TABS = [
   { to: "/reports", label: "Reports", icon: "📊" },
   { to: "/trash", label: "Trash", icon: "🗑️" },
   { to: "/notifications", label: "Notifications", icon: "🔔" },
+  { to: "/platform-admin", label: "Platform Admin", icon: "🛡️" },
 ];
+/** Never shown to anyone without platformRole: "owner" — filtered
+ *  alongside STAFF_ONLY_TABS/ADMIN_ACCOUNTANT_ONLY_TABS below, not just
+ *  gated at the route (app.tsx's OwnerOnly) — a non-owner should never
+ *  even see the tab exists. */
+const OWNER_ONLY_TABS = new Set(["/platform-admin"]);
 const STAFF_ONLY_TABS = new Set(["/ops", "/jobs", "/jobs/new", "/merchants", "/team", "/settings", "/map", "/zones", "/cod", "/settlements", "/reports", "/trash"]);
 /** Owner/accountant only — matches the backend's own gating on /api/reports/*. */
 const ADMIN_ACCOUNTANT_ONLY_TABS = new Set(["/reports"]);
@@ -63,6 +69,7 @@ export function Layout({ children }: { children: React.ReactNode }): React.JSX.E
   const tabs = TABS.filter((t) => {
     if (user?.role === "rider" && STAFF_ONLY_TABS.has(t.to)) return false;
     if (ADMIN_ACCOUNTANT_ONLY_TABS.has(t.to) && user?.role !== "admin" && user?.role !== "accountant") return false;
+    if (OWNER_ONLY_TABS.has(t.to) && user?.platformRole !== "owner") return false;
     return true;
   });
   const primaryMobileTabs = tabs.slice(0, MAX_PRIMARY_MOBILE_TABS);

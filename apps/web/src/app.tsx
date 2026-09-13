@@ -15,6 +15,7 @@ import { PublicOrder } from "./pages/order.js";
 import { JoinRider } from "./pages/join-rider.js";
 import { MerchantPortal } from "./pages/merchant-portal.js";
 import { AcceptInvite } from "./pages/accept-invite.js";
+import { PlatformAdmin } from "./pages/platform-admin.js";
 import { Merchants } from "./pages/merchants.js";
 import { Team } from "./pages/team.js";
 import { Settings } from "./pages/settings.js";
@@ -39,6 +40,22 @@ function Protected({ children }: { children: React.ReactNode }): React.ReactNode
   if (loading) return <Spinner label="Loading session…" />;
   if (!user) return <Navigate to="/login" replace />;
   return <Layout>{children}</Layout>;
+}
+
+/** Platform-wide authority (spec: the platform-admin console), distinct
+ *  from — and not implied by — any business-scoped staff role. Nested
+ *  inside <Protected>, which already confirmed a real, active session; this
+ *  only adds the extra owner check on top of it. */
+function OwnerOnly({ children }: { children: React.ReactNode }): React.ReactNode {
+  const { user } = useAuth();
+  if (user?.platformRole !== "owner") {
+    return (
+      <div className="card mx-auto mt-8 max-w-sm text-center text-sm text-zinc-400">
+        This area is platform-owner only.
+      </div>
+    );
+  }
+  return <>{children}</>;
 }
 
 export default function App(): React.JSX.Element {
@@ -160,6 +177,16 @@ export default function App(): React.JSX.Element {
                 element={
                   <Protected>
                     <Settings />
+                  </Protected>
+                }
+              />
+              <Route
+                path="/platform-admin"
+                element={
+                  <Protected>
+                    <OwnerOnly>
+                      <PlatformAdmin />
+                    </OwnerOnly>
                   </Protected>
                 }
               />

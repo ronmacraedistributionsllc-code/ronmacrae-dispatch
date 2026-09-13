@@ -58,6 +58,10 @@ export interface UserDto {
   totpEnabled: boolean;
   lastLoginAt: string | null;
   createdAt: string;
+  /** Platform-wide authority (owner.ts, platform-admin.ts) — independent
+   *  of, and not implied by, `role`. Absent/null for every ordinary
+   *  staff/rider account. */
+  platformRole: "owner" | null;
 }
 
 export interface RiderDto {

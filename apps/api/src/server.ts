@@ -41,6 +41,7 @@ import { merchantNotifyRoutes } from "./modules/merchant-notify.js";
 import { dispatchNotifyRoutes } from "./modules/dispatch-notify.js";
 import { merchantPortalRoutes } from "./modules/merchant-portal.js";
 import { inviteRoutes } from "./modules/invites.js";
+import { platformAdminRoutes } from "./modules/platform-admin.js";
 
 const SERVICE = "ronmacrae-dispatch-api";
 
@@ -142,6 +143,7 @@ export async function createApp(ctx: AppCtx): Promise<FastifyInstance> {
   await dispatchNotifyRoutes(app, ctx);
   await merchantPortalRoutes(app, ctx);
   await inviteRoutes(app, ctx);
+  await platformAdminRoutes(app, ctx);
 
   app.setErrorHandler((err, req, reply) => {
     const e = err as FastifyError;

@@ -19,6 +19,7 @@ export function toUserDto(u: {
   totpEnabled: boolean;
   lastLoginAt: Date | null;
   createdAt: Date;
+  platformRole?: string | null;
 }): UserDto {
   return {
     id: u.id,
@@ -30,6 +31,7 @@ export function toUserDto(u: {
     totpEnabled: u.totpEnabled,
     lastLoginAt: u.lastLoginAt?.toISOString() ?? null,
     createdAt: u.createdAt.toISOString(),
+    platformRole: u.platformRole === "owner" ? "owner" : null,
   };
 }
 

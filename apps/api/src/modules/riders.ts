@@ -212,29 +212,37 @@ export class RidersService {
       });
       userId = user.id;
     }
-    const row = await this.app.prisma.$transaction(async (tx) => {
-      const rider = await tx.rider.create({
-        data: {
-          userId,
-          name: input.name,
-          phone,
-          vehicle: input.vehicle as VehicleType,
-          plate: input.plate || null,
-          homeZoneId: input.homeZoneId || null,
-          basePoint: pointToJson(input.basePoint ?? null) ?? Prisma.JsonNull,
-          dailyCapacity: input.dailyCapacity,
-          payRate: input.payRate != null ? minorOf(input.payRate, currency) : null,
-          status: "available",
-          // Platform approval gates a rider being *shared* onto a second
-          // business later (see the `existing` branch above) — it does not
-          // block the one business that's directly onboarding them right
-          // now, who is themselves vouching for this rider by adding them.
-          platformStatus: "pending",
-        },
-        include: { homeZone: { select: { name: true } } },
-      });
-      await tx.riderMembership.create({ data: { riderId: rider.id, businessId, status: "active", approvedAt: new Date() } });
-      return rider;
+    // Deliberately not wrapped in a $transaction with the membership
+    // create below — same reasoning as selfSignup()'s own comment: an
+    // upsert here is idempotent (safe to re-enter if the process dies
+    // between the two calls) and avoids relying on write visibility
+    // between the two statements, which the test harness's own
+    // rider.create() hook (a second, independent membership insert) isn't
+    // guaranteed to see consistently from inside an open transaction.
+    const row = await this.app.prisma.rider.create({
+      data: {
+        userId,
+        name: input.name,
+        phone,
+        vehicle: input.vehicle as VehicleType,
+        plate: input.plate || null,
+        homeZoneId: input.homeZoneId || null,
+        basePoint: pointToJson(input.basePoint ?? null) ?? Prisma.JsonNull,
+        dailyCapacity: input.dailyCapacity,
+        payRate: input.payRate != null ? minorOf(input.payRate, currency) : null,
+        status: "available",
+        // Platform approval gates a rider being *shared* onto a second
+        // business later (see the `existing` branch above) — it does not
+        // block the one business that's directly onboarding them right
+        // now, who is themselves vouching for this rider by adding them.
+        platformStatus: "pending",
+      },
+      include: { homeZone: { select: { name: true } } },
+    });
+    await this.app.prisma.riderMembership.upsert({
+      where: { riderId_businessId: { riderId: row.id, businessId } },
+      create: { riderId: row.id, businessId, status: "active", approvedAt: new Date() },
+      update: { status: "active", approvedAt: new Date() },
     });
     return withCurrentJob(this.app, row);
   }

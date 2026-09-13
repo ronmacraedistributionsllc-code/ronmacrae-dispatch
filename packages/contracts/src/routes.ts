@@ -314,6 +314,23 @@ export const API = {
     accept: "/api/invites/accept",
   },
 
+  /** Platform-owner-only console (spec: "search, inspect, approve,
+   *  block, disable, archive, reactivate, and manage every registered
+   *  business and person") — see platform-admin.ts. Gated by
+   *  `platformRole: "owner"`, not a business-scoped staff role. */
+  platform: {
+    businesses: "/api/platform/businesses",
+    updateBusiness: (id: string) => `/api/platform/businesses/${id}`,
+    merchants: "/api/platform/merchants",
+    updateMerchant: (id: string) => `/api/platform/merchants/${id}`,
+    riders: "/api/platform/riders",
+    rider: (id: string) => `/api/platform/riders/${id}`,
+    updateRider: (id: string) => `/api/platform/riders/${id}`,
+    staff: "/api/platform/staff",
+    updateUser: (id: string) => `/api/platform/users/${id}`,
+    audit: "/api/platform/audit",
+  },
+
   /** bearer-scoped */
   bearer: {
     me: "/api/bearer/me",
