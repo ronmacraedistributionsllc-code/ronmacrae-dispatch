@@ -5,10 +5,11 @@ import type { AppCtx } from "../ctx.js";
 import { verifyPassword } from "../lib/password.js";
 import { normalizeEmail } from "../lib/email.js";
 import { jobInclude, type JobRow } from "./jobs/dto.js";
-import { money } from "@ronmacrae/money";
+import { money, minorOf } from "@ronmacrae/money";
 import { moneyField } from "../geo-mappers.js";
 import type { PaymentMethod } from "@ronmacrae/contracts";
 import { PAYMENT_METHOD_LABELS } from "@ronmacrae/contracts";
+import { CreateProduct, productToDto } from "./merchants.js";
 
 /**
  * A merchant's own login (spec: "a merchant should have a login where
@@ -122,5 +123,90 @@ export async function merchantPortalRoutes(app: FastifyInstance, ctx: AppCtx): P
       include: jobInclude,
     });
     return { orders: jobs.map(toMerchantOrderDto) };
+  });
+
+  // -----------------------------------------------------------------
+  // Catalog — same validation/shape as the staff-side equivalent in
+  // merchants.ts (CreateProduct, productToDto), reused rather than
+  // duplicated; the only real difference is authorization (a merchant
+  // can only ever touch its own merchantId, taken from its own token,
+  // never a client-supplied one).
+  // -----------------------------------------------------------------
+  app.get("/api/merchant-portal/products", async (req) => {
+    const auth = await requireMerchantAuth(ctx, req);
+    const rows = await ctx.prisma.product.findMany({ where: { merchantId: auth.merchantId }, include: { variants: true }, orderBy: { name: "asc" } });
+    return { products: rows.map(productToDto) };
+  });
+
+  app.post("/api/merchant-portal/products", async (req) => {
+    const auth = await requireMerchantAuth(ctx, req);
+    const body = CreateProduct.parse(req.body);
+    const cur = ctx.config.OPERATIONAL_CURRENCY;
+    const product = await ctx.prisma.product.create({
+      data: {
+        merchantId: auth.merchantId,
+        name: body.name,
+        description: body.description || null,
+        sku: body.sku || null,
+        photoUrl: body.photoUrl || null,
+        category: body.category || null,
+        price: minorOf(body.price, cur),
+        currency: cur,
+        active: body.active,
+        variants: {
+          create: body.variants.map((v) => ({
+            size: v.size || null,
+            color: v.color || null,
+            sku: v.sku || null,
+            priceOverride: v.priceOverride != null ? minorOf(v.priceOverride, cur) : null,
+            inventoryQty: v.inventoryQty ?? null,
+          })),
+        },
+      },
+      include: { variants: true },
+    });
+    await ctx.audit.record({ id: auth.userId, role: "merchant" }, "product.create", "product", product.id, { merchantId: auth.merchantId, name: product.name });
+    return { product: productToDto(product) };
+  });
+
+  app.patch<{ Params: { id: string } }>("/api/merchant-portal/products/:id", async (req) => {
+    const auth = await requireMerchantAuth(ctx, req);
+    const existing = await ctx.prisma.product.findFirst({ where: { id: req.params.id, merchantId: auth.merchantId } });
+    if (!existing) throw httpErrors.createError(404, "Product not found");
+    const body = CreateProduct.partial().parse(req.body);
+    const cur = ctx.config.OPERATIONAL_CURRENCY;
+    const product = await ctx.prisma.product.update({
+      where: { id: req.params.id },
+      data: {
+        name: body.name,
+        description: body.description === undefined ? undefined : body.description || null,
+        sku: body.sku === undefined ? undefined : body.sku || null,
+        photoUrl: body.photoUrl === undefined ? undefined : body.photoUrl || null,
+        category: body.category === undefined ? undefined : body.category || null,
+        price: body.price != null ? minorOf(body.price, cur) : undefined,
+        active: body.active,
+      },
+      include: { variants: true },
+    });
+    await ctx.audit.record({ id: auth.userId, role: "merchant" }, "product.update", "product", product.id);
+    return { product: productToDto(product) };
+  });
+
+  app.delete<{ Params: { id: string } }>("/api/merchant-portal/products/:id", async (req) => {
+    const auth = await requireMerchantAuth(ctx, req);
+    const existing = await ctx.prisma.product.findFirst({ where: { id: req.params.id, merchantId: auth.merchantId } });
+    if (!existing) throw httpErrors.createError(404, "Product not found");
+    // Same "deactivate, never hard-delete once ordered" rule as the
+    // staff-side endpoint — an order's JobItem keeps its own snapshot
+    // regardless, but the catalog itself should stay honest.
+    const used = await ctx.prisma.jobItem.count({ where: { productId: existing.id } });
+    if (used > 0) {
+      const product = await ctx.prisma.product.update({ where: { id: existing.id }, data: { active: false }, include: { variants: true } });
+      await ctx.audit.record({ id: auth.userId, role: "merchant" }, "product.deactivate", "product", product.id, { reason: `used on ${used} order(s)` });
+      return { product: productToDto(product), deactivatedInstead: true };
+    }
+    await ctx.prisma.product.delete({ where: { id: existing.id } });
+    await ctx.audit.record({ id: auth.userId, role: "merchant" }, "product.delete", "product", existing.id);
+    return { ok: true };
   });
 }

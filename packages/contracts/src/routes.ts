@@ -126,6 +126,10 @@ export const API = {
     login: "/api/merchant-portal/login",
     me: "/api/merchant-portal/me",
     orders: "/api/merchant-portal/orders",
+    products: "/api/merchant-portal/products",
+    createProduct: "/api/merchant-portal/products",
+    updateProduct: (id: string) => `/api/merchant-portal/products/${id}`,
+    deleteProduct: (id: string) => `/api/merchant-portal/products/${id}`,
   },
 
   products: {

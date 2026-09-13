@@ -118,4 +118,73 @@ describe("merchant portal", () => {
     });
     expect(res.statusCode).toBe(401);
   });
+
+  it("manages its own catalog, and can never touch another merchant's product", async () => {
+    const admin = await adminToken(harness);
+    const merchantA = await makeMerchant(harness, admin);
+    const merchantB = await makeMerchant(harness, admin);
+
+    async function portalToken(merchantId: string): Promise<string> {
+      const email = `owner-${uniq()}@vbr.example`;
+      await harness.app.inject({
+        method: "POST",
+        url: `/api/merchants/${merchantId}/staff`,
+        headers: { authorization: `Bearer ${admin}` },
+        payload: { email, password: "merchantpass1" },
+      });
+      const login = await harness.app.inject({ method: "POST", url: "/api/merchant-portal/login", payload: { email, password: "merchantpass1" } });
+      return (login.json() as { token: string }).token;
+    }
+    const tokenA = await portalToken(merchantA.id);
+    const tokenB = await portalToken(merchantB.id);
+
+    const create = await harness.app.inject({
+      method: "POST",
+      url: "/api/merchant-portal/products",
+      headers: { authorization: `Bearer ${tokenA}` },
+      payload: { name: "Black bomber jacket", price: 4500 },
+    });
+    expect(create.statusCode).toBe(200);
+    const { product } = create.json() as { product: { id: string; name: string } };
+
+    const listA = await harness.app.inject({ method: "GET", url: "/api/merchant-portal/products", headers: { authorization: `Bearer ${tokenA}` } });
+    expect((listA.json() as { products: { id: string }[] }).products.some((p) => p.id === product.id)).toBe(true);
+
+    // Merchant B's own (empty) catalog never shows merchant A's product.
+    const listB = await harness.app.inject({ method: "GET", url: "/api/merchant-portal/products", headers: { authorization: `Bearer ${tokenB}` } });
+    expect((listB.json() as { products: { id: string }[] }).products.some((p) => p.id === product.id)).toBe(false);
+
+    // Merchant B cannot edit or delete merchant A's product — 404, not 403,
+    // same "don't confirm it exists" discipline as everywhere else.
+    const crossEdit = await harness.app.inject({
+      method: "PATCH",
+      url: `/api/merchant-portal/products/${product.id}`,
+      headers: { authorization: `Bearer ${tokenB}` },
+      payload: { name: "Hijacked name" },
+    });
+    expect(crossEdit.statusCode).toBe(404);
+    const crossDelete = await harness.app.inject({
+      method: "DELETE",
+      url: `/api/merchant-portal/products/${product.id}`,
+      headers: { authorization: `Bearer ${tokenB}` },
+    });
+    expect(crossDelete.statusCode).toBe(404);
+
+    // Merchant A can edit its own product.
+    const edit = await harness.app.inject({
+      method: "PATCH",
+      url: `/api/merchant-portal/products/${product.id}`,
+      headers: { authorization: `Bearer ${tokenA}` },
+      payload: { price: 5000 },
+    });
+    expect(edit.statusCode).toBe(200);
+    expect((edit.json() as { product: { price: { amount: number } } }).product.price.amount).toBe(5000);
+
+    const del = await harness.app.inject({
+      method: "DELETE",
+      url: `/api/merchant-portal/products/${product.id}`,
+      headers: { authorization: `Bearer ${tokenA}` },
+    });
+    expect(del.statusCode).toBe(200);
+  });
 });

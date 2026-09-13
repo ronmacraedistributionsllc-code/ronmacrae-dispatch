@@ -39,6 +39,31 @@ const MerchantStaffBody = z.object({
   password: z.string().min(8).max(128),
 });
 
+/** Exported for reuse by merchant-portal.ts's own catalog routes — same
+ *  validation, different caller-supplied authorization (staff: business
+ *  ownership; portal: the merchant on the caller's own token). */
+export const CreateProduct = z.object({
+  name: z.string().min(1).max(160),
+  description: z.string().max(1000).optional().or(z.literal("")).nullable(),
+  sku: z.string().max(60).optional().or(z.literal("")).nullable(),
+  photoUrl: z.string().url().max(500).optional().or(z.literal("")).nullable(),
+  category: z.string().max(80).optional().or(z.literal("")).nullable(),
+  price: z.number().min(0).max(10_000_000),
+  active: z.boolean().default(true),
+  variants: z
+    .array(
+      z.object({
+        size: z.string().max(40).optional().or(z.literal("")).nullable(),
+        color: z.string().max(40).optional().or(z.literal("")).nullable(),
+        sku: z.string().max(60).optional().or(z.literal("")).nullable(),
+        priceOverride: z.number().min(0).max(10_000_000).optional().nullable(),
+        inventoryQty: z.number().int().min(0).optional().nullable(),
+      }),
+    )
+    .max(50)
+    .default([]),
+});
+
 function slugify(name: string): string {
   return name
     .toLowerCase()
@@ -281,30 +306,9 @@ export async function merchantRoutes(app: FastifyInstance, ctx: AppCtx): Promise
 
   // ---------------------------------------------------------------------
   // Catalog (optional — spec section 7: "if a merchant does not use a full
-  // product catalog yet, allow manual/free-text item entry"). Staff-only.
+  // product catalog yet, allow manual/free-text item entry"). Staff-only —
+  // see merchant-portal.ts for the merchant's own equivalent of these.
   // ---------------------------------------------------------------------
-  const CreateProduct = z.object({
-    name: z.string().min(1).max(160),
-    description: z.string().max(1000).optional().or(z.literal("")).nullable(),
-    sku: z.string().max(60).optional().or(z.literal("")).nullable(),
-    photoUrl: z.string().url().max(500).optional().or(z.literal("")).nullable(),
-    category: z.string().max(80).optional().or(z.literal("")).nullable(),
-    price: z.number().min(0).max(10_000_000),
-    active: z.boolean().default(true),
-    variants: z
-      .array(
-        z.object({
-          size: z.string().max(40).optional().or(z.literal("")).nullable(),
-          color: z.string().max(40).optional().or(z.literal("")).nullable(),
-          sku: z.string().max(60).optional().or(z.literal("")).nullable(),
-          priceOverride: z.number().min(0).max(10_000_000).optional().nullable(),
-          inventoryQty: z.number().int().min(0).optional().nullable(),
-        }),
-      )
-      .max(50)
-      .default([]),
-  });
-
   app.get<{ Params: { merchantId: string } }>("/api/merchants/:merchantId/products", { preHandler: staff }, async (req) => {
     const merchant = await ctx.prisma.merchant.findFirst({ where: { id: req.params.merchantId, businessId: req.user!.businessId! } });
     if (!merchant) throw httpErrors.createError(404, "Merchant not found");

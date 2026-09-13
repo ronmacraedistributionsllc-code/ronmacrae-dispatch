@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useState, type FormEvent } from "react";
 import { API } from "@ronmacrae/contracts";
+import type { ProductDto } from "@ronmacrae/contracts";
 import { formatMoney } from "../lib/api.js";
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? "/api";
@@ -68,6 +69,7 @@ export function MerchantPortal(): React.JSX.Element {
   const [busy, setBusy] = useState(false);
   const [merchantName, setMerchantName] = useState<string | null>(null);
   const [orders, setOrders] = useState<PortalOrder[] | null>(null);
+  const [tab, setTab] = useState<"orders" | "catalog">("orders");
 
   function signOut() {
     sessionStorage.removeItem(STORAGE_KEY);
@@ -150,33 +152,154 @@ export function MerchantPortal(): React.JSX.Element {
         <button className="btn !px-3 !py-1 text-xs" onClick={signOut}>Sign out</button>
       </header>
 
-      {error ? <p className="text-sm text-red-400">{error}</p> : null}
-      {orders === null ? <p className="text-sm text-zinc-400">Loading…</p> : null}
-      {orders && orders.length === 0 ? <div className="card text-sm text-zinc-400">No orders yet.</div> : null}
+      <div className="flex gap-1 border-b border-zinc-800">
+        <button className={`px-3 py-2 text-sm font-medium ${tab === "orders" ? "border-b-2 border-brand-accent text-brand-accent" : "text-zinc-400"}`} onClick={() => setTab("orders")}>Orders</button>
+        <button className={`px-3 py-2 text-sm font-medium ${tab === "catalog" ? "border-b-2 border-brand-accent text-brand-accent" : "text-zinc-400"}`} onClick={() => setTab("catalog")}>Catalog</button>
+      </div>
 
-      <div className="space-y-3">
-        {orders?.map((o) => (
-          <section key={o.id} className="card space-y-2">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div>
-                <h2 className="font-semibold">{o.jobNumber ?? o.id.slice(0, 8)}</h2>
-                <p className="text-xs text-zinc-500">{o.customerName} · {o.customerPhone}</p>
-              </div>
-              <span className="rounded bg-zinc-800 px-2 py-0.5 text-xs font-medium text-zinc-300">{o.status}</span>
+      {error ? <p className="text-sm text-red-400">{error}</p> : null}
+
+      {tab === "orders" ? (
+        <>
+          {orders === null ? <p className="text-sm text-zinc-400">Loading…</p> : null}
+          {orders && orders.length === 0 ? <div className="card text-sm text-zinc-400">No orders yet.</div> : null}
+          <div className="space-y-3">
+            {orders?.map((o) => (
+              <section key={o.id} className="card space-y-2">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <h2 className="font-semibold">{o.jobNumber ?? o.id.slice(0, 8)}</h2>
+                    <p className="text-xs text-zinc-500">{o.customerName} · {o.customerPhone}</p>
+                  </div>
+                  <span className="rounded bg-zinc-800 px-2 py-0.5 text-xs font-medium text-zinc-300">{o.status}</span>
+                </div>
+                <p className="text-sm text-zinc-300">{o.addressText ?? "No address given"}</p>
+                <ul className="text-sm text-zinc-400">
+                  {o.items.map((it, i) => (
+                    <li key={i}>{it.quantity}× {it.name}{it.size ? ` (${it.size})` : ""} — {formatMoney(it.unitPrice)}</li>
+                  ))}
+                </ul>
+                <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
+                  <span className="text-zinc-400">{o.paymentMethodLabel}{o.riderName ? ` · rider: ${o.riderName}` : ""}</span>
+                  <span className="font-semibold">{formatMoney(o.total)}</span>
+                </div>
+              </section>
+            ))}
+          </div>
+        </>
+      ) : (
+        <Catalog token={token} />
+      )}
+    </div>
+  );
+}
+
+function Catalog({ token }: { token: string }): React.JSX.Element {
+  const [products, setProducts] = useState<ProductDto[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [creating, setCreating] = useState(false);
+
+  const reload = useCallback(() => {
+    portalFetch<{ products: ProductDto[] }>(API.merchantPortal.products, { headers: { authorization: `Bearer ${token}` } })
+      .then((r) => setProducts(r.products))
+      .catch((err) => setError(err instanceof PortalError ? err.message : "Could not load your catalog"));
+  }, [token]);
+
+  useEffect(() => reload(), [reload]);
+
+  async function toggleActive(p: ProductDto) {
+    try {
+      await portalFetch(API.merchantPortal.updateProduct(p.id), {
+        method: "PATCH",
+        headers: { authorization: `Bearer ${token}` },
+        body: JSON.stringify({ active: !p.active }),
+      });
+      reload();
+    } catch (err) {
+      setError(err instanceof PortalError ? err.message : "Could not update this product");
+    }
+  }
+
+  async function remove(p: ProductDto) {
+    try {
+      await portalFetch(API.merchantPortal.deleteProduct(p.id), { method: "DELETE", headers: { authorization: `Bearer ${token}` } });
+      reload();
+    } catch (err) {
+      setError(err instanceof PortalError ? err.message : "Could not remove this product");
+    }
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-sm text-zinc-400">What customers pick from on your order form.</p>
+        <button className="btn-accent !px-3 !py-1 text-xs" onClick={() => setCreating((v) => !v)}>{creating ? "Cancel" : "+ Add product"}</button>
+      </div>
+      {error ? <p className="text-sm text-red-400">{error}</p> : null}
+      {creating ? <CreateProductForm token={token} onDone={() => { setCreating(false); reload(); }} /> : null}
+      {products === null ? <p className="text-sm text-zinc-400">Loading…</p> : null}
+      {products && products.length === 0 ? <div className="card text-sm text-zinc-400">No products yet — customers will type free-text items until you add some.</div> : null}
+      <div className="space-y-2">
+        {products?.map((p) => (
+          <div key={p.id} className={`card flex flex-wrap items-center justify-between gap-2 ${p.active ? "" : "opacity-60"}`}>
+            <div>
+              <p className="font-medium">{p.name}</p>
+              <p className="text-xs text-zinc-500">{formatMoney(p.price)}{p.variants.length > 0 ? ` · ${p.variants.length} variant(s)` : ""}</p>
             </div>
-            <p className="text-sm text-zinc-300">{o.addressText ?? "No address given"}</p>
-            <ul className="text-sm text-zinc-400">
-              {o.items.map((it, i) => (
-                <li key={i}>{it.quantity}× {it.name}{it.size ? ` (${it.size})` : ""} — {formatMoney(it.unitPrice)}</li>
-              ))}
-            </ul>
-            <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
-              <span className="text-zinc-400">{o.paymentMethodLabel}{o.riderName ? ` · rider: ${o.riderName}` : ""}</span>
-              <span className="font-semibold">{formatMoney(o.total)}</span>
+            <div className="flex gap-2">
+              <button type="button" className="btn !px-3 !py-1 text-xs" onClick={() => void toggleActive(p)}>{p.active ? "Deactivate" : "Activate"}</button>
+              <button type="button" className="btn !px-3 !py-1 text-xs !border-red-800 !text-red-300" onClick={() => void remove(p)}>Delete</button>
             </div>
-          </section>
+          </div>
         ))}
       </div>
     </div>
+  );
+}
+
+function CreateProductForm({ token, onDone }: { token: string; onDone: () => void }): React.JSX.Element {
+  const [name, setName] = useState("");
+  const [price, setPrice] = useState("");
+  const [description, setDescription] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function submit(e: FormEvent) {
+    e.preventDefault();
+    setError(null);
+    setBusy(true);
+    try {
+      await portalFetch(API.merchantPortal.createProduct, {
+        method: "POST",
+        headers: { authorization: `Bearer ${token}` },
+        body: JSON.stringify({ name, price: Number(price), description: description || undefined }),
+      });
+      onDone();
+    } catch (err) {
+      setError(err instanceof PortalError ? err.message : "Could not create this product");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <form className="card space-y-3" onSubmit={(e) => void submit(e)}>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <div>
+          <label className="label" htmlFor="cp-name">Product name</label>
+          <input id="cp-name" className="input" required value={name} onChange={(e) => setName(e.target.value)} />
+        </div>
+        <div>
+          <label className="label" htmlFor="cp-price">Price</label>
+          <input id="cp-price" className="input" type="number" min={0} step="0.01" required value={price} onChange={(e) => setPrice(e.target.value)} />
+        </div>
+        <div className="sm:col-span-2">
+          <label className="label" htmlFor="cp-desc">Description (optional)</label>
+          <input id="cp-desc" className="input" value={description} onChange={(e) => setDescription(e.target.value)} />
+        </div>
+      </div>
+      {error ? <p className="text-sm text-red-400">{error}</p> : null}
+      <button className="btn-accent" disabled={busy || !name.trim() || !price}>{busy ? "Saving…" : "Add product"}</button>
+    </form>
   );
 }
