@@ -34,10 +34,11 @@ afterAll(async () => {
 describe("public rider self-signup", () => {
   it("lands pending (not immediately active, unlike a staff-created rider), then goes active once an admin approves", async () => {
     const phone = `+1876555${uniq().slice(-4)}`;
+    const email = `kei-${uniq()}@example.com`;
     const signup = await harness.app.inject({
       method: "POST",
       url: "/api/rider-signup",
-      payload: { name: "Kei Bearer", phone, vehicle: "motorcycle", password: "riderpass1" },
+      payload: { name: "Kei Bearer", phone, email, vehicle: "motorcycle", password: "riderpass1" },
     });
     expect(signup.statusCode).toBe(200);
     const { status, riderId } = signup.json() as { status: string; riderId: string };
@@ -51,10 +52,12 @@ describe("public rider self-signup", () => {
       where: { riderId_businessId: { riderId, businessId: harness.business.id } },
     });
     expect(membershipBefore.status).toBe("pending");
+    // Email is the intended login credential going forward — phone stays
+    // the identity/matching key. Confirm sign-in actually works by email.
     const loginBefore = await harness.app.inject({
       method: "POST",
       url: "/api/auth/login",
-      payload: { identifier: phone, password: "riderpass1" },
+      payload: { identifier: email, password: "riderpass1" },
     });
     expect(loginBefore.statusCode).toBe(200);
 
@@ -97,7 +100,7 @@ describe("public rider self-signup", () => {
     const signup = await harness.app.inject({
       method: "POST",
       url: "/api/rider-signup",
-      payload: { name: "Rejected Rider", phone, vehicle: "car", password: "riderpass1" },
+      payload: { name: "Rejected Rider", phone, email: `rejected-${uniq()}@example.com`, vehicle: "car", password: "riderpass1" },
     });
     const { riderId } = signup.json() as { riderId: string };
 

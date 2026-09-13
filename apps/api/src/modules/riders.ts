@@ -66,7 +66,10 @@ const CreateBody = z.object({
    *  Owner/admin-configurable per rider; a rider is not limited to one job at a time. */
   dailyCapacity: z.number().int().min(1).max(100).default(5),
   payRate: z.number().min(0).max(1_000_000).optional(),
-  /** optional login account for the rider (bearer face) */
+  /** optional login account for the rider (bearer face) — email is the
+   *  login credential going forward (see SignupBody's own doc comment);
+   *  phone stays the identity/matching key regardless. */
+  email: z.string().email().max(160).optional().or(z.literal("")).nullable(),
   password: z.string().min(8).max(128).optional(),
 });
 
@@ -98,7 +101,13 @@ const ListQuery = z.object({
  *  password to log in once approved). */
 const SignupBody = z.object({
   name: z.string().min(1).max(120),
+  /** The identity/matching + coordination key (messages, WhatsApp) — not
+   *  the login credential. See `email` below for that. */
   phone: z.string().min(7).max(20),
+  /** The login credential going forward — phone stays how the system
+   *  recognizes/links a person across roles (rider, customer), but
+   *  signing in is by email + password, no OTP. */
+  email: z.string().email().max(160),
   vehicle: z.enum(["motorcycle", "car"]).default("motorcycle"),
   plate: z.string().max(20).optional().or(z.literal("")).nullable().default(""),
   password: z.string().min(8).max(128),
@@ -175,10 +184,17 @@ export class RidersService {
     }
     let userId: string | null = null;
     if (input.password) {
+      const email = input.email || null;
+      if (email) {
+        const emailOwner = await this.app.prisma.user.findUnique({ where: { email } });
+        if (emailOwner && emailOwner.phone !== phone) {
+          throw httpErrors.createError(409, "This email is already associated with a different account");
+        }
+      }
       const user = await this.app.prisma.user.upsert({
         where: { phone },
-        create: { phone, name: input.name, role: "rider", passwordHash: hashPassword(input.password) },
-        update: { name: input.name },
+        create: { phone, email, name: input.name, role: "rider", passwordHash: hashPassword(input.password) },
+        update: { name: input.name, ...(email ? { email } : {}) },
       });
       userId = user.id;
     }
@@ -235,10 +251,14 @@ export class RidersService {
       return { status, riderId: existing.id };
     }
 
+    const emailOwner = await this.app.prisma.user.findUnique({ where: { email: input.email } });
+    if (emailOwner && emailOwner.phone !== phone) {
+      throw httpErrors.createError(409, "This email is already associated with a different account");
+    }
     const user = await this.app.prisma.user.upsert({
       where: { phone },
-      create: { phone, name: input.name, role: "rider", passwordHash: hashPassword(input.password) },
-      update: { name: input.name },
+      create: { phone, email: input.email, name: input.name, role: "rider", passwordHash: hashPassword(input.password) },
+      update: { name: input.name, email: input.email },
     });
     const rider = await this.app.prisma.rider.create({
       data: {

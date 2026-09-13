@@ -173,10 +173,11 @@ function CreateStaffForm({ onDone }: { onDone: () => void }): React.JSX.Element 
 function CreateRiderForm({ onDone }: { onDone: () => void }): React.JSX.Element {
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
+  const [email, setEmail] = useState("");
   const [vehicle, setVehicle] = useState<"motorcycle" | "car">("motorcycle");
   const [password, setPassword] = useState("");
   const create = useMutation({
-    mutationFn: () => apiFetch(API.riders.create, { method: "POST", body: JSON.stringify({ name, phone, vehicle, password: password || undefined }) }),
+    mutationFn: () => apiFetch(API.riders.create, { method: "POST", body: JSON.stringify({ name, phone, email: email || undefined, vehicle, password: password || undefined }) }),
     onSuccess: onDone,
   });
   const canSubmit = name.trim().length > 0 && phone.replace(/[^\d]/g, "").length >= 7;
@@ -190,6 +191,10 @@ function CreateRiderForm({ onDone }: { onDone: () => void }): React.JSX.Element 
         <div>
           <label className="label" htmlFor="r-phone">Phone</label>
           <input id="r-phone" className="input" required value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="876 555 1234" />
+        </div>
+        <div>
+          <label className="label" htmlFor="r-email">Email (needed for them to log in)</label>
+          <input id="r-email" type="email" className="input" value={email} onChange={(e) => setEmail(e.target.value)} />
         </div>
         <div>
           <label className="label" htmlFor="r-vehicle">Vehicle</label>
