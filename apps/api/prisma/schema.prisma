@@ -151,6 +151,7 @@ model User {
   rider     Rider?
   staffMemberships StaffMembership[]
   merchantStaffMemberships MerchantStaff[]
+  invitesSent Invite[]
   riderMembershipApprovals RiderMembership[] @relation("riderMembershipApprover")
   sessions  Session[]
   audits    AuditLog[]
@@ -338,6 +339,53 @@ model MerchantStaff {
 
   @@unique([userId, merchantId])
   @@index([merchantId])
+}
+
+enum InviteStatus {
+  pending
+  accepted
+  revoked
+  expired
+}
+
+enum InviteTarget {
+  staff
+  merchant
+}
+
+/** A real, usable onboarding flow for adding someone to a business or
+ *  merchant (spec: "Fix the current broken membership experience: if a
+ *  person is invited/added to a business, they must get a real usable
+ *  login/onboarding flow—secure invite link or password setup, role,
+ *  pending/active/disabled status, resend invite, and revoke invite").
+ *  No FK to User: the invited person may not have an account yet at all
+ *  — accepting is what creates one (or attaches the membership to an
+ *  existing account, same "one account, many memberships" rule as
+ *  merchants.ts's own direct-grant path). `tokenHash` (never the raw
+ *  token) is what accept-invite.ts looks up; the raw token only ever
+ *  exists in the invite email and the URL, never stored. */
+model Invite {
+  id           String       @id @default(cuid())
+  email        String
+  name         String?
+  target       InviteTarget
+  /** businessId for target=staff, merchantId for target=merchant. */
+  targetId     String
+  /** Only meaningful for target=staff — the StaffMembership role to grant
+   *  on accept. Always "viewer" in effect for target=merchant (a
+   *  MerchantStaff row has no role field yet — see its own model). */
+  role         Role?
+  tokenHash    String       @unique
+  status       InviteStatus @default(pending)
+  invitedById  String
+  invitedBy    User         @relation(fields: [invitedById], references: [id])
+  createdAt    DateTime     @default(now())
+  expiresAt    DateTime
+  acceptedAt   DateTime?
+  revokedAt    DateTime?
+
+  @@index([email, status])
+  @@index([target, targetId])
 }
 
 model Product {

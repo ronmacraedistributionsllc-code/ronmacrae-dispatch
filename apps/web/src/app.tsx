@@ -14,6 +14,7 @@ import { NewJob } from "./pages/new-job.js";
 import { PublicOrder } from "./pages/order.js";
 import { JoinRider } from "./pages/join-rider.js";
 import { MerchantPortal } from "./pages/merchant-portal.js";
+import { AcceptInvite } from "./pages/accept-invite.js";
 import { Merchants } from "./pages/merchants.js";
 import { Team } from "./pages/team.js";
 import { Settings } from "./pages/settings.js";
@@ -53,6 +54,7 @@ export default function App(): React.JSX.Element {
               <Route path="/order/:merchantSlug" element={<PublicOrder />} />
               <Route path="/join/rider" element={<JoinRider />} />
               <Route path="/merchant" element={<MerchantPortal />} />
+              <Route path="/accept-invite" element={<AcceptInvite />} />
               <Route path="/track/:token" element={<Track />} />
               <Route path="/my-packages" element={<MyPackages />} />
               <Route

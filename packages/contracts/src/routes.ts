@@ -301,6 +301,19 @@ export const API = {
     update: (id: string) => `/api/users/${id}`,
   },
 
+  /** Real invite/onboarding — see invites.ts. `check`/`accept` are public
+   *  (the token itself is the credential); everything else is admin-only,
+   *  scoped to the caller's own business (and its own merchants). */
+  invites: {
+    list: "/api/invites",
+    createStaff: "/api/invites/staff",
+    createMerchant: (merchantId: string) => `/api/invites/merchant/${merchantId}`,
+    resend: (id: string) => `/api/invites/${id}/resend`,
+    revoke: (id: string) => `/api/invites/${id}/revoke`,
+    check: (token: string) => `/api/invites/check/${token}`,
+    accept: "/api/invites/accept",
+  },
+
   /** bearer-scoped */
   bearer: {
     me: "/api/bearer/me",

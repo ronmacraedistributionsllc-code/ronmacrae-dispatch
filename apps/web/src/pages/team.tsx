@@ -13,6 +13,17 @@ const ROLE_LABEL: Record<Role, string> = {
   rider: "Rider",
 };
 
+interface InviteDto {
+  id: string;
+  email: string;
+  name: string | null;
+  target: "staff" | "merchant";
+  role: string | null;
+  status: "pending" | "accepted" | "revoked" | "expired";
+  createdAt: string;
+  expiresAt: string;
+}
+
 /**
  * Staff + rider account creation — the backend for both (`POST /api/users`,
  * `POST /api/riders`) already existed, but no screen ever called either one:
@@ -24,10 +35,20 @@ export function Team(): React.JSX.Element {
   const canEdit = user?.role === "admin";
   const qc = useQueryClient();
   const [addingStaff, setAddingStaff] = useState(false);
+  const [invitingStaff, setInvitingStaff] = useState(false);
   const [addingRider, setAddingRider] = useState(false);
 
   const staff = useQuery({ queryKey: ["users"], queryFn: () => apiFetch<{ users: UserDto[] }>(API.users.list) });
   const riders = useQuery({ queryKey: ["riders"], queryFn: () => apiFetch<{ riders: RiderDto[] }>(API.riders.list) });
+  const invites = useQuery({ queryKey: ["invites"], queryFn: () => apiFetch<{ invites: InviteDto[] }>(API.invites.list) });
+  const resendInvite = useMutation({
+    mutationFn: (id: string) => apiFetch(API.invites.resend(id), { method: "POST" }),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["invites"] }),
+  });
+  const revokeInvite = useMutation({
+    mutationFn: (id: string) => apiFetch(API.invites.revoke(id), { method: "POST" }),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["invites"] }),
+  });
   const pending = useQuery({ queryKey: ["riders", "pending"], queryFn: () => apiFetch<{ riders: RiderDto[] }>(API.riders.pending) });
   const decide = useMutation({
     mutationFn: ({ id, approve }: { id: string; approve: boolean }) => apiFetch(API.riders.decide(id), { method: "POST", body: JSON.stringify({ approve }) }),
@@ -72,9 +93,15 @@ export function Team(): React.JSX.Element {
         <div className="flex items-center justify-between gap-3">
           <h2 className="font-semibold">Staff</h2>
           {canEdit ? (
-            <button className="btn-accent" onClick={() => setAddingStaff((v) => !v)}>{addingStaff ? "Cancel" : "+ Add staff"}</button>
+            <div className="flex gap-2">
+              <button className="btn !px-3 !py-1.5 text-xs" onClick={() => { setInvitingStaff((v) => !v); setAddingStaff(false); }}>{invitingStaff ? "Cancel" : "✉️ Invite staff"}</button>
+              <button className="btn-accent" onClick={() => { setAddingStaff((v) => !v); setInvitingStaff(false); }}>{addingStaff ? "Cancel" : "+ Add staff"}</button>
+            </div>
           ) : null}
         </div>
+        {invitingStaff ? (
+          <InviteStaffForm onDone={() => { setInvitingStaff(false); void qc.invalidateQueries({ queryKey: ["invites"] }); }} />
+        ) : null}
         {addingStaff ? (
           <CreateStaffForm onDone={() => { setAddingStaff(false); void qc.invalidateQueries({ queryKey: ["users"] }); }} />
         ) : null}
@@ -92,6 +119,25 @@ export function Team(): React.JSX.Element {
             </div>
           ))}
         </div>
+        {canEdit && invites.data && invites.data.invites.filter((i) => i.status === "pending").length > 0 ? (
+          <div className="space-y-2 pt-2">
+            <h3 className="text-xs uppercase tracking-wide text-zinc-500">Pending invites</h3>
+            {invites.data.invites.filter((i) => i.status === "pending").map((inv) => (
+              <div key={inv.id} className="card flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <p className="font-medium">{inv.email}</p>
+                  <p className="text-xs text-zinc-500">
+                    {inv.target === "staff" ? ROLE_LABEL[(inv.role ?? "viewer") as Role] : "Merchant"} · sent {new Date(inv.createdAt).toLocaleDateString()} · expires {new Date(inv.expiresAt).toLocaleDateString()}
+                  </p>
+                </div>
+                <div className="flex gap-2">
+                  <button type="button" className="btn !px-3 !py-1 text-xs" disabled={resendInvite.isPending} onClick={() => void resendInvite.mutate(inv.id)}>Resend</button>
+                  <button type="button" className="btn !px-3 !py-1 text-xs !border-red-800 !text-red-300" disabled={revokeInvite.isPending} onClick={() => void revokeInvite.mutate(inv.id)}>Revoke</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : null}
       </section>
 
       <section className="space-y-3">
@@ -123,6 +169,31 @@ export function Team(): React.JSX.Element {
         </div>
       </section>
     </div>
+  );
+}
+
+function InviteStaffForm({ onDone }: { onDone: () => void }): React.JSX.Element {
+  const [email, setEmail] = useState("");
+  const [name, setName] = useState("");
+  const [role, setRole] = useState<StaffRole>("dispatcher");
+  const invite = useMutation({
+    mutationFn: () => apiFetch(API.invites.createStaff, { method: "POST", body: JSON.stringify({ email, name: name || undefined, role }) }),
+    onSuccess: onDone,
+  });
+  return (
+    <form className="card space-y-3" onSubmit={(e) => { e.preventDefault(); void invite.mutate(); }}>
+      <p className="text-xs text-zinc-400">Sends an email with a secure link — they choose their own password.</p>
+      <div className="grid gap-3 sm:grid-cols-3">
+        <input className="input" type="email" required placeholder="Email" value={email} onChange={(e) => setEmail(e.target.value)} />
+        <input className="input" placeholder="Name (optional)" value={name} onChange={(e) => setName(e.target.value)} />
+        <select className="input" value={role} onChange={(e) => setRole(e.target.value as StaffRole)}>
+          {STAFF_ROLES.map((r) => <option key={r} value={r}>{ROLE_LABEL[r]}</option>)}
+        </select>
+      </div>
+      {invite.error ? <p className="text-sm text-red-400">{invite.error instanceof ApiError ? invite.error.message : "Could not send this invite"}</p> : null}
+      {invite.isSuccess ? <p className="text-sm text-emerald-400">Invite sent.</p> : null}
+      <button className="btn-accent" disabled={invite.isPending || !email.trim()}>{invite.isPending ? "Sending…" : "Send invite"}</button>
+    </form>
   );
 }
 

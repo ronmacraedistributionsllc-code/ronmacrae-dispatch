@@ -410,6 +410,10 @@ export function registerAuthHook(app: FastifyInstance, ctx: AppCtx): void {
     // the handler (requireMerchantAuth in merchant-portal.ts), same
     // "self-gated, not the staff hook" pattern as /api/customer-account/.
     if (url.startsWith("/api/merchant-portal/")) return true;
+    // Invite acceptance — the invite token itself is the credential, same
+    // "self-gated, not the staff hook" pattern as the merchant portal.
+    if (url.startsWith("/api/invites/check/") && method === "GET") return true;
+    if (url === "/api/invites/accept" && method === "POST") return true;
     // Twilio's own delivery-status webhook — unauthenticated by nature (Twilio
     // isn't a logged-in user), verified instead by its own signature header
     // when TWILIO_AUTH_TOKEN is configured (see notify.ts).
