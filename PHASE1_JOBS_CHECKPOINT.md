@@ -2458,3 +2458,41 @@ bearer/logistics-company account type; ratings; the full messaging
 authorization matrix; financial dispute/archival workflow; three-way
 (staff + rider + merchant) workspace switching. This is stage 1 of a
 multi-stage effort — the remaining pieces are tracked, not abandoned.
+
+## Stage 33 — real invite/onboarding flow
+
+The other half of the spec's membership-experience fix: a real secure
+invite-link flow (create, resend, revoke, accept), additive to the
+existing admin-sets-a-password-directly paths. Full narrative — the
+Invite model's design, the "existing account never gets its password
+touched" rule applied consistently, and a real test-harness bug found
+and worked around along the way — is in `WORK_IN_PROGRESS.md`'s own
+Stage 33 section.
+
+## Commands run and results (Stage 33)
+
+| # | Command | Result |
+| --- | --- | --- |
+| 1 | `npm run typecheck --workspace apps/api --workspace apps/web` | **PASS** — 0 errors |
+| 2 | `npx vitest run` (apps/api) | **PASS** — 236/236 across 35 files, up from Stage 32's 230/34 (6 net new: `invites.test.ts`) |
+| 3 | `npm run build --workspace apps/api --workspace apps/web` | **PASS** — clean |
+| 4 | `dev.db` via `prisma db push` | New `Invite` table + two new enums, additive; no data loss |
+
+## Re-verify (Stage 33)
+
+```bash
+npm run typecheck --workspace apps/api --workspace apps/web
+npm run test --workspace @ronmacrae/api
+npm run build --workspace apps/api --workspace apps/web
+```
+
+**Not done in this stage** (see `WORK_IN_PROGRESS.md` for the full
+list against the larger platform-rebuild spec): richer pending/active/
+disabled membership lifecycle beyond the invite's own status field and
+StaffMembership/MerchantStaff's existing `active` boolean; a platform-
+admin console; the bearer/logistics-company account type; ratings; the
+full messaging authorization matrix; financial dispute/archival
+workflow. Stages 32 and 33 together are the foundational first piece
+of that much larger spec — everything else in it depends on this
+login/membership model being correct, which is now verified with real
+tests, not just described.

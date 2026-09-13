@@ -3636,18 +3636,90 @@ confirmed earlier in this same session (via `git stash -u` against the
 pre-Stage-30 baseline) to be pre-existing and unrelated to any of this
 session's work.
 
-**Not done in this stage** (tracked as later stages of the larger
-platform-rebuild spec, not silently dropped): a real secure invite
-link / password-setup flow for adding someone to a business (today an
-admin sets the initial password directly and shares it out of band —
-functional, but not the "invite link, resend invite, revoke invite"
-flow the spec describes); pending/active/disabled membership status
-beyond the rider-application `pending` state already built in Stage 31
-(a `StaffMembership`/`MerchantStaff` today is simply active or not,
-with no richer lifecycle); a platform-admin console; the
-bearer/logistics-company account type; ratings; the full messaging
-authorization matrix; financial dispute/archival workflow; multi-role
-switching for more than two workspace kinds at once (a staff member
-who is ALSO a rider ALSO with merchant access, for instance — the
-current code handles staff-or-rider as one resolved context and
-merchant as a second, not three-way).
+**Not done in this stage**: a real secure invite link / password-setup
+flow (built next, in Stage 33); pending/active/disabled membership
+status beyond the rider-application `pending` state already built in
+Stage 31; a platform-admin console; the bearer/logistics-company
+account type; ratings; the full messaging authorization matrix;
+financial dispute/archival workflow; multi-role switching for more
+than two workspace kinds at once.
+
+## Stage 33 — real invite/onboarding flow (DONE)
+
+The other half of the spec's membership-experience fix, immediately
+following Stage 32: "if a person is invited/added to a business, they
+must get a real usable login/onboarding flow—secure invite link or
+password setup, role, pending/active/disabled status, resend invite,
+and revoke invite." Additive to the existing "admin sets a password
+directly" paths (`POST /api/users`, `/api/merchants/:id/staff`), which
+still work unchanged for an admin who'd rather hand someone a password
+themselves.
+
+**Design**: a new `Invite` model with deliberately no foreign key to
+`User` — the invited person may not have an account at all yet;
+accepting the invite is what creates one (or, if that email already
+has an account of any kind, attaches the new membership to it instead
+— see below). Only `tokenHash` is ever stored, reusing the exact
+SHA-256-of-token pattern `jwt.ts` already uses for refresh sessions;
+the raw token exists only in the invite email and the accept-invite
+URL, never in the database.
+
+- `POST /api/invites/staff` / `/api/invites/merchant/:id` (admin) —
+  create and email a real invite link, scoped to the caller's own
+  business or one of its own merchants.
+- `GET /api/invites` (admin) — every invite for the caller's own
+  business and its own merchants, never another business's (tested
+  directly: a second business's admin sees zero of the first
+  business's invites).
+- `POST /api/invites/:id/resend` — issues a fresh token; the old link
+  stops working (checked via `/api/invites/check/:token` returning
+  404 for the superseded one). `/api/invites/:id/revoke` — permanent;
+  both are refused (409) once an invite is no longer `pending`.
+- `GET /api/invites/check/:token` / `POST /api/invites/accept`
+  (public — the token itself is the credential): an email with no
+  existing account sets a password to create one; an email that
+  ALREADY has an account (staff, rider, or another merchant) just gets
+  the new membership attached, no password touched — the exact same
+  fix Stage 32 made to `merchants.ts`'s direct-grant endpoint, applied
+  consistently here too.
+- `apps/web/src/pages/accept-invite.tsx` — the real page someone lands
+  on from the email, showing "set a password" or "just sign in, we
+  added this to your existing account" depending on which case applies.
+- Team screen gained "Invite staff" (sends the email) alongside the
+  existing "Add staff" (admin sets the password directly), plus a
+  pending-invites list with Resend/Revoke actions.
+
+**A real test-infrastructure bug found and fixed while building
+this** (not a product bug): `buildTestHarness()` writes the resolved
+SQLite path into the shared, process-wide `DATABASE_URL` environment
+variable (via `getPrisma()`/`applyDatabaseEnv()`), which some part of
+the harness's query path re-reads rather than only capturing at Prisma
+Client construction time. Calling `buildTestHarness()` a second time
+within one test *file* (to simulate "business B" for an isolation
+test) silently redirected the *original* harness's later queries at
+the second harness's database file — which had by then been deleted by
+its own `cleanup()` — producing a confusing "table does not exist"
+failure with no connection to the actual change under test. Worked
+around locally in `invites.test.ts` by creating a second `Business`
+row inside the *same* harness/database instead of a second harness
+entirely (achieves the same isolation-test goal without the shared-
+global-state hazard); not fixed at the harness level itself, since no
+other existing test file does this and the fix scope for a shared test
+helper felt disproportionate to one new test needing it.
+
+**Verification**: `npm run typecheck --workspace apps/api --workspace
+apps/web` clean. `apps/api` vitest **236/236** across 35 files (6 net
+new in `invites.test.ts`). `npm run build --workspace apps/api
+--workspace apps/web` clean.
+
+**Not done in this stage**: pending/active/disabled membership status
+as a first-class, richer lifecycle (today a membership is simply
+active or not — an invite itself has the pending/accepted/revoked/
+expired states the spec asks for, but the *membership* it creates on
+acceptance does not carry a separate disabled state beyond
+StaffMembership/MerchantStaff's existing `active` boolean); a
+platform-admin console to manage invites/members across the whole
+platform (today's invite management is per-business, from the Team
+screen, matching everything else in this app's existing multi-tenancy
+model); the bearer/logistics-company account type; ratings; the full
+messaging authorization matrix; financial dispute/archival workflow.
