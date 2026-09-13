@@ -2496,3 +2496,47 @@ workflow. Stages 32 and 33 together are the foundational first piece
 of that much larger spec — everything else in it depends on this
 login/membership model being correct, which is now verified with real
 tests, not just described.
+
+## Stage 34 — Platform Admin console
+
+Fills a gap `owner.ts` has flagged as open since Stage 23 ("business
+creation/listing and rider platform-approval screens remain a
+documented, open gap"). Reuses the existing `platformRole: "owner"`
+concept rather than a new auth face. Full narrative — including two
+real gaps found (UserDto never exposed `platformRole`; the real
+production admin never had it granted) and a latent transaction bug in
+`RidersService.create()` found via this stage's own new tests — is in
+`WORK_IN_PROGRESS.md`'s own Stage 34 section.
+
+## Commands run and results (Stage 34)
+
+| # | Command | Result |
+| --- | --- | --- |
+| 1 | `npm run typecheck --workspace apps/api --workspace apps/web` | **PASS** — 0 errors |
+| 2 | `npx vitest run` (apps/api) | **PASS** — 243/243 across 36 files, up from Stage 33's 236/35 (7 net new: `platform-admin.test.ts`) |
+| 3 | `npm run build --workspace apps/api --workspace apps/web` | **PASS** — clean |
+| 4 | Full e2e suite (35 specs), serial, fresh `e2e-test.db` | **34/35** — re-run given how broadly `toUserDto`/auth were touched; the one failure is the same already-confirmed-unrelated `booking.spec.ts` flake |
+| 5 | `dev.db` via `prisma db push` | No schema change this stage — pure application-logic change (platform-admin routes + the RidersService.create() transaction fix) |
+
+## Re-verify (Stage 34)
+
+```bash
+npm run typecheck --workspace apps/api --workspace apps/web
+npm run test --workspace @ronmacrae/api
+npm run build --workspace apps/api --workspace apps/web
+rm -f apps/api/data/e2e-test.db && cd e2e && npx playwright test --workers=1
+```
+
+**One production-only action still needed** (not code — see
+`WORK_IN_PROGRESS.md`): run `grant-platform-owner.ts` once against the
+real deployment (with `GRANT_OWNER_EMAIL` set to the real admin's
+email) so the account owner can actually reach `/platform-admin` —
+without it, `ctx.requireOwner` correctly refuses even them, since
+`bootstrap-prod.ts` never set `platformRole: "owner"` on that account.
+
+**Not done in this stage** (see `WORK_IN_PROGRESS.md` for the full,
+honest list): ratings; admin-to-anyone messaging; per-person dispute
+rollups; the bearer/logistics-company account type and its own fleet
+view; approve/reject specifically for pending StaffMembership/
+MerchantStaff grants (only rider `platformStatus` has this control,
+matching the one place the spec names explicitly).

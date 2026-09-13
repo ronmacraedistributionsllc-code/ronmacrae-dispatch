@@ -3718,8 +3718,97 @@ active or not — an invite itself has the pending/accepted/revoked/
 expired states the spec asks for, but the *membership* it creates on
 acceptance does not carry a separate disabled state beyond
 StaffMembership/MerchantStaff's existing `active` boolean); a
-platform-admin console to manage invites/members across the whole
-platform (today's invite management is per-business, from the Team
-screen, matching everything else in this app's existing multi-tenancy
-model); the bearer/logistics-company account type; ratings; the full
-messaging authorization matrix; financial dispute/archival workflow.
+platform-admin console (built next, in Stage 34); the
+bearer/logistics-company account type; ratings; the full messaging
+authorization matrix; financial dispute/archival workflow.
+
+## Stage 34 — Platform Admin console (DONE)
+
+Fills a gap `owner.ts` itself has flagged as open since Stage 23: "this
+is not a general owner console (business creation/listing and rider
+platform-approval screens remain a documented, open gap)." Reuses the
+existing `platformRole: "owner"` concept — a staff/rider login that
+also carries this flag — rather than inventing a new auth face; an
+owner's existing session already works against every route this stage
+adds.
+
+**Scope, stated honestly**: this covers real data this app actually
+has — business/merchant/rider/staff records, real job-status counts,
+real cash figures via the existing `cash-profile.ts` service. It does
+NOT cover ratings, admin-to-anyone messaging, or per-person dispute
+rollups, because none of those systems exist in this app yet — the
+rider detail view says `ratings: not built yet` outright rather than
+fabricating a section for something that isn't real.
+
+**What was built**:
+- `GET`/`PATCH /api/platform/businesses` — list (with merchant/staff/
+  rider/job counts), disable/reactivate.
+- `GET`/`PATCH /api/platform/merchants` — list across every business
+  (with the business name attached — this is the one place in the app
+  that shows merchants cross-business at all), disable/reactivate.
+- `GET`/`PATCH /api/platform/riders` — the spec's explicit, named ask:
+  "Platform Admin controls whether a rider is freelancer/platform-
+  approved... or disabled/blocked." A list plus a detail view (every
+  business membership, job counts by status, a cash profile per
+  business) and control over both `platformStatus`
+  (pending/approved/suspended) and the account's own `active` flag.
+- `GET`/`PATCH /api/platform/staff` — every staff and merchant-staff
+  login on the whole platform, not just one business's own Team
+  screen; disable/reactivate, with a hard server-side guard against an
+  owner disabling their own account by mistake.
+- `GET /api/platform/audit` — the platform-wide audit trail. The
+  existing `GET /api/audit` (Stage 23's own business-scoping fix)
+  stays exactly as it was for ordinary staff — this is a new, separate,
+  owner-only view, not a change to that one's scoping.
+- `apps/web/src/pages/platform-admin.tsx` (`/platform-admin`) — five
+  tabs matching the above; both the route and its nav-bar entry are
+  owner-only (a non-owner never even sees the tab exists, not just
+  blocked if they guess the URL).
+
+**Two real gaps found and fixed while building this, not pre-existing
+bugs from before this session**:
+- `UserDto` never exposed `platformRole` at all — the frontend had no
+  way to know whether the logged-in user even qualified to see this
+  console, regardless of what the backend allowed. Added it to the
+  type and to `toUserDto()`.
+- The real production admin account has never had `platformRole:
+  "owner"` set — `bootstrap-prod.ts` (Stage 30) only ever created an
+  ordinary `admin` role with a `StaffMembership`, never platform-wide
+  authority. Without fixing this, the account owner themselves would
+  be refused by `ctx.requireOwner` on every route this stage adds.
+  Added `grant-platform-owner.ts`, a one-time, idempotent script (set
+  `GRANT_OWNER_EMAIL`, run once) — the same safe pattern this session
+  already established for `bootstrap-prod.ts`/`reset-admin-password.ts`.
+
+**A real latent bug found and fixed while writing this stage's own
+tests**: `RidersService.create()` (the staff-facing "add a rider"
+endpoint, used since Stage 20) wrapped its rider-plus-membership
+creation in a `$transaction` — the exact same hazard already found and
+fixed in `selfSignup()` during Stage 31 (the test harness's own
+rider-creation hook can't reliably see writes made inside an open
+transaction from a separate connection). This had no test coverage
+until this stage's own tests needed to create a rider via the real
+`POST /api/riders` endpoint for the first time. Fixed with the same
+pattern: an idempotent `riderMembership.upsert()` outside the
+transaction, instead of an insert inside one.
+
+**Verification**: `npm run typecheck --workspace apps/api --workspace
+apps/web` clean. `apps/api` vitest **243/243** across 36 files (7 net
+new in `platform-admin.test.ts`: ordinary staff refused every platform
+route, an owner seeing every business/merchant not just their own,
+rider platform-status approve/suspend with a real detail view, staff
+disable with a hard self-disable guard, and every mutating action
+showing up in the platform-wide audit log). `npm run build --workspace
+apps/api --workspace apps/web` clean. Full e2e suite re-run given how
+broadly `toUserDto`/auth were touched: **34/35**, the one failure is
+the same already-confirmed-unrelated `booking.spec.ts` flake.
+
+**Not done in this stage**: ratings; admin-to-anyone messaging; per-
+person shortage/dispute rollups; the bearer/logistics-company account
+type (so no fleet-level view yet — this stage's businesses/merchants/
+riders/staff tabs are the closest analog today); a richer disabled-vs-
+archived distinction beyond the existing `active` boolean on each
+model; approve/reject for pending StaffMembership or MerchantStaff
+grants specifically (those go active immediately today, same as
+before this stage — only rider `platformStatus` has an approve/suspend
+control, matching the one place the spec names explicitly).
