@@ -2535,8 +2535,43 @@ without it, `ctx.requireOwner` correctly refuses even them, since
 `bootstrap-prod.ts` never set `platformRole: "owner"` on that account.
 
 **Not done in this stage** (see `WORK_IN_PROGRESS.md` for the full,
-honest list): ratings; admin-to-anyone messaging; per-person dispute
-rollups; the bearer/logistics-company account type and its own fleet
-view; approve/reject specifically for pending StaffMembership/
-MerchantStaff grants (only rider `platformStatus` has this control,
-matching the one place the spec names explicitly).
+honest list): ratings (built next, in Stage 35); admin-to-anyone
+messaging; per-person dispute rollups; the bearer/logistics-company
+account type and its own fleet view; approve/reject specifically for
+pending StaffMembership/MerchantStaff grants (only rider
+`platformStatus` has this control, matching the one place the spec
+names explicitly).
+
+## Stage 35 — rider ratings, with moderation
+
+Spec: "Add/complete a fair rider rating system... Prevent duplicate
+ratings, self-ratings, abusive content, and cross-business leaks...
+Platform Admin has moderation ability." Full narrative — the
+`(jobId, raterType)` uniqueness design and why self-rating/cross-
+business leaks are prevented structurally rather than by an extra
+identity check — is in `WORK_IN_PROGRESS.md`'s own Stage 35 section.
+
+## Commands run and results (Stage 35)
+
+| # | Command | Result |
+| --- | --- | --- |
+| 1 | `npm run typecheck --workspace apps/api --workspace apps/web` | **PASS** — 0 errors |
+| 2 | `npx vitest run` (apps/api) | **PASS** — 248/248 across 37 files, up from Stage 34's 243/36 (5 net new: `ratings.test.ts`) |
+| 3 | `npm run build --workspace apps/api --workspace apps/web` | **PASS** — clean |
+| 4 | Full e2e suite (35 specs), serial, fresh `e2e-test.db` | **34/35** — re-run given `track.tsx` changed; the one failure is the same already-confirmed-unrelated `booking.spec.ts` flake |
+| 5 | `dev.db` via `prisma db push` | New `Rating` table + `RaterType` enum, additive; no data loss |
+
+## Re-verify (Stage 35)
+
+```bash
+npm run typecheck --workspace apps/api --workspace apps/web
+npm run test --workspace @ronmacrae/api
+npm run build --workspace apps/api --workspace apps/web
+rm -f apps/api/data/e2e-test.db && cd e2e && npx playwright test --workers=1
+```
+
+**Not done in this stage**: a rider-facing view of their own rating;
+automated abusive-content filtering at submission (moderation is
+binary hide/unhide after the fact); the bearer/logistics-company
+account type; the full messaging authorization matrix; financial
+dispute/archival workflow.

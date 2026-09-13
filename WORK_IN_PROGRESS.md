@@ -3803,12 +3803,66 @@ apps/api --workspace apps/web` clean. Full e2e suite re-run given how
 broadly `toUserDto`/auth were touched: **34/35**, the one failure is
 the same already-confirmed-unrelated `booking.spec.ts` flake.
 
-**Not done in this stage**: ratings; admin-to-anyone messaging; per-
-person shortage/dispute rollups; the bearer/logistics-company account
-type (so no fleet-level view yet — this stage's businesses/merchants/
-riders/staff tabs are the closest analog today); a richer disabled-vs-
-archived distinction beyond the existing `active` boolean on each
-model; approve/reject for pending StaffMembership or MerchantStaff
-grants specifically (those go active immediately today, same as
-before this stage — only rider `platformStatus` has an approve/suspend
-control, matching the one place the spec names explicitly).
+**Not done in this stage**: ratings (built next, in Stage 35); admin-
+to-anyone messaging; per-person shortage/dispute rollups; the bearer/
+logistics-company account type; a richer disabled-vs-archived
+distinction beyond the existing `active` boolean on each model.
+
+## Stage 35 — rider ratings, with moderation (DONE)
+
+Spec: "Add/complete a fair rider rating system: Authorized customer and
+merchant may rate after a completed delivery... Prevent duplicate
+ratings, self-ratings, abusive content, and cross-business leaks...
+Platform Admin has moderation ability."
+
+**Design**: one `Rating` per `(jobId, raterType)` — `raterType` is
+`customer` or `merchant`, and the schema's own `@@unique` is the actual
+duplicate-prevention mechanism, not just an application-level check
+that could drift. Deliberately no rater *identity* stored beyond which
+side rated — a rating is about the rider's delivery on that specific
+job, and the job itself already records who the customer/merchant
+were; a moderator can always trace it back via `jobId` if needed.
+"Self-rating" and "cross-business leaks" are prevented structurally
+rather than by an extra check: a customer rates via the tracking token
+for *that* job (the same one they already use to track it — no new
+login), and a merchant rates via its own portal session scoped to
+`merchantId` (a cross-merchant attempt is a 404, same "don't confirm
+it exists" pattern used everywhere else in this app) — neither path
+can reach a job that isn't genuinely theirs in the first place, so
+there's no separate identity check needed to prevent rating your own
+delivery.
+
+- `POST /api/tracking/:token/rate` — public, gated by the tracking
+  token alone. Refuses an order that isn't `delivered` yet (400, "hasn't
+  been delivered yet — nothing to rate") and a second attempt (409).
+- `POST /api/merchant-portal/orders/:jobId/rate` — merchant-portal-gated,
+  same refusal rules, plus the cross-merchant 404 above.
+- Platform-admin's rider detail (Stage 34's own honest `ratings: null`
+  placeholder) now shows the real thing: average score, count, and the
+  20 most recent (non-hidden) ratings with their comments.
+- `PATCH /api/platform/ratings/:id` (owner-only) — hides or unhides a
+  rating. Hidden ratings are excluded from the average/recent list but
+  never deleted — the same "correction, not erasure" discipline this
+  app already applies to every other financial/reputational record.
+- Frontend: `track.tsx` (the customer's own tracking page) gained a
+  star-rating widget shown once a delivery is marked `delivered`;
+  `merchant-portal.tsx`'s order list gained the same per delivered
+  order; `platform-admin.tsx`'s rider detail panel shows the real
+  average/count/recent list with a Hide action per rating.
+
+**Verification**: `npm run typecheck --workspace apps/api --workspace
+apps/web` clean. `apps/api` vitest **248/248** across 37 files (5 net
+new in `ratings.test.ts`, covering duplicate/undelivered-order
+prevention on both sides, the cross-merchant 404, and moderation
+correctly excluding a hidden rating from the average while refusing an
+ordinary staff member entirely). `npm run build --workspace apps/api
+--workspace apps/web` clean. Full e2e suite re-run given `track.tsx`
+changed (used by several specs): **34/35**, the one failure is the
+same already-confirmed-unrelated `booking.spec.ts` flake.
+
+**Not done in this stage**: a rider-facing view of their own rating
+(only staff/platform-admin can currently see it); preventing abusive
+comment *content* specifically (moderation today is binary hide/unhide
+after the fact, not automated filtering at submission time); the
+bearer/logistics-company account type; the full messaging authorization
+matrix; financial dispute/archival workflow.
