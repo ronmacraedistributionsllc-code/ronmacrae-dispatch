@@ -2712,3 +2712,27 @@ rm -f apps/api/data/e2e-test.db && cd e2e && npx playwright test --workers=1
 figure (no such concept exists in this app); date-range/rider drill-down
 crossed with the company breakdown; the remaining messaging-matrix
 pieces; order-form/address refinements.
+
+## Recovery checkpoint — `pre-courier-branding-handoff`
+
+A safety checkpoint before starting the Rider→Courier rename + shared
+merchant signup + courier business-access scoping + theme switcher.
+No feature code changed. Full narrative, and the load-bearing record of
+exact state, is in `HANDOFF.md` at the repo root — read that file, not
+this entry, for anything beyond the command table below.
+
+## Commands run and results (recovery checkpoint)
+
+| # | Command | Result |
+| --- | --- | --- |
+| 1 | `npm run typecheck --workspace apps/api --workspace apps/web` | **PASS** — 0 errors |
+| 2 | `DEV_DB=1 npx vitest run` (apps/api) | **PASS** — 272/272 across 39 files (unchanged from Stage 39 — no test code touched) |
+| 3 | `npm run build --workspace apps/api --workspace apps/web` | **PASS** — clean |
+| 4 | Full e2e suite (35 specs), serial (`--workers=1`), fresh `e2e-test.db` | **34/35** — same already-confirmed-unrelated `booking.spec.ts` flake |
+| 5 | `git tag -a pre-courier-branding-handoff` | Annotated tag created and pushed, pointing at this checkpoint's commit |
+
+**Not done in this stage** (by design — this was a checkpoint, not
+feature work): the courier verification-email diagnosis; the Rider→
+Courier rename; shared signup with a merchant option; courier
+business-access scoping; the theme switcher. All four are the next
+work, in that order, per `HANDOFF.md`'s §8.

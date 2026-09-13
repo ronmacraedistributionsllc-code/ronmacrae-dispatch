@@ -4169,3 +4169,32 @@ date-range or rider-level drill-down *within* one company's row (the
 existing date/rider filters still apply to the whole report, just not
 crossed with this breakdown); the full messaging authorization matrix's
 remaining pieces; order-form/address refinements.
+
+## Recovery checkpoint — `pre-courier-branding-handoff`
+
+A deliberate safety checkpoint, requested before starting the Rider→
+Courier rename, the shared-signup merchant option, courier
+business-access scoping, and the theme switcher — all real feature work
+that touches account types, terminology, and authorization broadly
+enough to want a known-good rollback point first.
+
+No feature work happened in this commit. It: re-verified typecheck/
+vitest/build/e2e at the then-current `HEAD` (89698c0 — same numbers as
+Stage 39: typecheck clean, vitest 272/272 across 39 files, build clean,
+e2e 34/35 serial with the same pre-existing `booking.spec.ts` flake);
+added `HANDOFF.md` at the repo root as the canonical, load-bearing
+record of exact commit/tag, implemented-vs-not state, database/
+migration/backup instructions, required env var *names* (never values),
+Render deployment status, and next steps; and tagged the resulting
+commit `pre-courier-branding-handoff` (annotated, pushed).
+
+**See `HANDOFF.md` for the full record — it is the source of truth for
+this checkpoint, not a duplicate of it.** In particular, it carries an
+explicit, detailed warning that the courier/rider email-verification
+issue reported at this checkpoint has NOT been diagnosed or fixed yet —
+a real code-level finding (`sendEmailCode()` discards its email
+provider's send result, so a real send failure currently produces no
+error and no different response to the applicant) is recorded there as
+a *plausible*, not confirmed, explanation. Diagnosing this with real
+provider evidence is the first task after this checkpoint, before any
+of the rename/signup/access/theme work below it.
