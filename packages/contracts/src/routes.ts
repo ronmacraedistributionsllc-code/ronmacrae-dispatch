@@ -54,6 +54,10 @@ export const API = {
     get: (id: string) => `/api/riders/${id}`,
     update: (id: string) => `/api/riders/${id}`,
     status: (id: string) => `/api/riders/${id}/status`,
+    /** public — no login required */
+    signup: "/api/rider-signup",
+    pending: "/api/riders/pending",
+    decide: (id: string) => `/api/riders/${id}/decide`,
     locations: "/api/rider-locations",
     locationsFor: (riderId: string) => `/api/rider-locations/${riderId}`,
     report: (riderId: string) => `/api/rider-locations/${riderId}/report`,

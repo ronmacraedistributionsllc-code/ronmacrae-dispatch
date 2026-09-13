@@ -3,6 +3,7 @@ import { z } from "zod";
 import { httpErrors } from "@fastify/sensible";
 import type { AppCtx } from "../ctx.js";
 import { normalizePhone } from "./auth.js";
+import { DEFAULT_PUBLIC_BUSINESS_SLUG } from "./order.js";
 import { pointFromJson, pointToJson, moneyField } from "../geo-mappers.js";
 import { minorOf } from "@ronmacrae/money";
 import { hashPassword } from "../lib/password.js";
@@ -89,6 +90,22 @@ const StatusBody = z.object({
 
 const ListQuery = z.object({
   includeInactive: z.coerce.boolean().default(false),
+});
+
+/** Public self-signup — deliberately smaller than CreateBody (a staff
+ *  member fills in operational details like homeZone/payRate/dailyCapacity
+ *  later; an applicant just needs to identify themselves and set a
+ *  password to log in once approved). */
+const SignupBody = z.object({
+  name: z.string().min(1).max(120),
+  phone: z.string().min(7).max(20),
+  vehicle: z.enum(["motorcycle", "car"]).default("motorcycle"),
+  plate: z.string().max(20).optional().or(z.literal("")).nullable().default(""),
+  password: z.string().min(8).max(128),
+});
+
+const ApproveBody = z.object({
+  approve: z.boolean(),
 });
 
 export class RidersService {
@@ -190,6 +207,88 @@ export class RidersService {
       return rider;
     });
     return withCurrentJob(this.app, row);
+  }
+
+  /**
+   * Public, unauthenticated rider application (spec: "no way for a rider
+   * to sign up which it should"). Unlike `create()` above — where a staff
+   * member is directly vouching for the rider they're adding, so the
+   * membership goes active immediately — nobody vouches for a self-signup,
+   * so the membership always starts `pending` for a genuinely new rider,
+   * regardless of platform status. An existing, already
+   * platform-`approved` rider (vetted at another business already) is the
+   * one exception: their membership here can go straight to active, same
+   * rule `create()` already uses for a re-adding staff member.
+   */
+  async selfSignup(businessId: string, input: z.infer<typeof SignupBody>): Promise<{ status: "pending" | "active"; riderId: string }> {
+    const phone = normalizePhone(input.phone);
+    const existing = await this.app.prisma.rider.findUnique({ where: { phone } });
+    if (existing) {
+      const existingMembership = await this.app.prisma.riderMembership.findUnique({ where: { riderId_businessId: { riderId: existing.id, businessId } } });
+      if (existingMembership?.status === "active") throw httpErrors.createError(409, "This phone number is already an active rider with us");
+      const status = existing.platformStatus === "approved" ? "active" : "pending";
+      if (existingMembership) {
+        await this.app.prisma.riderMembership.update({ where: { id: existingMembership.id }, data: { status, approvedAt: status === "active" ? new Date() : null } });
+      } else {
+        await this.app.prisma.riderMembership.create({ data: { riderId: existing.id, businessId, status, approvedAt: status === "active" ? new Date() : null } });
+      }
+      return { status, riderId: existing.id };
+    }
+
+    const user = await this.app.prisma.user.upsert({
+      where: { phone },
+      create: { phone, name: input.name, role: "rider", passwordHash: hashPassword(input.password) },
+      update: { name: input.name },
+    });
+    const rider = await this.app.prisma.rider.create({
+      data: {
+        userId: user.id,
+        name: input.name,
+        phone,
+        vehicle: input.vehicle as VehicleType,
+        plate: input.plate || null,
+        dailyCapacity: 5,
+        status: "available",
+        platformStatus: "pending",
+      },
+    });
+    // Deliberately not wrapped in a transaction with the rider.create above:
+    // a self-signup's membership must always end up `pending` regardless of
+    // whatever default a rider-creation hook elsewhere might apply, so this
+    // is an idempotent upsert rather than an insert that could conflict
+    // with one. If the process dies between the two calls, re-submitting
+    // the same phone number safely re-enters this same upsert.
+    await this.app.prisma.riderMembership.upsert({
+      where: { riderId_businessId: { riderId: rider.id, businessId } },
+      create: { riderId: rider.id, businessId, status: "pending" },
+      update: { status: "pending" },
+    });
+    return { status: "pending", riderId: rider.id };
+  }
+
+  /** Pending applications waiting on this business's own approval — not
+   *  the platform-wide `platformStatus` gate, which is a separate,
+   *  owner-console concern (see schema's PlatformRiderStatus doc comment). */
+  async listPending(businessId: string): Promise<RiderDto[]> {
+    const rows = await this.app.prisma.rider.findMany({
+      where: { memberships: { some: { businessId, status: "pending" } } },
+      include: { homeZone: { select: { name: true } } },
+      orderBy: { createdAt: "desc" },
+    });
+    return Promise.all(rows.map((r) => withCurrentJob(this.app, r)));
+  }
+
+  /** Approves or rejects one pending application at this business. Rejecting
+   *  sets the membership to `removed`, not deleted — same "corrections are
+   *  new state, not erased history" discipline as everywhere else in this
+   *  app (audit trail stays intact either way). */
+  async decideMembership(businessId: string, riderId: string, approve: boolean): Promise<void> {
+    const membership = await this.app.prisma.riderMembership.findUnique({ where: { riderId_businessId: { riderId, businessId } } });
+    if (!membership || membership.status !== "pending") throw httpErrors.createError(404, "No pending application found for this rider");
+    await this.app.prisma.riderMembership.update({
+      where: { id: membership.id },
+      data: approve ? { status: "active", approvedAt: new Date() } : { status: "removed" },
+    });
   }
 
   async update(businessId: string, id: string, input: z.infer<typeof UpdateBody>, currency: string): Promise<RiderDto> {
@@ -387,6 +486,31 @@ export async function riderRoutes(app: FastifyInstance, ctx: AppCtx): Promise<vo
     const rider = await svc.get(req.user!.businessId!, req.params.id);
     if (!rider) throw httpErrors.createError(404, "Rider not found");
     return { rider };
+  });
+
+  // Public — no login required, matches order.ts's own public routes.
+  app.post(
+    "/api/rider-signup",
+    { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } },
+    async (req) => {
+      const body = SignupBody.parse(req.body);
+      const business = await ctx.prisma.business.findUnique({ where: { slug: DEFAULT_PUBLIC_BUSINESS_SLUG } });
+      if (!business) throw httpErrors.createError(503, "Rider sign-up is not available right now");
+      const result = await svc.selfSignup(business.id, body);
+      await ctx.audit.record({ id: null, role: "anonymous" }, "rider.signup", "rider", result.riderId, { status: result.status });
+      return result;
+    },
+  );
+
+  app.get("/api/riders/pending", { preHandler: ctx.requireStaff("admin", "dispatcher") }, async (req) => {
+    return { riders: await svc.listPending(req.user!.businessId!) };
+  });
+
+  app.post<{ Params: { id: string } }>("/api/riders/:id/decide", { preHandler: ctx.requireStaff("admin", "dispatcher") }, async (req) => {
+    const body = ApproveBody.parse(req.body);
+    await svc.decideMembership(req.user!.businessId!, req.params.id, body.approve);
+    await ctx.audit.record({ id: req.user!.sub, role: req.user!.role }, body.approve ? "rider.approve" : "rider.reject", "rider", req.params.id);
+    return { ok: true };
   });
 
   app.patch<{ Params: { id: string } }>("/api/riders/:id", { preHandler: ctx.requireStaff("admin", "dispatcher") }, async (req) => {

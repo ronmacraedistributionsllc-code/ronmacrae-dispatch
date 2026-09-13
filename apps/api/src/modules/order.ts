@@ -27,7 +27,11 @@ import { sendDispatchOrderNotification } from "./dispatch-notify.js";
  * section 13/59: "never trust a price sent only by the browser").
  */
 
-const DEFAULT_PUBLIC_BUSINESS_SLUG = "ronmacrae";
+/** The courier's own business slug — also used by riders.ts's public
+ *  self-signup endpoint, for the same reason: there is exactly one real
+ *  courier business, and public/anonymous requests need a fixed way to
+ *  find it without a merchant slug in the URL. */
+export const DEFAULT_PUBLIC_BUSINESS_SLUG = "ronmacrae";
 /** Used only when no merchant (or a merchant with no pickup point set yet)
  *  is involved — the same address the staff "New Order" form defaults to.
  *  Geocoded at request time (the geo provider caches internally), not

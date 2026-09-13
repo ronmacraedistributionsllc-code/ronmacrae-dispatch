@@ -309,6 +309,8 @@ export function registerAuthHook(app: FastifyInstance, ctx: AppCtx): void {
     if ((url === "/api/order" || url.startsWith("/api/order/")) && method === "POST") return true;
     // A merchant's public storefront info + catalog for their own /order/:slug page.
     if (url.startsWith("/api/merchants/public/") && method === "GET") return true;
+    // Public rider application — no login (this IS how a rider gets one).
+    if (url === "/api/rider-signup" && method === "POST") return true;
     // Twilio's own delivery-status webhook — unauthenticated by nature (Twilio
     // isn't a logged-in user), verified instead by its own signature header
     // when TWILIO_AUTH_TOKEN is configured (see notify.ts).

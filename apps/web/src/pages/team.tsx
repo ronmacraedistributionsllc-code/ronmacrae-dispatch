@@ -28,6 +28,14 @@ export function Team(): React.JSX.Element {
 
   const staff = useQuery({ queryKey: ["users"], queryFn: () => apiFetch<{ users: UserDto[] }>(API.users.list) });
   const riders = useQuery({ queryKey: ["riders"], queryFn: () => apiFetch<{ riders: RiderDto[] }>(API.riders.list) });
+  const pending = useQuery({ queryKey: ["riders", "pending"], queryFn: () => apiFetch<{ riders: RiderDto[] }>(API.riders.pending) });
+  const decide = useMutation({
+    mutationFn: ({ id, approve }: { id: string; approve: boolean }) => apiFetch(API.riders.decide(id), { method: "POST", body: JSON.stringify({ approve }) }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["riders"] });
+      void qc.invalidateQueries({ queryKey: ["riders", "pending"] });
+    },
+  });
 
   return (
     <div className="space-y-6">
@@ -35,6 +43,30 @@ export function Team(): React.JSX.Element {
         <h1 className="text-xl font-bold">Team</h1>
         <p className="text-sm text-zinc-400">Staff logins (dispatcher, accountant, viewer, admin) and rider accounts.</p>
       </header>
+
+      {canEdit && pending.data && pending.data.riders.length > 0 ? (
+        <section className="space-y-3">
+          <h2 className="font-semibold text-amber-400">🔔 Pending rider applications ({pending.data.riders.length})</h2>
+          <div className="space-y-2">
+            {pending.data.riders.map((r) => (
+              <div key={r.id} className="card flex flex-wrap items-center justify-between gap-2 border-amber-800/40">
+                <div>
+                  <p className="font-medium">{r.name}</p>
+                  <p className="text-xs text-zinc-500">{r.phone} · {r.vehicle}{r.plate ? ` · ${r.plate}` : ""}</p>
+                </div>
+                <div className="flex gap-2">
+                  <button type="button" className="btn !px-3 !py-1 text-xs !border-emerald-700 !text-emerald-300" disabled={decide.isPending} onClick={() => void decide.mutate({ id: r.id, approve: true })}>
+                    Approve
+                  </button>
+                  <button type="button" className="btn !px-3 !py-1 text-xs !border-red-800 !text-red-300" disabled={decide.isPending} onClick={() => void decide.mutate({ id: r.id, approve: false })}>
+                    Reject
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      ) : null}
 
       <section className="space-y-3">
         <div className="flex items-center justify-between gap-3">

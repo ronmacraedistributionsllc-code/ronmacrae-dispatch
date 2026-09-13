@@ -86,10 +86,10 @@ export function Login(): React.JSX.Element {
           <button className="btn-accent w-full" disabled={busy || loading}>
             {busy ? "Signing in…" : "Sign in"}
           </button>
-          <p className="text-center text-xs text-zinc-500">
-            Demo: admin@ronmacrae.example / admin1234
-          </p>
         </form>
+        <p className="mt-4 text-center text-sm text-zinc-400">
+          Want to ride with us? <a className="text-brand-accent underline" href="/join/rider">Apply to become a rider</a>
+        </p>
       </div>
     </div>
   );
