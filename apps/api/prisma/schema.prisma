@@ -238,6 +238,7 @@ model Rider {
   offers      JobOffer[]
   memberships RiderMembership[]
   settlements Settlement[]
+  ratings     Rating[]
 }
 
 // ---------- Geography / pricing ----------
@@ -386,6 +387,38 @@ model Invite {
 
   @@index([email, status])
   @@index([target, targetId])
+}
+
+enum RaterType {
+  customer
+  merchant
+}
+
+/** A rider rating after a completed delivery (spec: "Authorized customer
+ *  and merchant may rate after a completed delivery... Prevent duplicate
+ *  ratings, self-ratings, abusive content, and cross-business leaks").
+ *  One rating per job per rater type — `@@unique([jobId, raterType])` is
+ *  the actual duplicate-prevention mechanism, not just a UI nicety.
+ *  Deliberately no rater identity stored beyond `raterType` (which side
+ *  rated, not which specific customer/merchant-staff person) — a rating
+ *  is about the rider's delivery on that job, and the job itself already
+ *  records who the customer/merchant were; a moderator (platform admin)
+ *  can always trace it back via `jobId`. */
+model Rating {
+  id        String    @id @default(cuid())
+  jobId     String
+  job       Job       @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  riderId   String
+  rider     Rider     @relation(fields: [riderId], references: [id], onDelete: Cascade)
+  raterType RaterType
+  score     Int
+  comment   String?
+  hidden    Boolean   @default(false)
+  hiddenAt  DateTime?
+  createdAt DateTime  @default(now())
+
+  @@unique([jobId, raterType])
+  @@index([riderId, hidden])
 }
 
 model Product {
@@ -750,6 +783,7 @@ model Job {
   addressChangeRequests AddressChangeRequest[]
   items JobItem[]
   settlementLines SettlementLine[]
+  ratings Rating[]
 
   @@unique([businessId, jobNumber])
   @@unique([businessId, externalRef])

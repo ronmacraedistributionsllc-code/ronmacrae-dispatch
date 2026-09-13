@@ -175,6 +175,7 @@ export function MerchantPortal(): React.JSX.Element {
                   <span className="text-zinc-400">{o.paymentMethodLabel}{o.riderName ? ` · rider: ${o.riderName}` : ""}</span>
                   <span className="font-semibold">{formatMoney(o.total)}</span>
                 </div>
+                {o.status === "delivered" ? <RateOrder jobId={o.id} token={token} /> : null}
               </section>
             ))}
           </div>
@@ -245,6 +246,40 @@ function Catalog({ token }: { token: string }): React.JSX.Element {
           </div>
         ))}
       </div>
+    </div>
+  );
+}
+
+/** Spec: "Authorized... merchant may rate after a completed delivery." */
+function RateOrder({ jobId, token }: { jobId: string; token: string }): React.JSX.Element {
+  const [score, setScore] = useState(0);
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function submit(n: number) {
+    setScore(n);
+    setBusy(true);
+    setError(null);
+    try {
+      await portalFetch(API.merchantPortal.rate(jobId), { method: "POST", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ score: n }) });
+      setDone(true);
+    } catch (err) {
+      if (err instanceof PortalError && err.status === 409) setDone(true);
+      else setError(err instanceof PortalError ? err.message : "Could not submit rating");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (done) return <p className="text-xs text-emerald-400">Rated — thank you.</p>;
+  return (
+    <div className="flex items-center gap-1 text-lg">
+      <span className="mr-1 text-xs text-zinc-500">Rate rider:</span>
+      {[1, 2, 3, 4, 5].map((n) => (
+        <button key={n} type="button" disabled={busy} className={n <= score ? "text-amber-400" : "text-zinc-700"} onClick={() => void submit(n)}>★</button>
+      ))}
+      {error ? <span className="ml-2 text-xs text-red-400">{error}</span> : null}
     </div>
   );
 }

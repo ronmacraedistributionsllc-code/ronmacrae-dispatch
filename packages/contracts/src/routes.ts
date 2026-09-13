@@ -133,6 +133,7 @@ export const API = {
     /** Jumps to staff/rider access on the same account, if any — no
      *  second password entry (see auth.ts's own switchToMerchant). */
     switchToStaff: "/api/merchant-portal/switch-to-staff",
+    rate: (jobId: string) => `/api/merchant-portal/orders/${jobId}/rate`,
   },
 
   products: {
@@ -184,6 +185,8 @@ export const API = {
     messages: (token: string, kind: string) => `/api/tracking/${token}/messages/${kind}`,
     conversations: (token: string) => `/api/tracking/${token}/conversations`,
     addressChange: (token: string) => `/api/tracking/${token}/address-change`,
+    /** public, tracking-token-gated — rate the rider after "delivered" */
+    rate: (token: string) => `/api/tracking/${token}/rate`,
   },
 
   /** Cross-business customer package dashboard (spec 4) — public, no login;
@@ -329,6 +332,7 @@ export const API = {
     staff: "/api/platform/staff",
     updateUser: (id: string) => `/api/platform/users/${id}`,
     audit: "/api/platform/audit",
+    moderateRating: (id: string) => `/api/platform/ratings/${id}`,
   },
 
   /** bearer-scoped */

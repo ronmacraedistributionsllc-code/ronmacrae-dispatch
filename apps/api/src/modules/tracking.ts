@@ -1,4 +1,5 @@
 import type { FastifyInstance } from "fastify";
+import { z } from "zod";
 import { httpErrors } from "@fastify/sensible";
 import type { AppCtx } from "../ctx.js";
 import type { TrackingPublicDto } from "@ronmacrae/contracts";
@@ -168,6 +169,28 @@ export async function trackingRoutes(app: FastifyInstance, ctx: AppCtx): Promise
       generatedAt: now.toISOString(),
     };
     return out;
+  });
+
+  // Customer rates the rider (spec: "Authorized customer... may rate
+  // after a completed delivery") — the tracking token itself is the
+  // authorization, same as the GET above; no separate customer login
+  // needed. One rating per job from this side, enforced by the schema's
+  // own @@unique([jobId, raterType]), not just this check.
+  app.post<{ Params: { token: string } }>("/api/tracking/:token/rate", { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } }, async (req) => {
+    const body = z.object({ score: z.number().int().min(1).max(5), comment: z.string().max(500).optional().or(z.literal("")).nullable() }).parse(req.body);
+    const link = await ctx.prisma.trackingLink.findUnique({ where: { token: req.params.token } });
+    if (!link || link.revoked) throw httpErrors.createError(410, "This tracking link is no longer valid");
+    const job = await ctx.prisma.job.findUnique({ where: { id: link.jobId, deletedAt: null } });
+    if (!job) throw httpErrors.createError(410, "This tracking link is no longer valid");
+    if (job.status !== "delivered" || !job.riderId) {
+      throw httpErrors.createError(400, "This order hasn't been delivered yet — nothing to rate.");
+    }
+    const existing = await ctx.prisma.rating.findUnique({ where: { jobId_raterType: { jobId: job.id, raterType: "customer" } } });
+    if (existing) throw httpErrors.createError(409, "You've already rated this delivery.");
+    const rating = await ctx.prisma.rating.create({
+      data: { jobId: job.id, riderId: job.riderId, raterType: "customer", score: body.score, comment: body.comment || null },
+    });
+    return { ok: true, rating: { id: rating.id, score: rating.score } };
   });
 }
 

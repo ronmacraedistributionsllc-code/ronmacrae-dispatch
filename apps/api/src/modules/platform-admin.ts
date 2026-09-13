@@ -129,6 +129,8 @@ export async function platformAdminRoutes(app: FastifyInstance, ctx: AppCtx): Pr
     });
     if (!rider) throw httpErrors.createError(404, "Rider not found");
     const statusCounts = await ctx.prisma.job.groupBy({ by: ["status"], where: { riderId: rider.id }, _count: true });
+    const visibleRatings = await ctx.prisma.rating.findMany({ where: { riderId: rider.id, hidden: false }, orderBy: { createdAt: "desc" }, take: 20 });
+    const ratingAgg = await ctx.prisma.rating.aggregate({ where: { riderId: rider.id, hidden: false }, _avg: { score: true }, _count: true });
     // A rider can be a member of more than one business — an honest
     // aggregate needs the cash profile across all of them, not just one.
     const businessIds = rider.memberships.map((m) => m.businessId);
@@ -151,11 +153,25 @@ export async function platformAdminRoutes(app: FastifyInstance, ctx: AppCtx): Pr
         jobsByStatus: Object.fromEntries(statusCounts.map((s) => [s.status, s._count])),
         cashByBusiness: cashByBusiness.map((c) => ({ businessId: c.businessId, businessName: rider.memberships.find((m) => m.businessId === c.businessId)?.business.name ?? "", ...c.profile })),
       },
-      // Not built yet — see this module's own doc comment. Present as an
-      // explicit, honest empty section rather than omitted entirely, so
-      // the frontend can show "not yet available" instead of nothing.
-      ratings: null,
+      ratings: {
+        average: ratingAgg._avg.score,
+        count: ratingAgg._count,
+        recent: visibleRatings.map((r) => ({ id: r.id, jobId: r.jobId, raterType: r.raterType, score: r.score, comment: r.comment, createdAt: r.createdAt.toISOString() })),
+      },
     };
+  });
+
+  // Moderation (spec: "Platform Admin has moderation ability" over
+  // ratings/feedback) — hides (never deletes) an abusive/incorrect
+  // rating; unhiding is the same call with hidden:false. Hidden ratings
+  // are excluded from the average/recent list above but never erased —
+  // same "correction, not erasure" rule as everywhere else financial/
+  // reputational history is handled in this app.
+  app.patch<{ Params: { id: string } }>("/api/platform/ratings/:id", { preHandler: owner }, async (req) => {
+    const body = z.object({ hidden: z.boolean() }).parse(req.body);
+    const rating = await ctx.prisma.rating.update({ where: { id: req.params.id }, data: { hidden: body.hidden, hiddenAt: body.hidden ? new Date() : null } });
+    await ctx.audit.record({ id: req.user!.sub, role: "platform_owner" }, body.hidden ? "platform.rating.hide" : "platform.rating.unhide", "rating", rating.id);
+    return { ok: true, hidden: rating.hidden };
   });
 
   app.patch<{ Params: { id: string } }>("/api/platform/riders/:id", { preHandler: owner }, async (req) => {

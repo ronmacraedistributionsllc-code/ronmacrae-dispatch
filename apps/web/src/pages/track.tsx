@@ -104,6 +104,8 @@ export function Track(): React.JSX.Element {
             ) : null}
           </section>
 
+          {data.job.status === "delivered" ? <RateDelivery token={token} /> : null}
+
           <section className="card">
             <div className="flex items-center justify-between">
               <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-400">Courier location</h2>
@@ -175,6 +177,62 @@ export function Track(): React.JSX.Element {
         </>
       )}
     </div>
+  );
+}
+
+/** Spec: "Authorized customer... may rate after a completed delivery" —
+ *  the tracking token itself is the authorization, same as the rest of
+ *  this page. Local-only "already rated" state (there's no GET-status
+ *  endpoint) — a stale reload just re-shows the form, and a genuine
+ *  re-submit is caught server-side (409) and shown the same way. */
+function RateDelivery({ token }: { token: string }): React.JSX.Element {
+  const [score, setScore] = React.useState(0);
+  const [comment, setComment] = React.useState("");
+  const [busy, setBusy] = React.useState(false);
+  const [done, setDone] = React.useState(false);
+  const [error, setError] = React.useState<string | null>(null);
+
+  async function submit() {
+    setBusy(true);
+    setError(null);
+    try {
+      await apiFetch(API.tracking.rate(token), { method: "POST", body: JSON.stringify({ score, comment: comment || undefined }) });
+      setDone(true);
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 409) {
+        setDone(true);
+      } else {
+        setError(err instanceof ApiError ? err.message : "Could not submit your rating");
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (done) {
+    return (
+      <section className="card">
+        <p className="text-sm text-emerald-400">Thanks for your feedback!</p>
+      </section>
+    );
+  }
+
+  return (
+    <section className="card space-y-2">
+      <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-400">Rate your delivery</h2>
+      <div className="flex gap-1 text-2xl">
+        {[1, 2, 3, 4, 5].map((n) => (
+          <button key={n} type="button" aria-label={`${n} star${n === 1 ? "" : "s"}`} className={n <= score ? "text-amber-400" : "text-zinc-700"} onClick={() => setScore(n)}>
+            ★
+          </button>
+        ))}
+      </div>
+      <textarea className="input w-full" rows={2} placeholder="Anything you'd like to add? (optional)" value={comment} onChange={(e) => setComment(e.target.value)} />
+      {error ? <p className="text-sm text-red-400">{error}</p> : null}
+      <button className="btn-accent" disabled={busy || score === 0} onClick={() => void submit()}>
+        {busy ? "Submitting…" : "Submit rating"}
+      </button>
+    </section>
   );
 }
 

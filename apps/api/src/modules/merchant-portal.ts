@@ -155,6 +155,25 @@ export async function merchantPortalRoutes(app: FastifyInstance, ctx: AppCtx): P
     return { orders: jobs.map(toMerchantOrderDto) };
   });
 
+  // Merchant rates the rider (spec: "Authorized customer and merchant may
+  // rate after a completed delivery") — same one-per-side rule as the
+  // customer's own rating endpoint (tracking.ts), enforced by the same
+  // schema unique constraint. Scoped to this merchant's own order only —
+  // a merchant can never rate a job that isn't theirs.
+  app.post<{ Params: { jobId: string } }>("/api/merchant-portal/orders/:jobId/rate", async (req) => {
+    const auth = await requireMerchantAuth(ctx, req);
+    const body = z.object({ score: z.number().int().min(1).max(5), comment: z.string().max(500).optional().or(z.literal("")).nullable() }).parse(req.body);
+    const job = await ctx.prisma.job.findFirst({ where: { id: req.params.jobId, merchantId: auth.merchantId, deletedAt: null } });
+    if (!job) throw httpErrors.createError(404, "Order not found");
+    if (job.status !== "delivered" || !job.riderId) throw httpErrors.createError(400, "This order hasn't been delivered yet — nothing to rate.");
+    const existing = await ctx.prisma.rating.findUnique({ where: { jobId_raterType: { jobId: job.id, raterType: "merchant" } } });
+    if (existing) throw httpErrors.createError(409, "This order has already been rated.");
+    const rating = await ctx.prisma.rating.create({
+      data: { jobId: job.id, riderId: job.riderId, raterType: "merchant", score: body.score, comment: body.comment || null },
+    });
+    return { ok: true, rating: { id: rating.id, score: rating.score } };
+  });
+
   // -----------------------------------------------------------------
   // Catalog — same validation/shape as the staff-side equivalent in
   // merchants.ts (CreateProduct, productToDto), reused rather than

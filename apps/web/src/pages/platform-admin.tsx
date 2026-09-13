@@ -187,19 +187,46 @@ function RidersTab(): React.JSX.Element {
   );
 }
 
+interface RatingsSummary {
+  average: number | null;
+  count: number;
+  recent: { id: string; jobId: string; raterType: "customer" | "merchant"; score: number; comment: string | null; createdAt: string }[];
+}
+
 function RiderDetailPanel({ id }: { id: string }): React.JSX.Element {
-  const detail = useQuery({ queryKey: ["platform", "rider", id], queryFn: () => apiFetch<{ rider: RiderDetail; ratings: null }>(API.platform.rider(id)) });
+  const qc = useQueryClient();
+  const detail = useQuery({ queryKey: ["platform", "rider", id], queryFn: () => apiFetch<{ rider: RiderDetail; ratings: RatingsSummary }>(API.platform.rider(id)) });
+  const moderate = useMutation({
+    mutationFn: ({ ratingId, hidden }: { ratingId: string; hidden: boolean }) => apiFetch(API.platform.moderateRating(ratingId), { method: "PATCH", body: JSON.stringify({ hidden }) }),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["platform", "rider", id] }),
+  });
   if (detail.isLoading) return <p className="text-xs text-zinc-500">Loading detail…</p>;
   if (!detail.data) return <p className="text-xs text-red-400">Could not load detail.</p>;
   const { rider, ratings } = detail.data;
   return (
-    <div className="rounded-lg border border-zinc-700 p-3 text-sm">
+    <div className="rounded-lg border border-zinc-700 p-3 text-sm space-y-2">
       <p className="text-zinc-400">Email: {rider.email ?? "—"} {rider.email ? (rider.emailVerified ? "(verified)" : "(not verified)") : ""}</p>
-      <p className="mt-1 text-zinc-400">
+      <p className="text-zinc-400">
         Jobs by status: {Object.keys(rider.jobsByStatus).length === 0 ? "none yet" : Object.entries(rider.jobsByStatus).map(([s, c]) => `${s}: ${c}`).join(", ")}
       </p>
-      <p className="mt-1 text-zinc-400">Businesses: {rider.memberships.map((m) => `${m.businessName} (${m.status})`).join(", ") || "none"}</p>
-      <p className="mt-1 text-xs text-zinc-500">Ratings: {ratings === null ? "not built yet in this platform" : "—"}</p>
+      <p className="text-zinc-400">Businesses: {rider.memberships.map((m) => `${m.businessName} (${m.status})`).join(", ") || "none"}</p>
+      <div>
+        <p className="text-zinc-400">
+          Rating: {ratings.count === 0 ? "no ratings yet" : `${ratings.average?.toFixed(1)} ★ (${ratings.count} rating${ratings.count === 1 ? "" : "s"})`}
+        </p>
+        {ratings.recent.length > 0 ? (
+          <ul className="mt-1 space-y-1">
+            {ratings.recent.map((r) => (
+              <li key={r.id} className="flex items-center justify-between gap-2 text-xs text-zinc-500">
+                <span>{"★".repeat(r.score)} ({r.raterType}){r.comment ? ` — ${r.comment}` : ""}</span>
+                <button className="btn !px-2 !py-0.5 text-xs" disabled={moderate.isPending} onClick={() => void moderate.mutate({ ratingId: r.id, hidden: true })}>
+                  Hide
+                </button>
+              </li>
+            ))}
+          </ul>
+        ) : null}
+      </div>
     </div>
   );
 }

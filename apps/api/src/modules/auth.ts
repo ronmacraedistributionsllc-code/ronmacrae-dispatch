@@ -378,7 +378,7 @@ export function registerAuthHook(app: FastifyInstance, ctx: AppCtx): void {
     // Stage 24: messages moved from /api/tracking/:token/messages to
     // /api/tracking/:token/messages/:kind (one per conversation) — the
     // trailing segment is now a conversation kind, not a fixed suffix.
-    if (url.startsWith("/api/tracking/") && method === "POST" && (/\/messages\/[^/]+$/.test(url) || url.endsWith("/address-change"))) return true;
+    if (url.startsWith("/api/tracking/") && method === "POST" && (/\/messages\/[^/]+$/.test(url) || url.endsWith("/address-change") || url.endsWith("/rate"))) return true;
     if (url === "/api/auth/login" || url === "/api/auth/refresh") return true;
     // Cross-business customer package dashboard (spec 4) — no staff/rider
     // login; request-code/verify are phone-gated, and the dashboard list
