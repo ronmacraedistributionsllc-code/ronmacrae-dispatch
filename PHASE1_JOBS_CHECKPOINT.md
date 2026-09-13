@@ -2418,3 +2418,43 @@ authorization matrix, financial dispute/archival workflow) — see
 `WORK_IN_PROGRESS.md` for where that stands; it is a multi-stage effort
 of its own, tracked separately rather than folded into this stage's
 count.
+
+## Stage 32 — one shared login for staff, riders, and merchants
+
+The first stage of the larger platform-rebuild spec given after Stage
+31 — its opening, most foundational requirement: one shared sign-in
+for every kind of account, and a real fix (with tests) for the "no
+active business membership" bug. Full narrative — the exact login
+branching logic, the switch-workspace design, and a real password-
+overwrite bug found and fixed along the way — is in
+`WORK_IN_PROGRESS.md`'s own Stage 32 section.
+
+## Commands run and results (Stage 32)
+
+| # | Command | Result |
+| --- | --- | --- |
+| 1 | `npm run typecheck --workspace apps/api --workspace apps/web` | **PASS** — 0 errors |
+| 2 | `npx vitest run` (apps/api) | **PASS** — 230/230 across 34 files, up from Stage 31's 225/33 (5 net new: `unified-login.test.ts`) |
+| 3 | `npm run build --workspace apps/api --workspace apps/web` | **PASS** — clean |
+| 4 | Full e2e suite (35 specs), serial, fresh `e2e-test.db` | **34/35** — re-run specifically because `login.tsx` (used by nearly every spec) changed; the one failure is `booking.spec.ts`'s pre-existing address-suggestion flake (confirmed unrelated earlier this session against the pre-Stage-30 baseline) |
+| 5 | `dev.db` via `prisma db push` | No schema change this stage — pure application-logic change |
+
+## Re-verify (Stage 32)
+
+```bash
+npm run typecheck --workspace apps/api --workspace apps/web
+npm run test --workspace @ronmacrae/api
+npm run build --workspace apps/api --workspace apps/web
+rm -f apps/api/data/e2e-test.db && cd e2e && npx playwright test --workers=1
+```
+
+**Not done in this stage** (see `WORK_IN_PROGRESS.md` for the full,
+honest list against the much larger platform-rebuild spec this stage
+is the first piece of): a real secure invite-link/password-setup flow
+(today an admin sets an initial password directly); richer
+pending/active/disabled membership lifecycle beyond the rider-
+application `pending` state; the platform-admin console; the
+bearer/logistics-company account type; ratings; the full messaging
+authorization matrix; financial dispute/archival workflow; three-way
+(staff + rider + merchant) workspace switching. This is stage 1 of a
+multi-stage effort — the remaining pieces are tracked, not abandoned.

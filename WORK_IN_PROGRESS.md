@@ -3549,3 +3549,105 @@ database off its free (30-day-expiring) plan; connecting Twilio for
 real SMS/WhatsApp (`NOTIFICATION_PROVIDER` is still `memory`); the
 `orders.ronmacraedistributions.com` custom domain was connected during
 this stage but is a DNS/Render-dashboard action, not code.
+
+## Stage 32 — one shared login for staff, riders, and merchants (DONE)
+
+A much larger platform-rebuild spec was given after Stage 31 — a full
+multi-sided marketplace model (platform admin console, merchant
+portals, bearer/logistics-company accounts, ratings, a full messaging
+authorization matrix, financial dispute/archival workflow, and more).
+That spec is realistically many stages of work on its own; this stage
+is the first and most foundational piece of it — everything else in
+that spec depends on the login/membership model being correct first.
+
+**What Stage 32 actually is**: the spec's opening requirement, word for
+word — "There must be one shared sign-in/sign-up page for everyone. No
+separate rider, merchant, logistics, or admin login pages" — and its
+explicit demand to "Fix the current broken membership experience...
+'This account has no active business membership' issue with actual
+code and tests." Both done, for real, with tests proving it, not just
+described.
+
+**The actual change**: `resolveStaffContext` (auth.ts) used to throw on
+zero active `StaffMembership` rows. It now returns `null` instead, and
+`POST /api/auth/login` — the one and only login endpoint, used by
+staff, riders, and now merchants alike — falls through to check
+`MerchantStaff` access before giving up:
+- Staff/rider access resolves → the exact same response shape as
+  before (one field added: `workspace: "staff"`), so every existing
+  staff/rider login is unchanged — proven by the full pre-existing test
+  suite passing with zero modifications needed to any of it.
+- No staff/rider access, exactly one merchant workspace → issues a
+  `merchant_portal` token directly. A merchant-only account now signs
+  in at the identical page and endpoint as everyone else, not a
+  separate `/merchant`-only form.
+- No staff/rider access, more than one merchant workspace → returns the
+  choices, no token yet; re-submitting the same credentials plus the
+  chosen id finalizes it (no separate "confirm" endpoint).
+- Neither → a specific, honest explanation ("isn't connected to any
+  business yet... check for an invite") instead of the old blanket
+  error that fired even for a legitimate merchant-only login attempt —
+  this was the literal bug: a merchant-only account trying to log in at
+  `/merchant` never hit this code path at all before Stage 31's
+  merchant-portal work, but the underlying `resolveStaffContext`
+  bug would have blocked a merchant account from ever using the *staff*
+  login page too, which is exactly the scenario the new spec asks for.
+
+**"Switch workspace"** (spec: "show a clear switch workspace menu
+containing only roles/businesses they are authorized to enter"), for
+an account with both staff/rider and merchant access on the same
+login: `POST /api/auth/switch-to-merchant` and the reverse
+`/api/merchant-portal/switch-to-staff`, neither requiring the password
+again since the caller already holds a valid session of the other
+kind. The reverse direction is deliberately access-token-only (no
+refresh cookie) — a documented ~15-minute session rather than
+replicating the full refresh/cookie machinery from a merchant-token
+context; re-logging in resets it to a full session. `/merchant` no
+longer renders its own login form at all — visiting it without a
+session redirects to the one shared login page, which routes back
+once it resolves to a merchant workspace.
+
+**A real bug found and fixed while building this, not a pre-existing
+one**: `POST /api/merchants/:id/staff` (grant merchant portal access,
+built in Stage 31) would silently overwrite an *existing* account's
+password if that email already had one (as staff, a rider, or another
+merchant) — the endpoint always ran `user.upsert()` with a fresh
+`passwordHash`, on both the create and update branches. Fixed: an
+existing account is only ever linked to the new `MerchantStaff` row,
+never touched otherwise; a password is required (and only ever used)
+when the call is what actually creates a brand-new account. This also
+removed an overly-restrictive rule (also from Stage 31, also this
+session's own earlier mistake) that blocked one email from having
+portal access at more than one merchant at all — directly in the way
+of the "select workspace" flow this stage specifically builds to
+support that case.
+
+**Verification**: `npm run typecheck --workspace apps/api --workspace
+apps/web` clean. `apps/api` vitest **230/230** across 34 files (5 net
+new in `unified-login.test.ts`: merchant-only login through the shared
+endpoint, the specific no-access error message, full dual-access
+login+both switch directions in one round trip, multi-merchant
+select-then-finalize, and a staff-only account correctly refused a
+merchant-workspace switch). `npm run build --workspace apps/api
+--workspace apps/web` clean. Full e2e suite re-run specifically because
+`login.tsx` (used by nearly every spec) changed: **34/35**, the one
+failure is `booking.spec.ts`'s address-suggestion flake, already
+confirmed earlier in this same session (via `git stash -u` against the
+pre-Stage-30 baseline) to be pre-existing and unrelated to any of this
+session's work.
+
+**Not done in this stage** (tracked as later stages of the larger
+platform-rebuild spec, not silently dropped): a real secure invite
+link / password-setup flow for adding someone to a business (today an
+admin sets the initial password directly and shares it out of band —
+functional, but not the "invite link, resend invite, revoke invite"
+flow the spec describes); pending/active/disabled membership status
+beyond the rider-application `pending` state already built in Stage 31
+(a `StaffMembership`/`MerchantStaff` today is simply active or not,
+with no richer lifecycle); a platform-admin console; the
+bearer/logistics-company account type; ratings; the full messaging
+authorization matrix; financial dispute/archival workflow; multi-role
+switching for more than two workspace kinds at once (a staff member
+who is ALSO a rider ALSO with merchant access, for instance — the
+current code handles staff-or-rider as one resolved context and
+merchant as a second, not three-way).
