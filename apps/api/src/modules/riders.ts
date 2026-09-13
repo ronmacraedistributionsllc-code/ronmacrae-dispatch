@@ -260,7 +260,7 @@ export class RidersService {
    */
   async selfSignup(businessId: string, input: z.infer<typeof SignupBody>): Promise<{ status: "pending" | "active"; riderId: string }> {
     const phone = normalizePhone(input.phone);
-    const existing = await this.app.prisma.rider.findUnique({ where: { phone } });
+    const existing = await this.app.prisma.rider.findUnique({ where: { phone }, include: { user: { select: { email: true, emailVerifiedAt: true } } } });
     if (existing) {
       const existingMembership = await this.app.prisma.riderMembership.findUnique({ where: { riderId_businessId: { riderId: existing.id, businessId } } });
       if (existingMembership?.status === "active") throw httpErrors.createError(409, "This phone number is already an active rider with us");
@@ -269,6 +269,17 @@ export class RidersService {
         await this.app.prisma.riderMembership.update({ where: { id: existingMembership.id }, data: { status, approvedAt: status === "active" ? new Date() : null } });
       } else {
         await this.app.prisma.riderMembership.create({ data: { riderId: existing.id, businessId, status, approvedAt: status === "active" ? new Date() : null } });
+      }
+      // A genuinely new applicant can't reach this branch without a rider
+      // row already existing for their phone — the most likely reason is
+      // their FIRST attempt's verification email never sent (a real
+      // production failure mode: see sendEmailCode's own doc comment) and
+      // they're trying again. Resubmitting the same form must still get
+      // them a working code, not silently look like success a second time
+      // with nothing actually sent. An already-verified rider (a genuine
+      // second-business application) needs nothing further here.
+      if (!existing.user?.emailVerifiedAt) {
+        await sendEmailCode(this.app, existing.user?.email || input.email, RIDER_EMAIL_VERIFY_PURPOSE, "Verify your email", (code) => `Your Ronmacrae rider sign-up code is ${code}. It expires in 10 minutes.`);
       }
       return { status, riderId: existing.id };
     }

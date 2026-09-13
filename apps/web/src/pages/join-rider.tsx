@@ -40,7 +40,18 @@ export function JoinRider(): React.JSX.Element {
       setStatus(res.status);
       setStep("verify");
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Could not submit your application");
+      if (err instanceof ApiError && err.status === 502) {
+        // The application itself was created — only the email failed to
+        // send. Move on to the verify step anyway (resubmitting this same
+        // form would do the same thing server-side) so "Resend code" is
+        // right there instead of leaving them stuck on a form that looks
+        // like it silently did nothing.
+        setStatus("pending");
+        setStep("verify");
+        setError("Your application was saved, but we couldn't email you a code just now — tap \"Resend code\" below to try again.");
+      } else {
+        setError(err instanceof ApiError ? err.message : "Could not submit your application");
+      }
     } finally {
       setBusy(false);
     }

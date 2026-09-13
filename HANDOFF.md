@@ -145,6 +145,8 @@ This checkpoint made **no change** to the Render deployment, its environment var
 
 ## 9. ⚠️ Explicit warning: the courier verification email issue must be diagnosed, not assumed fixed
 
+> **Update, Stage A (after this checkpoint's tag — the tag itself still points at the original, unchanged commit):** the silent-failure bug described below has been fixed in code (`sendEmailCode()` now checks the send result, deletes the never-delivered code row, logs the provider's own error, and throws a 502 the caller surfaces honestly instead of a false success — see `WORK_IN_PROGRESS.md`'s Stage A section for the full change and its tests). **Production delivery is still unconfirmed** — this session has no Render dashboard, Resend dashboard, or real inbox access. Everything below this note describes the original, still-relevant diagnostic facts; treat "not confirmed" as still true until someone with that access verifies a real send.
+
 **As of this checkpoint, nothing about the verification-email path has been changed, tested against a real inbox, or confirmed working.** This section records only what a first read of the code shows — facts about the code, not a diagnosis of the live failure, and not a fix.
 
 - The relevant code path is `RidersService.selfSignup()` / `.resendVerification()` / `.verifyEmail()` in `apps/api/src/modules/riders.ts`, calling `sendEmailCode()` in `apps/api/src/modules/customer-account.ts`, which calls `ctx.email.send()` (`packages/notifications/src/email.ts`).

@@ -2736,3 +2736,24 @@ feature work): the courier verification-email diagnosis; the Rider→
 Courier rename; shared signup with a merchant option; courier
 business-access scoping; the theme switcher. All four are the next
 work, in that order, per `HANDOFF.md`'s §8.
+
+## Stage A — courier verification email: silent-failure bug fixed (production delivery unconfirmed)
+
+Full narrative — the exact bug, the fix, and the honest "not confirmed
+in production" status — is in `WORK_IN_PROGRESS.md`'s own Stage A
+section. Do not skip that honesty note.
+
+## Commands run and results (Stage A)
+
+| # | Command | Result |
+| --- | --- | --- |
+| 1 | `npm run typecheck --workspace apps/api --workspace apps/web` | **PASS** — 0 errors |
+| 2 | `DEV_DB=1 npx vitest run` (apps/api) | **PASS** — 276/276 across 39 files, up from the checkpoint's 272/39 (4 net new in `rider-signup.test.ts`) |
+| 3 | `npm run build --workspace apps/api --workspace apps/web` | **PASS** — clean |
+| 4 | Full e2e suite (35 specs), serial (`--workers=1`), fresh `e2e-test.db` | **34/35** — the one failure is the same already-confirmed-unrelated `booking.spec.ts` flake |
+| 5 | schema | No schema change this stage |
+
+**Not done in this stage**: confirming real production email delivery
+(no Render dashboard / Resend dashboard / real inbox access from this
+session); the Rider→Courier rename; shared signup with a merchant
+option; courier business-access scoping; the theme switcher.

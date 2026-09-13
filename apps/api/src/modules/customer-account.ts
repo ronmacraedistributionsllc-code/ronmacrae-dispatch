@@ -60,8 +60,22 @@ export async function sendEmailCode(ctx: AppCtx, email: string, purpose: string,
   }
   const code = generateVerificationCode();
   const expiresAt = new Date(Date.now() + CODE_TTL_MS);
-  await ctx.prisma.customerEmailCode.create({ data: { email, purpose, codeHash: hashVerificationCode(email, code), expiresAt } });
-  await ctx.email.send({ to: email, subject, text: bodyFor(code) });
+  const row = await ctx.prisma.customerEmailCode.create({ data: { email, purpose, codeHash: hashVerificationCode(email, code), expiresAt } });
+  const result = await ctx.email.send({ to: email, subject, text: bodyFor(code) });
+  if (result.status === "failed") {
+    // Never leave a row behind for a code that was never actually sent — it
+    // would otherwise (a) wrongly block an immediate retry behind the
+    // cooldown check above, since that check only looks at *whether* a row
+    // exists, never whether it was ever delivered, and (b) sit as a
+    // guessable, never-delivered code with nobody who could type it in.
+    await ctx.prisma.customerEmailCode.delete({ where: { id: row.id } }).catch(() => undefined);
+    // The provider's own error (never the code itself — that never appears
+    // in a log line) is exactly what tells a real diagnosis apart from a
+    // guess: an unverified sending domain, a bad API key, and a network
+    // timeout all produce a different `result.error` here.
+    ctx.log.error({ email, purpose, provider: ctx.email.name, error: result.error }, "verification email failed to send");
+    throw httpErrors.createError(502, "We couldn't send your verification email right now — please try again in a moment.");
+  }
 }
 
 export async function consumeEmailCode(ctx: AppCtx, email: string, purpose: string, code: string): Promise<void> {

@@ -4198,3 +4198,64 @@ error and no different response to the applicant) is recorded there as
 a *plausible*, not confirmed, explanation. Diagnosing this with real
 provider evidence is the first task after this checkpoint, before any
 of the rename/signup/access/theme work below it.
+
+## Stage A — courier verification email: silent-failure bug fixed; production delivery still unconfirmed (PARTIAL — see honest status below)
+
+Traced the full code path: application creation → code generation →
+`ctx.email.send()` → provider response → activation gate. Confirmed by
+code reading (not by sending a real production email — no Render
+dashboard or real inbox access from this session) the exact bug
+`HANDOFF.md` §9 flagged as plausible: `sendEmailCode()`
+(`customer-account.ts`) discarded `EmailProvider.send()`'s return value,
+and every one of that provider's own failure paths (`packages/
+notifications/src/email.ts`) returns `{status:"failed", error}` rather
+than throwing — so a real send failure produced no error, no log, and
+no different response to the applicant. Fixed:
+
+- `sendEmailCode()` now checks the result: on failure it deletes the
+  just-created (never-delivered) code row — so an immediate legitimate
+  retry isn't wrongly blocked behind the unrelated request-cooldown —
+  logs the provider's own error (never the code itself) via `ctx.log`,
+  and throws a 502 the caller can surface honestly. The one existing
+  deliberate exception (`request-password-reset`'s `.catch(() =>
+  undefined)`, there specifically to avoid revealing whether an email
+  has an account — anti-enumeration, not a bug) is untouched and keeps
+  behaving exactly as before.
+- `RidersService.selfSignup()`'s "existing rider" branch (reached when
+  someone resubmits the same phone number — the exact shape a first
+  attempt's failed email produces) now resends a verification code when
+  the existing account's email is still unverified, instead of silently
+  updating the membership and returning success with nothing sent a
+  second time either. An already-verified rider genuinely reapplying to
+  a second business still needs nothing further here.
+- `join-rider.tsx`: a 502 from the initial submit now moves the
+  applicant straight to the verify step with an honest message ("your
+  application was saved, but we couldn't email you a code — tap resend")
+  instead of leaving them on a form that looks like it did nothing.
+
+**Honest status — this is not a confirmed fix of the production issue.**
+This session has no access to a real inbox, to Resend's own delivery
+dashboard, or to Render's actual configured environment variables. What
+changed is that a real send failure in production will now surface as
+an actual error (visible in Render's logs, and to the applicant) instead
+of a false "check your email" success — which itself should make the
+*next* diagnosis step trivial (the error will name what actually failed:
+missing key, unverified domain, HTTP error code, etc.), but it has not
+been observed happening in production by this session. **Do not tell
+the applicant or anyone else this is fixed until a real send has been
+confirmed** — either by a real code arriving in an inbox, or by
+checking Render's logs/Resend's dashboard directly.
+
+**Verification**: typecheck clean (api+web); vitest **276/276** across
+39 files (4 net new in `rider-signup.test.ts` — a provider-failure
+simulation for both signup and resend that asserts the honest 502 and
+confirms an immediate resubmission works once the provider recovers, an
+expired-code rejection, and an approved-but-unverified rider still being
+refused login). Build clean. e2e 34/35 serial (same pre-existing
+`booking.spec.ts` flake).
+
+**Not done**: confirming real production email delivery (needs Render
+dashboard / Resend dashboard / a real inbox this session cannot reach);
+anything about *why* delivery might be failing beyond the one code-level
+bug found (unverified sending domain, wrong API key, and provider rate
+limiting are equally possible and unchecked).

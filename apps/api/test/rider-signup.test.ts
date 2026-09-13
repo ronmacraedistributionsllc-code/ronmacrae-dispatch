@@ -8,6 +8,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildTestHarness, type TestHarness } from "./helpers/test-app.js";
 import type { MemoryEmailProvider } from "@ronmacrae/notifications";
+import { normalizePhone } from "../src/modules/auth.js";
 
 let harness: TestHarness;
 let seq = 0;
@@ -190,5 +191,100 @@ describe("public rider self-signup", () => {
       payload: { email, code: realCode },
     });
     expect(goodAttempt.statusCode).toBe(200);
+  });
+
+  it("an unverified rider is refused login even after their application is approved — activation requires verification, not just approval", async () => {
+    const phone = `+1876555${uniq().slice(-4)}`;
+    const email = `neververified-${uniq()}@example.com`;
+    const signup = await harness.app.inject({
+      method: "POST",
+      url: "/api/rider-signup",
+      payload: { name: "Never Verified", phone, email, vehicle: "motorcycle", password: "riderpass1" },
+    });
+    const { riderId } = signup.json() as { riderId: string };
+
+    const auth = await adminToken(harness);
+    const decide = await harness.app.inject({ method: "POST", url: `/api/riders/${riderId}/decide`, headers: { authorization: `Bearer ${auth}` }, payload: { approve: true } });
+    expect(decide.statusCode).toBe(200);
+    const membership = await harness.prisma.riderMembership.findUniqueOrThrow({ where: { riderId_businessId: { riderId, businessId: harness.business.id } } });
+    expect(membership.status).toBe("active"); // genuinely approved...
+
+    // ...but never verified their email, so login must still be refused.
+    const login = await harness.app.inject({ method: "POST", url: "/api/auth/login", payload: { identifier: email, password: "riderpass1" } });
+    expect(login.statusCode).toBe(403);
+  });
+
+  it("an expired code is refused the same as one that was never sent", async () => {
+    const phone = `+1876555${uniq().slice(-4)}`;
+    const email = `expired-${uniq()}@example.com`;
+    await harness.app.inject({ method: "POST", url: "/api/rider-signup", payload: { name: "Expired Code", phone, email, vehicle: "motorcycle", password: "riderpass1" } });
+    const realCode = latestVerificationCode(email);
+
+    // Simulate real elapsed time rather than waiting out the real 10-minute TTL.
+    await harness.prisma.customerEmailCode.updateMany({ where: { email, purpose: "verify_rider_email" }, data: { expiresAt: new Date(Date.now() - 1000) } });
+
+    const verify = await harness.app.inject({ method: "POST", url: "/api/rider-signup/verify", payload: { email, code: realCode } });
+    expect(verify.statusCode).toBe(400);
+    expect((verify.json() as { error: { message: string } }).error.message).toMatch(/expired/i);
+  });
+});
+
+// Stage: diagnosing "the verification email isn't arriving" — this is the
+// exact failure mode a misconfigured/unreachable email provider produces in
+// production, reproduced here by making the memory provider itself report
+// a send failure (same EmailSendResult shape a real Resend outage, bad API
+// key, or unverified sending domain would return), never by throwing.
+describe("public rider self-signup: email provider failure is never silent", () => {
+  async function withFailingProvider<T>(fn: () => Promise<T>): Promise<T> {
+    const provider = emailProvider();
+    const realSend = provider.send.bind(provider);
+    provider.send = async () => ({ status: "failed", error: "simulated provider outage" });
+    try {
+      return await fn();
+    } finally {
+      provider.send = realSend;
+    }
+  }
+
+  it("a send failure during signup is reported to the applicant, not swallowed as a false success", async () => {
+    const phone = `+1876555${uniq().slice(-4)}`;
+    const email = `sendfails-${uniq()}@example.com`;
+    const signup = await withFailingProvider(() =>
+      harness.app.inject({ method: "POST", url: "/api/rider-signup", payload: { name: "Send Fails", phone, email, vehicle: "motorcycle", password: "riderpass1" } }),
+    );
+    // A 502, not a false 200 "check your email" — the applicant must be
+    // told the truth about what actually happened.
+    expect(signup.statusCode).toBe(502);
+
+    // The application itself was still created (not lost) — only the
+    // email attempt failed.
+    const rider = await harness.prisma.rider.findUniqueOrThrow({ where: { phone: normalizePhone(phone) } });
+    expect(rider).toBeTruthy();
+    const membership = await harness.prisma.riderMembership.findUniqueOrThrow({ where: { riderId_businessId: { riderId: rider.id, businessId: harness.business.id } } });
+    expect(membership.status).toBe("pending");
+
+    // No never-delivered code is left sitting around, and — critically —
+    // resubmitting the exact same form (once the provider is healthy
+    // again, simulated here by exiting withFailingProvider) actually gets
+    // a real code out this time, not another silent no-op.
+    const retry = await harness.app.inject({ method: "POST", url: "/api/rider-signup", payload: { name: "Send Fails", phone, email, vehicle: "motorcycle", password: "riderpass1" } });
+    expect(retry.statusCode).toBe(200);
+    const code = latestVerificationCode(email);
+    const verify = await harness.app.inject({ method: "POST", url: "/api/rider-signup/verify", payload: { email, code } });
+    expect(verify.statusCode).toBe(200);
+  });
+
+  it("resend-verification also surfaces a provider failure honestly instead of claiming success", async () => {
+    const phone = `+1876555${uniq().slice(-4)}`;
+    const email = `resendfails-${uniq()}@example.com`;
+    const signup = await harness.app.inject({ method: "POST", url: "/api/rider-signup", payload: { name: "Resend Fails", phone, email, vehicle: "motorcycle", password: "riderpass1" } });
+    expect(signup.statusCode).toBe(200);
+
+    // Wait out the resend cooldown window so the failure below is
+    // attributable to the provider, not the unrelated rate limit.
+    await harness.prisma.customerEmailCode.updateMany({ where: { email, purpose: "verify_rider_email" }, data: { createdAt: new Date(Date.now() - 60_000) } });
+
+    const resend = await withFailingProvider(() => harness.app.inject({ method: "POST", url: "/api/rider-signup/resend", payload: { email } }));
+    expect(resend.statusCode).toBe(502);
   });
 });
