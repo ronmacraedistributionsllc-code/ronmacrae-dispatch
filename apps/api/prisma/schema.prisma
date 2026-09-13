@@ -161,6 +161,7 @@ model User {
   recon     ReconDaily[]       @relation("reconResolver")
   pushSubscriptions PushSubscription[]
   codApprovals Job[]           @relation("codApprover")
+  codArchives  Job[]           @relation("codArchiver")
   addressChangeReviews AddressChangeRequest[] @relation("addressChangeReviewer")
   settlementsReceived Settlement[] @relation("settlementReceiver")
   platformMessages PlatformMessage[] @relation("platformMessageTargetUser")
@@ -861,6 +862,20 @@ model Job {
   codApprovedById    String?
   codApprover        User?     @relation("codApprover", fields: [codApprovedById], references: [id], onDelete: SetNull)
   codApprovedAt      DateTime?
+  /** Set once a dispute is raised, kept as the historical record after
+   *  resolution — see CodDisputeType's own doc comment. */
+  codDisputeType     CodDisputeType?
+  /** Stage 38 (spec: "financial dispute/archival workflow") — housekeeping
+   *  only, hides a settled entry from the day-to-day COD board (same
+   *  "operational views only" rule as Job.deletedAt) once it's been
+   *  `approved` for a while; never a delete, and reports/audit/the
+   *  summary endpoint never filter it out. Archive-eligibility (30+ days
+   *  since `codApprovedAt`) is computed from the date, not a stored flag —
+   *  same convention as jobs-trash.ts's purge-eligibility check — but
+   *  unlike that one-way purge, archiving here is always reversible. */
+  codArchivedAt      DateTime?
+  codArchivedById    String?
+  codArchivedBy      User?     @relation("codArchiver", fields: [codArchivedById], references: [id], onDelete: SetNull)
   failureReason    FailureReason?
   failureNote      String?
   riderId          String?
@@ -956,6 +971,18 @@ enum CodStatus {
   handed_in
   disputed
   approved
+}
+
+/** Stage 38: an explicit dispute category, set when a dispute is raised —
+ *  not merely inferred from `codHandedInAmount - amountCollected`'s sign,
+ *  since a dispute can be raised as soon as `collected` (spec: "before any
+ *  hand-in"), when there's no handed-in amount yet to compare at all.
+ *  Preserved after resolution (approval) as the historical record of what
+ *  kind of dispute this was — never cleared. */
+enum CodDisputeType {
+  shortage
+  overage
+  other
 }
 
 /**

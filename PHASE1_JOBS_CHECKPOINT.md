@@ -2643,3 +2643,40 @@ token send-retry dedup; a merchant<->logistics thread shape (only
 admin-to-anyone and logistics<->riders were specified); moderation of
 abusive messages; financial dispute/archival workflow; reports broken
 out by logistics company.
+
+## Stage 38 — COD dispute categorization + reversible archival
+
+Spec: "financial dispute/archival workflow (30-day soft-delete,
+shortage/overage disputes)." Inspected the actual COD code first (per
+this repo's own standing rule) rather than trusting the checkpoint's
+"not done" note — found a real dispute mechanism and a real per-row
+variance already shipped in an earlier stage, and confirmed with the
+user which genuine gap to close: an explicit dispute type, plus a
+reversible archival mechanism. Full narrative — why explicit type over
+inferred sign, why archival is manual/reversible rather than a dated
+auto-purge cron — is in `WORK_IN_PROGRESS.md`'s own Stage 38 section.
+
+## Commands run and results (Stage 38)
+
+| # | Command | Result |
+| --- | --- | --- |
+| 1 | `npm run typecheck --workspace apps/api --workspace apps/web` | **PASS** — 0 errors |
+| 2 | `npx vitest run` (apps/api) | **PASS** — 270/270 across 39 files, up from Stage 37's 265/39 (5 net new in `cod.test.ts`; 2 existing dispute tests updated for the now-required `type` field) |
+| 3 | `npm run build --workspace apps/api --workspace apps/web` | **PASS** — clean |
+| 4 | Full e2e suite (35 specs), serial (`--workers=1`), fresh `e2e-test.db` | **34/35** — the one failure is the same already-confirmed-unrelated `booking.spec.ts` address-lookup flake seen every prior stage |
+| 5 | `dev.db` via `prisma db push` | New `CodDisputeType` enum + `Job.codDisputeType`/`codArchivedAt`/`codArchivedById` columns, additive; no data loss |
+
+## Re-verify (Stage 38)
+
+```bash
+npm run typecheck --workspace apps/api --workspace apps/web
+npm run test --workspace @ronmacrae/api
+npm run build --workspace apps/api --workspace apps/web
+rm -f apps/api/data/e2e-test.db && cd e2e && npx playwright test --workers=1
+```
+
+**Not done in this stage**: an automatic/dated archival cron (always a
+human's explicit click); a literal 30-day gate on the archive action
+itself; shortage/overage broken out by rider or date range (business-
+wide total only); the remaining messaging-matrix pieces; order-form/
+address refinements; reports broken out by logistics company.

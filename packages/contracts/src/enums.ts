@@ -88,6 +88,13 @@ export type PaymentStatus = (typeof PAYMENT_STATUSES)[number];
 export const COD_STATUSES = ["pending_collection", "collected", "handed_in", "disputed", "approved"] as const;
 export type CodStatus = (typeof COD_STATUSES)[number];
 
+/** An explicit dispute category, set when a dispute is raised — not merely
+ *  inferred from the handed-in/collected variance, since a dispute can be
+ *  raised as soon as `collected` (before any hand-in, so nothing to
+ *  compare yet). Preserved after resolution as the historical record. */
+export const COD_DISPUTE_TYPES = ["shortage", "overage", "other"] as const;
+export type CodDisputeType = (typeof COD_DISPUTE_TYPES)[number];
+
 /**
  * Where a delivery order came from. Knutsford / Zipmail / courier are the
  * store's own channels; `manual` is staff-keyed, `web` is the public

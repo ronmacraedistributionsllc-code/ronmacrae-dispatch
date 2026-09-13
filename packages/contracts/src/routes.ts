@@ -36,16 +36,23 @@ export const API = {
 
   /** COD reconciliation ledger (Stage 12 / spec item 5A) */
   cod: {
-    /** dispatcher/accountant/owner board: all cod jobs, filterable by status */
+    /** dispatcher/accountant/owner board: all cod jobs, filterable by status.
+     *  Excludes archived entries by default — pass `includeArchived=true`. */
     list: "/api/cod",
     /** rider/staff records cash handed in to the office for one job */
     handIn: (jobId: string) => `/api/jobs/${jobId}/cod/hand-in`,
     /** accountant/owner sign-off */
     approve: (jobId: string) => `/api/jobs/${jobId}/cod/approve`,
-    /** accountant/owner flags a discrepancy */
+    /** accountant/owner flags a discrepancy — body now requires `type` (CodDisputeType) alongside `note` */
     dispute: (jobId: string) => `/api/jobs/${jobId}/cod/dispute`,
     /** append-only audit trail for one job's reconciliation */
     events: (jobId: string) => `/api/jobs/${jobId}/cod/events`,
+    /** Stage 38: housekeeping-only, hides a settled (approved) entry from
+     *  the day-to-day board — never a delete, always reversible via unarchive. */
+    archive: (jobId: string) => `/api/jobs/${jobId}/cod/archive`,
+    unarchive: (jobId: string) => `/api/jobs/${jobId}/cod/unarchive`,
+    /** business-wide shortage/overage rollup, see CodSummaryDto */
+    summary: "/api/cod/summary",
   },
 
   riders: {

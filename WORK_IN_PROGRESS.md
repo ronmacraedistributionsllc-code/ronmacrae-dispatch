@@ -4045,3 +4045,83 @@ named admin-to-anyone and logistics<->riders specifically, not a full
 any-to-any mesh); moderation/blocking of abusive messages (no report/
 hide mechanism here, unlike ratings' moderation); financial dispute/
 archival workflow; reports broken out by logistics company.
+
+## Stage 38 — COD dispute categorization + reversible archival (DONE)
+
+Spec: "financial dispute/archival workflow (30-day soft-delete,
+shortage/overage disputes)." Before touching anything, inspected the
+actual COD reconciliation code (`cod.ts`, `cash-profile.ts`, `cod.tsx`)
+per this repo's own standing rule, rather than assuming the checkpoint
+docs' "not done" note was still accurate — and found a real dispute
+mechanism (accountant/admin dispute a COD entry with a note, resolve by
+approving again) and a real per-row shortage/overage variance
+(`codVarianceMinor`, already shown on every COD board row) already
+shipped in an earlier stage. Confirmed with the user which gap to
+actually close rather than guessing at (or duplicating) a financial
+workflow: an explicit dispute *type* (not just the variance's inferred
+sign) plus a genuine archival mechanism, neither of which existed.
+
+**Dispute type** (`CodDisputeType`: shortage | overage | other) — the
+`POST /api/jobs/:id/cod/dispute` body now requires `type` alongside
+`note`. Why explicit rather than purely inferred from
+`codHandedInAmount - amountCollected`: a dispute can be raised as soon
+as a job reaches `collected`, before any hand-in exists at all (an
+existing, deliberate rule — see cash-profile.ts's own comment) — with
+no handed-in amount, there's no variance to infer a sign from, so
+those disputes would otherwise have no category whatsoever. Preserved
+on the job after resolution (approving again) as the historical record
+of what kind of dispute it was — never cleared, matching this app's
+"correction, not erasure" rule for every other financial/reputational
+field.
+
+**Archival** — housekeeping only, exactly one rung below a hard delete:
+`POST /api/jobs/:id/cod/archive` (accountant/admin, same authorization
+level as raising a dispute) hides a *settled* (`approved`) entry from
+the day-to-day `/api/cod` board; `POST .../cod/unarchive` reverses it,
+always. Same "operational view only, never the record or the reports"
+rule as `Job.deletedAt` (Stage 26) — the board excludes archived
+entries by default (`includeArchived=true` shows them), but the new
+`GET /api/cod/summary` rollup and every audit/reporting view never
+filter them out. Deliberately no auto-archival cron and no literal
+"30 days" enforcement — matching the spec's own "30-day" framing loosely
+(a *reversible* archive has none of the real risk a one-way, dated purge
+window exists to bound in `jobs-trash.ts`), an explicit accountant
+action instead, same trade-off already made once in this app between
+automating a financial-state change and requiring a human's deliberate
+click.
+
+**Summary rollup** — `GET /api/cod/summary`: business-wide totals for
+shortage amount/count, overage amount/count, matched-handover count,
+and disputes raised before any hand-in (counted separately since they
+have no computable variance) — turning the already-shipped per-row
+variance into an actual accountable metric, not just a per-job curiosity.
+
+- `cod.tsx`: a summary panel at the top of the board; a dispute-type
+  selector (defaults to the variance's own sign when one exists, else
+  "other"); a dispute-type badge and an "Archived" badge per row;
+  Archive/Unarchive buttons on approved entries; an "Include archived"
+  toggle.
+
+**Verification**: `npm run typecheck --workspace apps/api --workspace
+apps/web` clean. `apps/api` vitest **270/270** across 39 files (5 net
+new in `cod.test.ts`: dispute-type persistence through resolution,
+the full archive/unarchive lifecycle including the "not yet approved"
+and "already archived" refusals, dispatcher-cannot-archive
+authorization, and the summary rollup's shortage/overage/pre-hand-in
+buckets — plus 2 existing dispute tests updated to pass the now-
+required `type` field, and 1 new test confirming a dispute without a
+type is refused). `npm run build --workspace apps/api --workspace
+apps/web` clean. Full e2e suite re-run (serially, `--workers=1`, fresh
+`e2e-test.db`, since `cod.tsx` changed): **34/35**, the one failure the
+same already-confirmed-unrelated `booking.spec.ts` address-lookup
+flake seen every prior stage.
+
+**Not done in this stage**: an actual dated/automatic archival cron (a
+human always clicks Archive); a literal 30-day eligibility gate on the
+archive action itself (any approved entry can be archived immediately —
+the spec's "30-day" framing doesn't map cleanly onto a fully-reversible
+housekeeping action the way it does onto `jobs-trash.ts`'s one-way
+purge window); shortage/overage broken out by rider or by date range in
+the summary (business-wide total only); the full messaging authorization
+matrix's remaining pieces; order-form/address refinements; reports
+broken out by logistics company.

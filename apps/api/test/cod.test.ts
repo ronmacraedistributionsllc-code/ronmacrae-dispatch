@@ -216,7 +216,7 @@ describe("COD reconciliation: approved entries can't be silently overwritten", (
     expect(reApprove.statusCode).toBe(409);
 
     // A dispute is still a legitimate, deliberate, audited re-open — not blocked.
-    const disputeRes = await harness.app.inject({ method: "POST", url: `/api/jobs/${job.id}/cod/dispute`, headers: { authorization: `Bearer ${accountantTok}` }, payload: { note: "found a discrepancy after all" } });
+    const disputeRes = await harness.app.inject({ method: "POST", url: `/api/jobs/${job.id}/cod/dispute`, headers: { authorization: `Bearer ${accountantTok}` }, payload: { note: "found a discrepancy after all", type: "other" } });
     expect(disputeRes.statusCode).toBe(200);
     expect((disputeRes.json() as { job: { codStatus: string } }).job.codStatus).toBe("disputed");
 
@@ -232,7 +232,17 @@ describe("COD reconciliation: approved entries can't be silently overwritten", (
     const job = await makeCodJob(harness, customer.id, rider.id);
     await harness.app.inject({ method: "POST", url: `/api/jobs/${job.id}/collect`, headers: { authorization: `Bearer ${riderTok}` }, payload: { amountCollected: 1000 } });
     const accountantTok = await staffToken(harness, "accountant");
-    const res = await harness.app.inject({ method: "POST", url: `/api/jobs/${job.id}/cod/dispute`, headers: { authorization: `Bearer ${accountantTok}` }, payload: { note: "" } });
+    const res = await harness.app.inject({ method: "POST", url: `/api/jobs/${job.id}/cod/dispute`, headers: { authorization: `Bearer ${accountantTok}` }, payload: { note: "", type: "shortage" } });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it("dispute requires an explicit type (Stage 38) — not merely inferred from the variance", async () => {
+    const customer = await makeCustomer(harness);
+    const { rider, token: riderTok } = await makeRider(harness);
+    const job = await makeCodJob(harness, customer.id, rider.id);
+    await harness.app.inject({ method: "POST", url: `/api/jobs/${job.id}/collect`, headers: { authorization: `Bearer ${riderTok}` }, payload: { amountCollected: 1000 } });
+    const accountantTok = await staffToken(harness, "accountant");
+    const res = await harness.app.inject({ method: "POST", url: `/api/jobs/${job.id}/cod/dispute`, headers: { authorization: `Bearer ${accountantTok}` }, payload: { note: "no hand-in yet, but the customer says the rider undercharged" } });
     expect(res.statusCode).toBe(400);
   });
 });
@@ -254,5 +264,111 @@ describe("COD reconciliation: customer-facing tracking never carries it", () => 
     expect(raw).not.toContain("codAccountantNote");
     expect(raw).not.toContain("codStatus");
     expect(raw).not.toContain("internal rider note");
+  });
+});
+
+// Stage 38: an explicit dispute category (kept after resolution as the
+// historical record), plus a reversible archival workflow for settled
+// entries and a business-wide shortage/overage rollup.
+describe("COD reconciliation: dispute type + archival (Stage 38)", () => {
+  it("keeps the dispute type on the job after it's resolved (approved again)", async () => {
+    const customer = await makeCustomer(harness);
+    const { rider, token: riderTok } = await makeRider(harness);
+    const job = await makeCodJob(harness, customer.id, rider.id, 1000);
+    const accountantTok = await staffToken(harness, "accountant");
+    await harness.app.inject({ method: "POST", url: `/api/jobs/${job.id}/collect`, headers: { authorization: `Bearer ${riderTok}` }, payload: { amountCollected: 1000 } });
+    await harness.app.inject({ method: "POST", url: `/api/jobs/${job.id}/cod/hand-in`, headers: { authorization: `Bearer ${riderTok}` }, payload: { amountHandedIn: 800 } });
+
+    const dispute = await harness.app.inject({ method: "POST", url: `/api/jobs/${job.id}/cod/dispute`, headers: { authorization: `Bearer ${accountantTok}` }, payload: { note: "rider handed in less than collected", type: "shortage" } });
+    expect(dispute.statusCode).toBe(200);
+    expect((dispute.json() as { job: { codDisputeType: string } }).job.codDisputeType).toBe("shortage");
+
+    const approve = await harness.app.inject({ method: "POST", url: `/api/jobs/${job.id}/cod/approve`, headers: { authorization: `Bearer ${accountantTok}` }, payload: { note: "resolved — rider paid the difference in person" } });
+    expect(approve.statusCode).toBe(200);
+    // The dispute TYPE is a historical record — never cleared by resolving it.
+    expect((approve.json() as { job: { codDisputeType: string; codStatus: string } }).job.codDisputeType).toBe("shortage");
+    expect((approve.json() as { job: { codStatus: string } }).job.codStatus).toBe("approved");
+  });
+
+  it("archive/unarchive: only an approved entry can be archived, it's excluded from the default board, and it's fully reversible", async () => {
+    const customer = await makeCustomer(harness);
+    const { rider, token: riderTok } = await makeRider(harness);
+    const job = await makeCodJob(harness, customer.id, rider.id);
+    const accountantTok = await staffToken(harness, "accountant");
+    await harness.app.inject({ method: "POST", url: `/api/jobs/${job.id}/collect`, headers: { authorization: `Bearer ${riderTok}` }, payload: { amountCollected: 1000 } });
+
+    // Not approved yet — archiving is refused.
+    const tooEarly = await harness.app.inject({ method: "POST", url: `/api/jobs/${job.id}/cod/archive`, headers: { authorization: `Bearer ${accountantTok}` } });
+    expect(tooEarly.statusCode).toBe(409);
+
+    await harness.app.inject({ method: "POST", url: `/api/jobs/${job.id}/cod/hand-in`, headers: { authorization: `Bearer ${riderTok}` }, payload: { amountHandedIn: 1000 } });
+    await harness.app.inject({ method: "POST", url: `/api/jobs/${job.id}/cod/approve`, headers: { authorization: `Bearer ${accountantTok}` }, payload: {} });
+
+    const archive = await harness.app.inject({ method: "POST", url: `/api/jobs/${job.id}/cod/archive`, headers: { authorization: `Bearer ${accountantTok}` } });
+    expect(archive.statusCode).toBe(200);
+    expect((archive.json() as { job: { codArchivedAt: string | null } }).job.codArchivedAt).not.toBeNull();
+
+    // A second archive attempt is refused — not a silent no-op.
+    const again = await harness.app.inject({ method: "POST", url: `/api/jobs/${job.id}/cod/archive`, headers: { authorization: `Bearer ${accountantTok}` } });
+    expect(again.statusCode).toBe(409);
+
+    // Hidden from the default board...
+    const defaultList = await harness.app.inject({ method: "GET", url: "/api/cod", headers: { authorization: `Bearer ${accountantTok}` } });
+    expect((defaultList.json() as { jobs: { id: string }[] }).jobs.some((j) => j.id === job.id)).toBe(false);
+    // ...but visible with includeArchived=true.
+    const withArchived = await harness.app.inject({ method: "GET", url: "/api/cod?includeArchived=true", headers: { authorization: `Bearer ${accountantTok}` } });
+    expect((withArchived.json() as { jobs: { id: string }[] }).jobs.some((j) => j.id === job.id)).toBe(true);
+
+    // Reversible — never a delete.
+    const unarchive = await harness.app.inject({ method: "POST", url: `/api/jobs/${job.id}/cod/unarchive`, headers: { authorization: `Bearer ${accountantTok}` } });
+    expect(unarchive.statusCode).toBe(200);
+    expect((unarchive.json() as { job: { codArchivedAt: string | null } }).job.codArchivedAt).toBeNull();
+    const backOnDefault = await harness.app.inject({ method: "GET", url: "/api/cod", headers: { authorization: `Bearer ${accountantTok}` } });
+    expect((backOnDefault.json() as { jobs: { id: string }[] }).jobs.some((j) => j.id === job.id)).toBe(true);
+  });
+
+  it("only accountant/admin (not dispatcher) can archive, mirroring the dispute-level authorization", async () => {
+    const customer = await makeCustomer(harness);
+    const { rider, token: riderTok } = await makeRider(harness);
+    const job = await makeCodJob(harness, customer.id, rider.id);
+    const dispatcherTok = await staffToken(harness, "dispatcher");
+    await harness.app.inject({ method: "POST", url: `/api/jobs/${job.id}/collect`, headers: { authorization: `Bearer ${riderTok}` }, payload: { amountCollected: 1000 } });
+    await harness.app.inject({ method: "POST", url: `/api/jobs/${job.id}/cod/hand-in`, headers: { authorization: `Bearer ${riderTok}` }, payload: { amountHandedIn: 1000 } });
+    await harness.app.inject({ method: "POST", url: `/api/jobs/${job.id}/cod/approve`, headers: { authorization: `Bearer ${dispatcherTok}` }, payload: {} });
+
+    const res = await harness.app.inject({ method: "POST", url: `/api/jobs/${job.id}/cod/archive`, headers: { authorization: `Bearer ${dispatcherTok}` } });
+    expect(res.statusCode).toBe(403);
+  });
+
+  it("the summary rollup buckets shortage/overage correctly and counts a pre-hand-in dispute separately", async () => {
+    const customer = await makeCustomer(harness);
+    const accountantTok = await staffToken(harness, "accountant");
+
+    // A shortage: handed in less than collected.
+    const short = await makeRider(harness);
+    const shortJob = await makeCodJob(harness, customer.id, short.rider.id, 1000);
+    await harness.app.inject({ method: "POST", url: `/api/jobs/${shortJob.id}/collect`, headers: { authorization: `Bearer ${short.token}` }, payload: { amountCollected: 1000 } });
+    await harness.app.inject({ method: "POST", url: `/api/jobs/${shortJob.id}/cod/hand-in`, headers: { authorization: `Bearer ${short.token}` }, payload: { amountHandedIn: 700 } });
+
+    // An overage: handed in more than collected.
+    const over = await makeRider(harness);
+    const overJob = await makeCodJob(harness, customer.id, over.rider.id, 1000);
+    await harness.app.inject({ method: "POST", url: `/api/jobs/${overJob.id}/collect`, headers: { authorization: `Bearer ${over.token}` }, payload: { amountCollected: 1000 } });
+    await harness.app.inject({ method: "POST", url: `/api/jobs/${overJob.id}/cod/hand-in`, headers: { authorization: `Bearer ${over.token}` }, payload: { amountHandedIn: 1200 } });
+
+    // Disputed before any hand-in at all — no variance to compute.
+    const early = await makeRider(harness);
+    const earlyJob = await makeCodJob(harness, customer.id, early.rider.id, 1000);
+    await harness.app.inject({ method: "POST", url: `/api/jobs/${earlyJob.id}/collect`, headers: { authorization: `Bearer ${early.token}` }, payload: { amountCollected: 1000 } });
+    await harness.app.inject({ method: "POST", url: `/api/jobs/${earlyJob.id}/cod/dispute`, headers: { authorization: `Bearer ${accountantTok}` }, payload: { note: "customer says they never got change", type: "other" } });
+
+    const summary = await harness.app.inject({ method: "GET", url: "/api/cod/summary", headers: { authorization: `Bearer ${accountantTok}` } });
+    expect(summary.statusCode).toBe(200);
+    const body = summary.json() as { shortage: { amount: number }; shortageCount: number; overage: { amount: number }; overageCount: number; disputedBeforeHandoverCount: number };
+    expect(body.shortageCount).toBeGreaterThanOrEqual(1);
+    expect(body.overageCount).toBeGreaterThanOrEqual(1);
+    expect(body.shortage.amount).toBeGreaterThanOrEqual(300);
+    expect(body.overage.amount).toBeGreaterThanOrEqual(200);
+    expect(body.disputedBeforeHandoverCount).toBeGreaterThanOrEqual(1);
   });
 });

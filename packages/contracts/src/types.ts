@@ -1,5 +1,6 @@
 import type {
   AddressChangeStatus,
+  CodDisputeType,
   CodStatus,
   ConversationKind,
   CustomerIdentityStatus,
@@ -405,6 +406,14 @@ export interface JobDto {
     codApprovedById: string | null;
     codApprovedByName: string | null;
     codApprovedAt: string | null;
+    /** Set when a dispute is raised, kept after resolution as the record of
+     *  what kind it was — see CodDisputeType's own doc comment. */
+    codDisputeType: CodDisputeType | null;
+    /** Housekeeping-only: hides a settled entry from the day-to-day COD
+     *  board once archived — never a delete, always reversible, and never
+     *  filtered out of reports/audit/the summary endpoint. */
+    codArchivedAt: string | null;
+    codArchivedByName: string | null;
     failureReason: FailureReason | null;
     failureNote: string | null;
   scheduledAt: string | null;
@@ -449,6 +458,8 @@ export interface JobSummaryDto {
   amountCollected: Money | null;
   codStatus: CodStatus;
   codHandedInAmount: Money | null;
+  codDisputeType: CodDisputeType | null;
+  codArchivedAt: string | null;
   riderId: string | null;
   riderName: string | null;
   stage: RiderStage;
@@ -456,6 +467,23 @@ export interface JobSummaryDto {
   scheduledAt: string | null;
   completedAt: string | null;
   createdAt: string;
+}
+
+/** Business-wide COD reconciliation rollup (spec: "financial dispute/
+ *  archival workflow") — turns the per-job variance already shown on each
+ *  COD row into an accountable total. Never filtered by archived status —
+ *  same "reports never filter this out" rule as everywhere else archived/
+ *  deleted financial history is handled in this app. */
+export interface CodSummaryDto {
+  shortage: Money;
+  shortageCount: number;
+  overage: Money;
+  overageCount: number;
+  matchedCount: number;
+  /** A dispute raised before any hand-in was recorded — there's no
+   *  handed-in amount yet to compute a variance from, so these are
+   *  counted separately rather than silently folded into "matched". */
+  disputedBeforeHandoverCount: number;
 }
 
 /** One entry in the deleted-orders trash (spec 8, Stage 26) — a soft-

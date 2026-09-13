@@ -2,6 +2,7 @@ import type { Prisma } from "@prisma/client";
 import { httpErrors } from "@fastify/sensible";
 import type {
   AssignmentDto,
+  CodDisputeType,
   CodEventDto,
   CodStatus,
   JobDto,
@@ -56,6 +57,7 @@ export const jobInclude = {
   proofs: true,
   link: true,
   codApprover: true,
+  codArchivedBy: true,
 } as const;
 
 /** viewer context for field-level visibility (PIN etc.) */
@@ -168,6 +170,9 @@ export function jobToDto(
     codApprovedById: job.codApprovedById,
     codApprovedByName: job.codApprover?.name ?? null,
     codApprovedAt: job.codApprovedAt?.toISOString() ?? null,
+    codDisputeType: job.codDisputeType as CodDisputeType | null,
+    codArchivedAt: job.codArchivedAt?.toISOString() ?? null,
+    codArchivedByName: job.codArchivedBy?.name ?? null,
     failureReason: job.failureReason,
     failureNote: job.failureNote,
     scheduledAt: job.scheduledAt?.toISOString() ?? null,
@@ -213,6 +218,8 @@ export function jobSummaryToDto(job: JobRow): JobSummaryDto {
     amountCollected: moneyField(job.amountCollected, cur),
     codStatus: job.codStatus as CodStatus,
     codHandedInAmount: moneyField(job.codHandedInAmount, cur),
+    codDisputeType: job.codDisputeType as CodDisputeType | null,
+    codArchivedAt: job.codArchivedAt?.toISOString() ?? null,
     riderId: job.rider?.id ?? null,
     riderName: job.rider?.name ?? null,
     stage: job.stage,
