@@ -23,6 +23,7 @@ import { Team } from "./pages/team.js";
 import { Settings } from "./pages/settings.js";
 import { Settlements } from "./pages/settlements.js";
 import { Notifications } from "./pages/notifications.js";
+import { Messages } from "./pages/messages.js";
 import { OpsBoard } from "./pages/ops-board.js";
 import { Reports } from "./pages/reports.js";
 import { Trash } from "./pages/trash.js";
@@ -124,6 +125,14 @@ export default function App(): React.JSX.Element {
                 element={
                   <Protected>
                     <Notifications />
+                  </Protected>
+                }
+              />
+              <Route
+                path="/messages"
+                element={
+                  <Protected>
+                    <Messages />
                   </Protected>
                 }
               />

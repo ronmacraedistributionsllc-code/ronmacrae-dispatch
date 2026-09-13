@@ -6,6 +6,7 @@ import { verifyPassword } from "../lib/password.js";
 import { normalizeEmail } from "../lib/email.js";
 import { ACTIVE_JOB_STATUSES } from "@ronmacrae/contracts";
 import { resolveStaffContext, toUserDto } from "./auth.js";
+import { listLogisticsRiderThread, listOwnerUserThread, sendLogisticsRiderMessage, sendOwnerUserMessage, SendPlatformMessageBody } from "./platform-messages.js";
 
 /**
  * A logistics/bearer company's own login (spec: "Bearer/Logistics Company
@@ -98,6 +99,40 @@ export async function logisticsPortalRoutes(app: FastifyInstance, ctx: AppCtx): 
     });
     await ctx.audit.record({ id: user.id, role: staffContext.role }, "auth.switch_workspace", "user", user.id);
     return { accessToken, user: toUserDto(user), businessId: staffContext.businessId, platformRole: staffContext.platformRole };
+  });
+
+  // "Message the owner" (spec: "admin-to-anyone") — see platform-messages.ts.
+  app.get("/api/logistics-portal/messages/owner", async (req) => {
+    const auth = await requireLogisticsAuth(ctx, req);
+    return listOwnerUserThread(ctx, auth.userId, "user", auth.userId, true);
+  });
+
+  app.post("/api/logistics-portal/messages/owner", async (req) => {
+    const auth = await requireLogisticsAuth(ctx, req);
+    const body = SendPlatformMessageBody.parse(req.body);
+    const user = await ctx.prisma.user.findUniqueOrThrow({ where: { id: auth.userId } });
+    await sendOwnerUserMessage(ctx, auth.userId, "user", auth.userId, user.name, body.body);
+    return listOwnerUserThread(ctx, auth.userId, "user", auth.userId, true);
+  });
+
+  // Fleet messaging (spec: "logistics<->riders") — only a rider actually
+  // attached to this company; see the Rider's own /api/bearer/logistics-
+  // messages equivalent in bearer.ts.
+  app.get<{ Params: { riderId: string } }>("/api/logistics-portal/riders/:riderId/messages", async (req) => {
+    const auth = await requireLogisticsAuth(ctx, req);
+    const rider = await ctx.prisma.rider.findFirst({ where: { id: req.params.riderId, attachedLogisticsCompanyId: auth.logisticsCompanyId } });
+    if (!rider) throw httpErrors.createError(404, "Rider not found");
+    return listLogisticsRiderThread(ctx, auth.logisticsCompanyId, rider.id, "logistics", auth.userId, true);
+  });
+
+  app.post<{ Params: { riderId: string } }>("/api/logistics-portal/riders/:riderId/messages", async (req) => {
+    const auth = await requireLogisticsAuth(ctx, req);
+    const rider = await ctx.prisma.rider.findFirst({ where: { id: req.params.riderId, attachedLogisticsCompanyId: auth.logisticsCompanyId } });
+    if (!rider) throw httpErrors.createError(404, "Rider not found");
+    const body = SendPlatformMessageBody.parse(req.body);
+    const user = await ctx.prisma.user.findUniqueOrThrow({ where: { id: auth.userId } });
+    await sendLogisticsRiderMessage(ctx, auth.logisticsCompanyId, rider.id, "logistics", auth.userId, user.name, body.body);
+    return listLogisticsRiderThread(ctx, auth.logisticsCompanyId, rider.id, "logistics", auth.userId, true);
   });
 
   // Fleet dashboard — every rider Platform Admin has attached to this

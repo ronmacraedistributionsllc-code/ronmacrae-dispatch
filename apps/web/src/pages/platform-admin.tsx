@@ -1,7 +1,9 @@
 import React, { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { API } from "@ronmacrae/contracts";
+import type { PlatformMessagesDto, PlatformMessageThreadDto } from "@ronmacrae/contracts";
 import { ApiError, apiFetch } from "../lib/api.js";
+import { PlatformChat } from "../components/platform-chat.js";
 
 /**
  * The platform-owner console (spec: "search, inspect, approve, block,
@@ -39,7 +41,7 @@ interface RiderDetail extends RiderRow {
 interface StaffRow { id: string; name: string; email: string | null; phone: string | null; active: boolean; platformRole: string | null; businesses: { id: string; name: string; role: string; active: boolean }[]; merchants: { id: string; name: string; active: boolean }[]; createdAt: string }
 interface AuditRow { id: string; userName: string | null; userEmail: string | null; role: string | null; action: string; entityType: string; entityId: string | null; createdAt: string }
 
-type Tab = "businesses" | "merchants" | "logistics" | "riders" | "staff" | "audit";
+type Tab = "businesses" | "merchants" | "logistics" | "riders" | "staff" | "messages" | "audit";
 
 export function PlatformAdmin(): React.JSX.Element {
   const [tab, setTab] = useState<Tab>("businesses");
@@ -49,6 +51,7 @@ export function PlatformAdmin(): React.JSX.Element {
     { key: "logistics", label: "Logistics" },
     { key: "riders", label: "Riders" },
     { key: "staff", label: "Staff" },
+    { key: "messages", label: "Messages" },
     { key: "audit", label: "Audit log" },
   ];
   return (
@@ -69,6 +72,7 @@ export function PlatformAdmin(): React.JSX.Element {
       {tab === "logistics" ? <LogisticsTab /> : null}
       {tab === "riders" ? <RidersTab /> : null}
       {tab === "staff" ? <StaffTab /> : null}
+      {tab === "messages" ? <MessagesTab /> : null}
       {tab === "audit" ? <AuditTab /> : null}
     </div>
   );
@@ -392,6 +396,51 @@ function StaffTab(): React.JSX.Element {
             </div>
           </div>
         ))}
+      </div>
+    </div>
+  );
+}
+
+/** Spec: "admin-to-anyone" — every user who has messaged in, most recent
+ *  first, with the open thread's own chat below. A shared team inbox: any
+ *  owner sees and can reply to any thread, not just ones they started. */
+function MessagesTab(): React.JSX.Element {
+  const [openUserId, setOpenUserId] = useState<string | null>(null);
+  const list = useQuery({ queryKey: ["platform", "messages", "threads"], queryFn: () => apiFetch<{ threads: PlatformMessageThreadDto[] }>(API.platformMessages.threads), refetchInterval: 20_000 });
+  const threads = [...(list.data?.threads ?? [])].sort((a, b) => (b.lastMessage?.createdAt ?? "").localeCompare(a.lastMessage?.createdAt ?? ""));
+
+  return (
+    <div className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)]">
+      <div className="space-y-2">
+        {list.isLoading ? <p className="text-sm text-zinc-400">Loading…</p> : null}
+        {threads.length === 0 ? <p className="text-sm text-zinc-500">No one has messaged in yet.</p> : null}
+        {threads.map((t) => (
+          <button
+            key={t.userId}
+            type="button"
+            className={`card block w-full text-left ${openUserId === t.userId ? "!border-brand-accent" : ""}`}
+            onClick={() => setOpenUserId(t.userId)}
+          >
+            <div className="flex items-center justify-between gap-2">
+              <p className="font-medium">{t.userName}</p>
+              {t.unreadCount > 0 ? <span className="rounded-full bg-red-600 px-1.5 py-0.5 text-[10px] font-bold text-white">{t.unreadCount}</span> : null}
+            </div>
+            {t.lastMessage ? <p className="truncate text-xs text-zinc-500">{t.lastMessage.senderRole === "owner" ? "You: " : ""}{t.lastMessage.body}</p> : null}
+          </button>
+        ))}
+      </div>
+      <div>
+        {openUserId ? (
+          <section className="card">
+            <PlatformChat
+              queryKey={`platform-owner-${openUserId}`}
+              fetchMessages={() => apiFetch<PlatformMessagesDto>(API.platformMessages.thread(openUserId))}
+              sendMessage={(body) => apiFetch<PlatformMessagesDto>(API.platformMessages.thread(openUserId), { method: "POST", body: JSON.stringify({ body }) })}
+            />
+          </section>
+        ) : (
+          <p className="text-sm text-zinc-500">Choose a conversation to open it.</p>
+        )}
       </div>
     </div>
   );

@@ -14,6 +14,8 @@ import type {
   PayoutStatus,
   PaymentMethod,
   PaymentStatus,
+  PlatformMessageKind,
+  PlatformMessageSenderRole,
   Priority,
   ProofKind,
   ReconStatus,
@@ -782,6 +784,35 @@ export interface ConversationSummaryDto {
 export interface ConversationsDto {
   jobId: string;
   conversations: ConversationSummaryDto[];
+}
+
+/** Non-job-scoped direct message (spec: "secure messaging with a strict
+ *  authorization matrix... admin-to-anyone, logistics<->riders") — see
+ *  schema.prisma's PlatformMessage doc comment for the two thread shapes
+ *  this appears in. Same "You"/role-label convention as DeliveryMessageDto,
+ *  and the same honest read-receipt caveat (no live channel to every side). */
+export interface PlatformMessageDto {
+  id: string;
+  senderRole: PlatformMessageSenderRole;
+  isSelf: boolean;
+  senderName: string;
+  body: string;
+  read: boolean;
+  createdAt: string;
+}
+
+export interface PlatformMessagesDto {
+  kind: PlatformMessageKind;
+  messages: PlatformMessageDto[];
+}
+
+/** One row in Platform Admin's own inbox — every user who has an
+ *  `owner_user` thread, most-recently-active first. */
+export interface PlatformMessageThreadDto {
+  userId: string;
+  userName: string;
+  unreadCount: number;
+  lastMessage: { body: string; senderRole: PlatformMessageSenderRole; createdAt: string } | null;
 }
 
 /** A customer/rider's proposed new destination, awaiting dispatch review —

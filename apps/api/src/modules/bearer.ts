@@ -6,6 +6,7 @@ import { ACTIVE_JOB_STATUSES } from "@ronmacrae/contracts";
 import type { DispatchContactDto } from "@ronmacrae/contracts";
 import { getBusinessSettings } from "./settings.js";
 import { jobToDto, listJobs, recordRiderStage, transitionJob, TransitionBody, type Actor, type Viewer } from "./jobs/index.js";
+import { listLogisticsRiderThread, sendLogisticsRiderMessage, SendPlatformMessageBody } from "./platform-messages.js";
 
 function actorFor(req: FastifyRequest): Actor {
   return { id: req.user!.sub, name: req.user!.name, role: req.user!.role, riderId: req.user!.riderId };
@@ -45,6 +46,25 @@ export async function bearerRoutes(app: FastifyInstance, ctx: AppCtx): Promise<v
       dispatchWhatsApp: business.dispatchWhatsApp,
     };
     return contact;
+  });
+
+  // Fleet messaging with the rider's own attached logistics company (spec:
+  // "logistics<->riders") — see platform-messages.ts and this rider's own
+  // company-side equivalent in logistics-portal.ts. A freelance or
+  // merchant-attached rider has no logistics company to message — 404,
+  // same "don't confirm what doesn't apply" pattern used elsewhere.
+  app.get("/api/bearer/logistics-messages", { preHandler: ctx.requireRider }, async (req) => {
+    const rider = await ctx.prisma.rider.findUniqueOrThrow({ where: { id: req.user!.riderId! } });
+    if (!rider.attachedLogisticsCompanyId) throw httpErrors.createError(404, "You're not attached to a logistics company");
+    return listLogisticsRiderThread(ctx, rider.attachedLogisticsCompanyId, rider.id, "rider", rider.id, true);
+  });
+
+  app.post("/api/bearer/logistics-messages", { preHandler: ctx.requireRider }, async (req) => {
+    const rider = await ctx.prisma.rider.findUniqueOrThrow({ where: { id: req.user!.riderId! } });
+    if (!rider.attachedLogisticsCompanyId) throw httpErrors.createError(404, "You're not attached to a logistics company");
+    const body = SendPlatformMessageBody.parse(req.body);
+    await sendLogisticsRiderMessage(ctx, rider.attachedLogisticsCompanyId, rider.id, "rider", rider.id, rider.name, body.body);
+    return listLogisticsRiderThread(ctx, rider.attachedLogisticsCompanyId, rider.id, "rider", rider.id, true);
   });
 
   app.post<{ Params: { id: string } }>("/api/bearer/jobs/:id/accept", { preHandler: ctx.requireRider }, async (req) => {

@@ -21,6 +21,7 @@ const TABS = [
   { to: "/reports", label: "Reports", icon: "📊" },
   { to: "/trash", label: "Trash", icon: "🗑️" },
   { to: "/notifications", label: "Notifications", icon: "🔔" },
+  { to: "/messages", label: "Messages", icon: "💬" },
   { to: "/platform-admin", label: "Platform Admin", icon: "🛡️" },
 ];
 /** Never shown to anyone without platformRole: "owner" — filtered

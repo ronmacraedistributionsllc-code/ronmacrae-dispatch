@@ -44,6 +44,7 @@ import { inviteRoutes } from "./modules/invites.js";
 import { platformAdminRoutes } from "./modules/platform-admin.js";
 import { logisticsCompanyRoutes } from "./modules/logistics-companies.js";
 import { logisticsPortalRoutes } from "./modules/logistics-portal.js";
+import { platformMessageRoutes } from "./modules/platform-messages.js";
 
 const SERVICE = "ronmacrae-dispatch-api";
 
@@ -148,6 +149,7 @@ export async function createApp(ctx: AppCtx): Promise<FastifyInstance> {
   await platformAdminRoutes(app, ctx);
   await logisticsCompanyRoutes(app, ctx);
   await logisticsPortalRoutes(app, ctx);
+  await platformMessageRoutes(app, ctx);
 
   app.setErrorHandler((err, req, reply) => {
     const e = err as FastifyError;

@@ -1,8 +1,10 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { Navigate, useNavigate } from "react-router-dom";
 import { API } from "@ronmacrae/contracts";
+import type { PlatformMessagesDto } from "@ronmacrae/contracts";
 import { setAccessToken } from "../lib/api.js";
 import { useAuth } from "../lib/auth.js";
+import { PlatformChat } from "../components/platform-chat.js";
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? "/api";
 const STORAGE_KEY = "logisticsPortalToken";
@@ -65,6 +67,8 @@ export function LogisticsPortal(): React.JSX.Element {
   const [hasStaffAccess, setHasStaffAccess] = useState(false);
   const [switching, setSwitching] = useState(false);
   const [riders, setRiders] = useState<FleetRider[] | null>(null);
+  const [chattingWith, setChattingWith] = useState<string | null>(null);
+  const [showOwnerChat, setShowOwnerChat] = useState(false);
   const navigate = useNavigate();
   const { refresh: refreshStaffSession } = useAuth();
 
@@ -132,9 +136,22 @@ export function LogisticsPortal(): React.JSX.Element {
               {switching ? "Switching…" : "Switch to staff dashboard"}
             </button>
           ) : null}
+          <button className="btn !px-3 !py-1 text-xs" onClick={() => setShowOwnerChat((v) => !v)}>
+            {showOwnerChat ? "Hide messages" : "Message Platform Admin"}
+          </button>
           <button className="btn !px-3 !py-1 text-xs" onClick={signOut}>Sign out</button>
         </div>
       </header>
+
+      {showOwnerChat ? (
+        <section className="card">
+          <PlatformChat
+            queryKey={`logistics-owner-${token}`}
+            fetchMessages={() => portalFetch<PlatformMessagesDto>(API.logisticsPortal.ownerMessages, { headers: { authorization: `Bearer ${token}` } })}
+            sendMessage={(body) => portalFetch<PlatformMessagesDto>(API.logisticsPortal.ownerMessages, { method: "POST", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ body }) })}
+          />
+        </section>
+      ) : null}
 
       {error ? <p className="text-sm text-red-400">{error}</p> : null}
 
@@ -144,18 +161,30 @@ export function LogisticsPortal(): React.JSX.Element {
       ) : null}
       <div className="space-y-2">
         {riders?.map((r) => (
-          <div key={r.id} className={`card flex flex-wrap items-center justify-between gap-2 ${r.active ? "" : "opacity-60"}`}>
-            <div>
-              <p className="font-medium">{r.name}</p>
-              <p className="text-xs text-zinc-500">{r.phone} · {r.vehicle} · {r.activeJobCount}/{r.dailyCapacity} active jobs</p>
+          <div key={r.id} className={`card space-y-2 ${r.active ? "" : "opacity-60"}`}>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <p className="font-medium">{r.name}</p>
+                <p className="text-xs text-zinc-500">{r.phone} · {r.vehicle} · {r.activeJobCount}/{r.dailyCapacity} active jobs</p>
+              </div>
+              <div className="flex items-center gap-2">
+                {!r.active ? <span className="rounded bg-zinc-800 px-2 py-0.5 text-xs font-medium text-zinc-500">Disabled</span> : null}
+                <span className="flex items-center gap-1.5 rounded bg-zinc-800 px-2 py-0.5 text-xs font-medium text-zinc-300">
+                  <span className={`h-2 w-2 rounded-full ${STATUS_DOT[r.status] ?? "bg-zinc-600"}`} />
+                  {STATUS_LABEL[r.status] ?? r.status}
+                </span>
+                <button type="button" className="btn !px-3 !py-1 text-xs" onClick={() => setChattingWith(chattingWith === r.id ? null : r.id)}>
+                  {chattingWith === r.id ? "Hide chat" : "Message"}
+                </button>
+              </div>
             </div>
-            <div className="flex items-center gap-2">
-              {!r.active ? <span className="rounded bg-zinc-800 px-2 py-0.5 text-xs font-medium text-zinc-500">Disabled</span> : null}
-              <span className="flex items-center gap-1.5 rounded bg-zinc-800 px-2 py-0.5 text-xs font-medium text-zinc-300">
-                <span className={`h-2 w-2 rounded-full ${STATUS_DOT[r.status] ?? "bg-zinc-600"}`} />
-                {STATUS_LABEL[r.status] ?? r.status}
-              </span>
-            </div>
+            {chattingWith === r.id ? (
+              <PlatformChat
+                queryKey={`fleet-${r.id}`}
+                fetchMessages={() => portalFetch<PlatformMessagesDto>(API.logisticsPortal.riderMessages(r.id), { headers: { authorization: `Bearer ${token}` } })}
+                sendMessage={(body) => portalFetch<PlatformMessagesDto>(API.logisticsPortal.riderMessages(r.id), { method: "POST", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ body }) })}
+              />
+            ) : null}
           </div>
         ))}
       </div>

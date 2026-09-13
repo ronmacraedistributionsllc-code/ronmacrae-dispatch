@@ -2610,3 +2610,36 @@ attachment; a logistics company vouching for its own riders directly
 (attachment stays Platform Admin-only, per the spec's own wording);
 the full messaging authorization matrix; financial dispute/archival
 workflow; reports broken out by logistics company.
+
+## Stage 37 — non-job-scoped messaging: admin-to-anyone, logistics<->riders
+
+Spec: "Add secure messaging with a strict authorization matrix...
+admin-to-anyone, logistics<->riders." Full narrative — the two
+`PlatformMessage` thread shapes, the shared-team-inbox design for
+`owner_user`, and the scope cuts (no realtime, no idempotency dedup)
+— is in `WORK_IN_PROGRESS.md`'s own Stage 37 section.
+
+## Commands run and results (Stage 37)
+
+| # | Command | Result |
+| --- | --- | --- |
+| 1 | `npm run typecheck --workspace apps/api --workspace apps/web` | **PASS** — 0 errors |
+| 2 | `npx vitest run` (apps/api) | **PASS** — 265/265 across 39 files, up from Stage 36's 260/38 (5 net new: `platform-messages.test.ts`) |
+| 3 | `npm run build --workspace apps/api --workspace apps/web` | **PASS** — clean |
+| 4 | Full e2e suite (35 specs), serial (`--workers=1`), fresh `e2e-test.db` | **34/35** — the one failure is the same already-confirmed-unrelated `booking.spec.ts` address-lookup flake seen every prior stage |
+| 5 | `dev.db` via `prisma db push` | New `PlatformMessage` table + `PlatformMessageKind`/`PlatformMessageSenderRole` enums, additive; no data loss |
+
+## Re-verify (Stage 37)
+
+```bash
+npm run typecheck --workspace apps/api --workspace apps/web
+npm run test --workspace @ronmacrae/api
+npm run build --workspace apps/api --workspace apps/web
+rm -f apps/api/data/e2e-test.db && cd e2e && npx playwright test --workers=1
+```
+
+**Not done in this stage**: realtime push for these threads; client-
+token send-retry dedup; a merchant<->logistics thread shape (only
+admin-to-anyone and logistics<->riders were specified); moderation of
+abusive messages; financial dispute/archival workflow; reports broken
+out by logistics company.

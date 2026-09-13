@@ -163,6 +163,7 @@ model User {
   codApprovals Job[]           @relation("codApprover")
   addressChangeReviews AddressChangeRequest[] @relation("addressChangeReviewer")
   settlementsReceived Settlement[] @relation("settlementReceiver")
+  platformMessages PlatformMessage[] @relation("platformMessageTargetUser")
 }
 
 /** One browser/device's opt-in Web Push subscription. A user may have several (multiple devices/browsers). */
@@ -249,6 +250,7 @@ model Rider {
   memberships RiderMembership[]
   settlements Settlement[]
   ratings     Rating[]
+  platformMessages PlatformMessage[]
 }
 
 // ---------- Geography / pricing ----------
@@ -374,6 +376,7 @@ model LogisticsCompany {
 
   staff  LogisticsCompanyStaff[]
   riders Rider[]
+  messages PlatformMessage[]
 
   @@unique([businessId, slug])
 }
@@ -405,6 +408,65 @@ enum RiderAttachment {
   freelance
   merchant
   logistics
+}
+
+/**
+ * Non-job-scoped direct messaging (spec: "secure messaging with a strict
+ * authorization matrix... admin-to-anyone, logistics<->riders") —
+ * deliberately a separate model from `DeliveryMessage`, which is always
+ * tied to exactly one delivery. A `PlatformMessage` thread is identified
+ * by its two fixed parties, same "no separate Conversation row, the
+ * message's own columns are the identity" convention `DeliveryMessage`
+ * already uses:
+ *  - `owner_user`: the platform owner(s) (there may be more than one — this
+ *    is a shared team inbox, not a specific owner's personal DM box) and
+ *    one specific `targetUser` — any User on the platform (staff, a
+ *    merchant/logistics portal-only account, or a rider's own login),
+ *    covering "admin-to-anyone".
+ *  - `logistics_rider`: one `LogisticsCompany` and one `Rider` — but only
+ *    while that rider is actually attached to that company
+ *    (Rider.attachedLogisticsCompanyId); the attachment relationship
+ *    itself is the authorization, checked at send/read time, not stored
+ *    redundantly here.
+ */
+enum PlatformMessageKind {
+  owner_user
+  logistics_rider
+}
+
+enum PlatformMessageSenderRole {
+  owner
+  user
+  logistics
+  rider
+}
+
+model PlatformMessage {
+  id   String              @id @default(cuid())
+  kind PlatformMessageKind
+
+  /** owner_user only — the other party of the thread. */
+  targetUserId String?
+  targetUser   User?   @relation("platformMessageTargetUser", fields: [targetUserId], references: [id], onDelete: Cascade)
+
+  /** logistics_rider only — both always set together. */
+  logisticsCompanyId String?
+  logisticsCompany   LogisticsCompany? @relation(fields: [logisticsCompanyId], references: [id], onDelete: Cascade)
+  riderId            String?
+  rider              Rider?            @relation(fields: [riderId], references: [id], onDelete: Cascade)
+
+  senderRole PlatformMessageSenderRole
+  /** User.id (owner or user sender) or Rider.id (rider sender) — whichever
+   *  side actually sent this one message. Null only for a system-shaped
+   *  future use; every real sender today has an id. */
+  senderId   String?
+  senderName String?
+  body       String
+  readAt     DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@index([kind, targetUserId])
+  @@index([kind, logisticsCompanyId, riderId])
 }
 
 enum InviteStatus {

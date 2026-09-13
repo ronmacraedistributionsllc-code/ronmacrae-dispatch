@@ -3961,3 +3961,87 @@ company inviting/vouching for its own riders directly (attachment
 stays Platform Admin-only, matching the spec's own wording); the full
 messaging authorization matrix; financial dispute/archival workflow;
 reports broken out by logistics company.
+
+## Stage 37 — non-job-scoped messaging: admin-to-anyone, logistics<->riders (DONE)
+
+Spec: "Add secure messaging with a strict authorization matrix...
+admin-to-anyone, logistics<->riders."
+
+**Design**: a genuinely new subsystem, deliberately separate from
+`DeliveryMessage` (delivery-messages.ts), which is always tied to
+exactly one job — these threads aren't about any one delivery. New
+`PlatformMessage` model with two thread shapes (see its own doc
+comment in schema.prisma):
+- `owner_user`: the platform owner(s) — a **shared team inbox**, not
+  any one owner's personal DM box, so any owner sees and can reply to
+  any thread — and one specific `User` row. Since staff, merchant/
+  logistics-portal-only accounts, and riders are all `User` rows, this
+  one thread shape genuinely covers "admin-to-anyone" without needing
+  a kind per account type.
+- `logistics_rider`: one `LogisticsCompany` and one `Rider` — valid
+  only while that rider is actually attached to that company
+  (`Rider.attachedLogisticsCompanyId`); the attachment relationship
+  itself is the authorization check, not stored redundantly on the
+  message.
+
+Same "no separate Conversation row, the message's own columns are the
+thread's identity" convention `DeliveryMessage` already established.
+Deliberately no realtime broadcast and no client-token idempotency
+dedup here (both real features of the job-scoped chat) — this is a
+lower-stakes, poll-only support/fleet-chat feature, not live delivery
+coordination, and adding those would have meant either overloading
+`DeliveryMessage`'s own more elaborate machinery or duplicating it for
+comparatively little benefit here — a deliberate, documented scope cut.
+
+- `platform-messages.ts`: shared list/send helpers for both thread
+  shapes (`listOwnerUserThread`/`sendOwnerUserMessage`,
+  `listLogisticsRiderThread`/`sendLogisticsRiderMessage`), plus the
+  owner's own routes (`GET /api/platform/messages` — the inbox, one
+  row per user thread with an unread count; `GET/POST
+  /api/platform/messages/:userId` — one thread) and the generic
+  `GET/POST /api/messages/owner` for any signed-in staff or rider
+  (their own shared access token — the natural face for this, since
+  neither has any other module of its own to live in).
+- `merchant-portal.ts` / `logistics-portal.ts` each gained their own
+  `GET/POST .../messages/owner` — same shared helpers, scoped to that
+  face's own `userId` from its own token.
+- `logistics-portal.ts` gained `GET/POST
+  /api/logistics-portal/riders/:riderId/messages` (fleet messaging) —
+  404s a rider that exists but isn't attached to *this* company, same
+  "don't confirm what doesn't apply" pattern used everywhere else.
+- `bearer.ts` gained the rider's own side,
+  `GET/POST /api/bearer/logistics-messages` — 404s a freelance or
+  merchant-attached rider (nothing to message).
+- Frontend: a new shared `PlatformChat` component (components/
+  platform-chat.tsx) — a smaller sibling of delivery-chat.tsx's
+  `DeliveryChat` without the per-job open/closed gating, address-change
+  proposal, or delivery receipt this simpler thread shape doesn't have.
+  A new `/messages` page + nav tab (visible to both staff and riders —
+  not staff-only) for the generic "message the owner" face; a
+  "Messages" tab in `merchant-portal.tsx`; a "Message Platform Admin"
+  button plus a per-rider "Message" button (opens that rider's fleet
+  thread inline) in `logistics-portal.tsx`; a collapsible "Your
+  logistics company" section in `rider-dashboard.tsx` that simply
+  doesn't render for a rider with nothing to see there (probes the
+  endpoint, hides itself on 404 rather than showing an empty/error
+  state for something that doesn't apply); a new "Messages" tab in
+  `platform-admin.tsx` — a thread list (unread badges, most-recent-
+  first) with the open thread's chat alongside it.
+
+**Verification**: `npm run typecheck --workspace apps/api --workspace
+apps/web` clean. `apps/api` vitest **265/265** across 39 files (5 net
+new in `platform-messages.test.ts`, covering both thread shapes in
+both directions, cross-user/cross-company isolation, the non-owner
+403, and the two distinct 404s — wrong company, no attachment at
+all). `npm run build --workspace apps/api --workspace apps/web`
+clean. Full e2e suite re-run (serially, `--workers=1`, fresh
+`e2e-test.db`): **34/35**, the one failure the same already-confirmed-
+unrelated `booking.spec.ts` address-lookup flake seen every prior stage.
+
+**Not done in this stage**: realtime push for these threads (poll-only,
+matching the scope cut above); client-token send-retry dedup; a
+merchant-to-logistics or logistics-to-merchant thread shape (the spec
+named admin-to-anyone and logistics<->riders specifically, not a full
+any-to-any mesh); moderation/blocking of abusive messages (no report/
+hide mechanism here, unlike ratings' moderation); financial dispute/
+archival workflow; reports broken out by logistics company.

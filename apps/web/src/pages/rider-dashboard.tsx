@@ -12,7 +12,8 @@ import { RouteQueue } from "../components/route-queue.js";
 import { ContactDispatch } from "../components/contact-dispatch.js";
 import { DeliveryChat } from "../components/delivery-chat.js";
 import { ConversationTabs } from "../components/conversation-tabs.js";
-import type { ConversationsDto, DeliveryMessagesDto, RiderCashProfileDto } from "@ronmacrae/contracts";
+import { PlatformChat } from "../components/platform-chat.js";
+import type { ConversationsDto, DeliveryMessagesDto, PlatformMessagesDto, RiderCashProfileDto } from "@ronmacrae/contracts";
 
 const RIDER_QUICK_REPLIES = ["Heading to you", "I've arrived", "I cannot reach you", "Please contact dispatch"];
 
@@ -220,6 +221,7 @@ export function RiderDashboard(): React.JSX.Element {
     ) : null}
     <CashSummary />
     <LocationSharing riderId={rider.id} />
+    <LogisticsFleetChat />
 
     <SectionHeading label="To pick up" count={toPickUp.length} />
     {jobs.isLoading ? <p className="text-sm text-zinc-400">Loading assigned jobs…</p> : null}
@@ -295,6 +297,32 @@ function CashSummary(): React.JSX.Element | null {
         ))}
       </div>
       <p className="text-[11px] text-zinc-600">"Your earnings" is an estimate — pay rate × completed deliveries — not a confirmed payout.</p>
+    </details>
+  );
+}
+
+/** Fleet messaging with the rider's own attached logistics company (spec:
+ *  "logistics<->riders") — a freelance or merchant-attached rider has none
+ *  of this to see, so the section simply doesn't render rather than
+ *  showing an empty/error state for something that doesn't apply to them. */
+function LogisticsFleetChat(): React.JSX.Element | null {
+  const probe = useQuery({
+    queryKey: ["bearer-logistics-messages-probe"],
+    queryFn: () => apiFetch<PlatformMessagesDto>(API.bearer.logisticsMessages),
+    retry: false,
+  });
+  if (probe.isLoading || probe.isError) return null;
+
+  return (
+    <details className="card space-y-2">
+      <summary className="cursor-pointer text-sm font-semibold uppercase tracking-wide text-zinc-400">Your logistics company</summary>
+      <div className="mt-2">
+        <PlatformChat
+          queryKey="bearer-logistics"
+          fetchMessages={() => apiFetch<PlatformMessagesDto>(API.bearer.logisticsMessages)}
+          sendMessage={(body) => apiFetch<PlatformMessagesDto>(API.bearer.logisticsMessages, { method: "POST", body: JSON.stringify({ body }) })}
+        />
+      </div>
     </details>
   );
 }

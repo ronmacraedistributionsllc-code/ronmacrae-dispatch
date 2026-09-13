@@ -1,9 +1,10 @@
 import React, { useCallback, useEffect, useState, type FormEvent } from "react";
 import { Navigate, useNavigate } from "react-router-dom";
 import { API } from "@ronmacrae/contracts";
-import type { ProductDto } from "@ronmacrae/contracts";
+import type { PlatformMessagesDto, ProductDto } from "@ronmacrae/contracts";
 import { formatMoney, setAccessToken } from "../lib/api.js";
 import { useAuth } from "../lib/auth.js";
+import { PlatformChat } from "../components/platform-chat.js";
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? "/api";
 const STORAGE_KEY = "merchantPortalToken";
@@ -70,7 +71,7 @@ export function MerchantPortal(): React.JSX.Element {
   const [hasStaffAccess, setHasStaffAccess] = useState(false);
   const [switching, setSwitching] = useState(false);
   const [orders, setOrders] = useState<PortalOrder[] | null>(null);
-  const [tab, setTab] = useState<"orders" | "catalog">("orders");
+  const [tab, setTab] = useState<"orders" | "catalog" | "messages">("orders");
   const navigate = useNavigate();
   const { refresh: refreshStaffSession } = useAuth();
 
@@ -147,6 +148,7 @@ export function MerchantPortal(): React.JSX.Element {
       <div className="flex gap-1 border-b border-zinc-800">
         <button className={`px-3 py-2 text-sm font-medium ${tab === "orders" ? "border-b-2 border-brand-accent text-brand-accent" : "text-zinc-400"}`} onClick={() => setTab("orders")}>Orders</button>
         <button className={`px-3 py-2 text-sm font-medium ${tab === "catalog" ? "border-b-2 border-brand-accent text-brand-accent" : "text-zinc-400"}`} onClick={() => setTab("catalog")}>Catalog</button>
+        <button className={`px-3 py-2 text-sm font-medium ${tab === "messages" ? "border-b-2 border-brand-accent text-brand-accent" : "text-zinc-400"}`} onClick={() => setTab("messages")}>Messages</button>
       </div>
 
       {error ? <p className="text-sm text-red-400">{error}</p> : null}
@@ -180,8 +182,17 @@ export function MerchantPortal(): React.JSX.Element {
             ))}
           </div>
         </>
-      ) : (
+      ) : tab === "catalog" ? (
         <Catalog token={token} />
+      ) : (
+        <section className="card">
+          <p className="mb-2 text-sm text-zinc-400">A direct line to Platform Admin about your store.</p>
+          <PlatformChat
+            queryKey={`merchant-owner-${token}`}
+            fetchMessages={() => portalFetch<PlatformMessagesDto>(API.merchantPortal.ownerMessages, { headers: { authorization: `Bearer ${token}` } })}
+            sendMessage={(body) => portalFetch<PlatformMessagesDto>(API.merchantPortal.ownerMessages, { method: "POST", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ body }) })}
+          />
+        </section>
       )}
     </div>
   );

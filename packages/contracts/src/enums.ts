@@ -177,6 +177,16 @@ export type NotificationStatus = (typeof NOTIFICATION_STATUSES)[number];
 export const MESSAGE_SENDER_ROLES = ["customer", "rider", "dispatcher", "system"] as const;
 export type MessageSenderRole = (typeof MESSAGE_SENDER_ROLES)[number];
 
+/** Non-job-scoped direct messaging (spec: "secure messaging with a strict
+ *  authorization matrix... admin-to-anyone, logistics<->riders") — see
+ *  schema.prisma's PlatformMessage doc comment for the two thread shapes
+ *  (`owner_user`, `logistics_rider`) these sender roles appear in. */
+export const PLATFORM_MESSAGE_KINDS = ["owner_user", "logistics_rider"] as const;
+export type PlatformMessageKind = (typeof PLATFORM_MESSAGE_KINDS)[number];
+
+export const PLATFORM_MESSAGE_SENDER_ROLES = ["owner", "user", "logistics", "rider"] as const;
+export type PlatformMessageSenderRole = (typeof PLATFORM_MESSAGE_SENDER_ROLES)[number];
+
 /** A customer/rider proposing a new destination in chat is never applied
  *  automatically — dispatch reviews and approves/declines it explicitly. */
 export const ADDRESS_CHANGE_STATUSES = ["pending", "approved", "declined"] as const;

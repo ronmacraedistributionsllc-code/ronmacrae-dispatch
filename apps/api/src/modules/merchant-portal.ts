@@ -11,6 +11,7 @@ import type { PaymentMethod } from "@ronmacrae/contracts";
 import { PAYMENT_METHOD_LABELS } from "@ronmacrae/contracts";
 import { CreateProduct, productToDto } from "./merchants.js";
 import { resolveStaffContext, toUserDto } from "./auth.js";
+import { listOwnerUserThread, sendOwnerUserMessage, SendPlatformMessageBody } from "./platform-messages.js";
 
 /**
  * A merchant's own login (spec: "a merchant should have a login where
@@ -142,6 +143,21 @@ export async function merchantPortalRoutes(app: FastifyInstance, ctx: AppCtx): P
     });
     await ctx.audit.record({ id: user.id, role: staffContext.role }, "auth.switch_workspace", "user", user.id);
     return { accessToken, user: toUserDto(user), businessId: staffContext.businessId, platformRole: staffContext.platformRole };
+  });
+
+  // "Message the owner" (spec: "admin-to-anyone") — see platform-messages.ts
+  // for the shared thread logic; this merchant's own userId is the thread.
+  app.get("/api/merchant-portal/messages/owner", async (req) => {
+    const auth = await requireMerchantAuth(ctx, req);
+    return listOwnerUserThread(ctx, auth.userId, "user", auth.userId, true);
+  });
+
+  app.post("/api/merchant-portal/messages/owner", async (req) => {
+    const auth = await requireMerchantAuth(ctx, req);
+    const body = SendPlatformMessageBody.parse(req.body);
+    const user = await ctx.prisma.user.findUniqueOrThrow({ where: { id: auth.userId } });
+    await sendOwnerUserMessage(ctx, auth.userId, "user", auth.userId, user.name, body.body);
+    return listOwnerUserThread(ctx, auth.userId, "user", auth.userId, true);
   });
 
   app.get("/api/merchant-portal/orders", async (req) => {

@@ -134,6 +134,8 @@ export const API = {
      *  second password entry (see auth.ts's own switchToMerchant). */
     switchToStaff: "/api/merchant-portal/switch-to-staff",
     rate: (jobId: string) => `/api/merchant-portal/orders/${jobId}/rate`,
+    /** "Message the owner" (spec: "admin-to-anyone") — same GET/POST path. */
+    ownerMessages: "/api/merchant-portal/messages/owner",
   },
 
   /** Fleet-supplier clients of the courier business (spec: "Bearer/
@@ -157,6 +159,11 @@ export const API = {
     me: "/api/logistics-portal/me",
     riders: "/api/logistics-portal/riders",
     switchToStaff: "/api/logistics-portal/switch-to-staff",
+    /** "Message the owner" (spec: "admin-to-anyone") — same GET/POST path. */
+    ownerMessages: "/api/logistics-portal/messages/owner",
+    /** Fleet messaging (spec: "logistics<->riders") — same GET/POST path,
+     *  only for a rider actually attached to this company. */
+    riderMessages: (riderId: string) => `/api/logistics-portal/riders/${riderId}/messages`,
   },
 
   products: {
@@ -252,6 +259,16 @@ export const API = {
     bearerSend: (jobId: string, kind: string) => `/api/bearer/jobs/${jobId}/messages/${kind}`,
     bearerConversations: (jobId: string) => `/api/bearer/jobs/${jobId}/conversations`,
     bearerAddressChange: (jobId: string) => `/api/bearer/jobs/${jobId}/address-change`,
+    /** Non-job-scoped "message the owner" (spec: "admin-to-anyone") — any
+     *  signed-in staff/rider (own access token), same GET/POST path. */
+    owner: "/api/messages/owner",
+  },
+
+  /** Platform Admin's own side of `messages.owner` — its inbox across
+   *  every user who has messaged in, and each thread. */
+  platformMessages: {
+    threads: "/api/platform/messages",
+    thread: (userId: string) => `/api/platform/messages/${userId}`,
   },
 
   proofs: {
@@ -377,6 +394,9 @@ export const API = {
     reorder: "/api/bearer/jobs/reorder",
     /** "Contact dispatch" button — spec 5F */
     dispatchContact: (jobId: string) => `/api/bearer/dispatch-contact?jobId=${encodeURIComponent(jobId)}`,
+    /** Fleet messaging with the rider's own attached logistics company
+     *  (spec: "logistics<->riders") — 404 if not currently attached to one. */
+    logisticsMessages: "/api/bearer/logistics-messages",
   },
 
   offers: {
