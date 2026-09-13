@@ -36,7 +36,9 @@ const UpdateMerchant = CreateMerchant.partial();
 const MerchantStaffBody = z.object({
   email: z.string().email().max(160),
   name: z.string().max(120).optional(),
-  password: z.string().min(8).max(128),
+  /** Only used (and only required) when this email doesn't have an
+   *  account yet — reusing an existing one never touches its password. */
+  password: z.string().min(8).max(128).optional(),
 });
 
 /** Exported for reuse by merchant-portal.ts's own catalog routes — same
@@ -250,25 +252,25 @@ export async function merchantRoutes(app: FastifyInstance, ctx: AppCtx): Promise
     const merchant = await ctx.prisma.merchant.findFirst({ where: { id: req.params.id, businessId } });
     if (!merchant) throw httpErrors.createError(404, "Merchant not found");
     const email = body.email.trim().toLowerCase();
-    const existingOwner = await ctx.prisma.user.findUnique({ where: { email } });
-    if (existingOwner) {
-      const existingMembership = await ctx.prisma.merchantStaff.findUnique({ where: { userId_merchantId: { userId: existingOwner.id, merchantId: merchant.id } } });
-      if (!existingMembership && (await ctx.prisma.merchantStaff.findFirst({ where: { userId: existingOwner.id } }))) {
-        throw httpErrors.createError(409, "This email already has portal access at a different merchant");
-      }
-    }
-    const user = await ctx.prisma.user.upsert({
-      where: { email },
-      create: { email, name: body.name || merchant.name, passwordHash: hashPassword(body.password), role: "viewer" },
-      update: { passwordHash: hashPassword(body.password), name: body.name || undefined },
-    });
+    // One account, potentially many memberships (spec: "must still have
+    // only one account") — an email may already have portal access at
+    // other merchants (or staff/rider access entirely) and that's fine,
+    // this just adds one more membership to it. What must NEVER happen:
+    // silently resetting an existing person's password because someone
+    // else typed a new one into this form. A password is only ever set
+    // when this call is what actually creates the account.
+    const existing = await ctx.prisma.user.findUnique({ where: { email } });
+    if (!existing && !body.password) throw httpErrors.createError(400, "A password is required to create a new account for this email");
+    const user =
+      existing ??
+      (await ctx.prisma.user.create({ data: { email, name: body.name || merchant.name, passwordHash: hashPassword(body.password!), role: "viewer" } }));
     await ctx.prisma.merchantStaff.upsert({
       where: { userId_merchantId: { userId: user.id, merchantId: merchant.id } },
       create: { userId: user.id, merchantId: merchant.id, active: true },
       update: { active: true },
     });
-    await ctx.audit.record({ id: req.user!.sub, role: req.user!.role }, "merchant.staff.grant", "merchant", merchant.id, { email });
-    return { ok: true, email };
+    await ctx.audit.record({ id: req.user!.sub, role: req.user!.role }, "merchant.staff.grant", "merchant", merchant.id, { email, reusedExistingAccount: existing != null });
+    return { ok: true, email, reusedExistingAccount: existing != null };
   });
 
   // ---------------------------------------------------------------------

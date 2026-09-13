@@ -144,20 +144,24 @@ function GrantPortalAccessForm({ merchantId, onDone }: { merchantId: string; onD
   const [name, setName] = useState("");
   const [password, setPassword] = useState("");
   const grant = useMutation({
-    mutationFn: () => apiFetch(API.merchants.grantStaff(merchantId), { method: "POST", body: JSON.stringify({ email, name: name || undefined, password }) }),
+    mutationFn: () => apiFetch<{ reusedExistingAccount: boolean }>(API.merchants.grantStaff(merchantId), { method: "POST", body: JSON.stringify({ email, name: name || undefined, password: password || undefined }) }),
     onSuccess: onDone,
   });
   return (
     <form className="space-y-2 rounded-lg border border-zinc-700 p-3" onSubmit={(e) => { e.preventDefault(); void grant.mutate(); }}>
-      <p className="text-xs text-zinc-400">Lets this store sign in at <code>/merchant</code> to view their own orders.</p>
+      <p className="text-xs text-zinc-400">
+        Lets this person sign in (the same sign-in page everyone uses) to view this store's own orders. If this email
+        already has an account (staff, rider, or another store), this just adds this store to it — their existing
+        password is never changed.
+      </p>
       <div className="grid gap-2 sm:grid-cols-3">
         <input className="input" type="email" required placeholder="Login email" value={email} onChange={(e) => setEmail(e.target.value)} />
         <input className="input" placeholder="Contact name (optional)" value={name} onChange={(e) => setName(e.target.value)} />
-        <input className="input" type="password" required minLength={8} placeholder="Password (8+ chars)" value={password} onChange={(e) => setPassword(e.target.value)} />
+        <input className="input" type="password" minLength={8} placeholder="Password (only if new account)" value={password} onChange={(e) => setPassword(e.target.value)} />
       </div>
       {grant.error ? <p className="text-sm text-red-400">{grant.error instanceof ApiError ? grant.error.message : "Could not grant access"}</p> : null}
-      {grant.isSuccess ? <p className="text-sm text-emerald-400">Access granted — share the email/password with them directly.</p> : null}
-      <button className="btn-accent !px-3 !py-1 text-xs" disabled={grant.isPending || !email || password.length < 8}>{grant.isPending ? "Saving…" : "Grant access"}</button>
+      {grant.isSuccess ? <p className="text-sm text-emerald-400">Access granted.</p> : null}
+      <button className="btn-accent !px-3 !py-1 text-xs" disabled={grant.isPending || !email}>{grant.isPending ? "Saving…" : "Grant access"}</button>
     </form>
   );
 }

@@ -1,7 +1,9 @@
 import React, { useCallback, useEffect, useState, type FormEvent } from "react";
+import { Navigate, useNavigate } from "react-router-dom";
 import { API } from "@ronmacrae/contracts";
 import type { ProductDto } from "@ronmacrae/contracts";
-import { formatMoney } from "../lib/api.js";
+import { formatMoney, setAccessToken } from "../lib/api.js";
+import { useAuth } from "../lib/auth.js";
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? "/api";
 const STORAGE_KEY = "merchantPortalToken";
@@ -63,13 +65,14 @@ interface PortalOrder {
  */
 export function MerchantPortal(): React.JSX.Element {
   const [token, setToken] = useState<string | null>(() => sessionStorage.getItem(STORAGE_KEY));
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
   const [merchantName, setMerchantName] = useState<string | null>(null);
+  const [hasStaffAccess, setHasStaffAccess] = useState(false);
+  const [switching, setSwitching] = useState(false);
   const [orders, setOrders] = useState<PortalOrder[] | null>(null);
   const [tab, setTab] = useState<"orders" | "catalog">("orders");
+  const navigate = useNavigate();
+  const { refresh: refreshStaffSession } = useAuth();
 
   function signOut() {
     sessionStorage.removeItem(STORAGE_KEY);
@@ -81,10 +84,11 @@ export function MerchantPortal(): React.JSX.Element {
   const loadDashboard = useCallback(async (tok: string) => {
     try {
       const [me, ordersRes] = await Promise.all([
-        portalFetch<{ merchant: { name: string } }>(API.merchantPortal.me, { headers: { authorization: `Bearer ${tok}` } }),
+        portalFetch<{ merchant: { name: string }; hasStaffAccess: boolean }>(API.merchantPortal.me, { headers: { authorization: `Bearer ${tok}` } }),
         portalFetch<{ orders: PortalOrder[] }>(API.merchantPortal.orders, { headers: { authorization: `Bearer ${tok}` } }),
       ]);
       setMerchantName(me.merchant.name);
+      setHasStaffAccess(me.hasStaffAccess);
       setOrders(ordersRes.orders);
     } catch (err) {
       if (err instanceof PortalError && err.status === 401) {
@@ -99,48 +103,29 @@ export function MerchantPortal(): React.JSX.Element {
     if (token) void loadDashboard(token);
   }, [token, loadDashboard]);
 
-  async function login(e: FormEvent) {
-    e.preventDefault();
-    setError(null);
-    setBusy(true);
+  async function switchToStaff() {
+    if (!token) return;
+    setSwitching(true);
     try {
-      const body = await portalFetch<{ token: string; merchant: { name: string } }>(API.merchantPortal.login, {
+      const body = await portalFetch<{ accessToken: string }>(API.merchantPortal.switchToStaff, {
         method: "POST",
-        body: JSON.stringify({ email, password }),
+        headers: { authorization: `Bearer ${token}` },
       });
-      sessionStorage.setItem(STORAGE_KEY, body.token);
-      setToken(body.token);
-      setMerchantName(body.merchant.name);
+      setAccessToken(body.accessToken);
+      await refreshStaffSession();
+      navigate("/");
     } catch (err) {
-      setError(err instanceof PortalError ? err.message : "Could not sign in");
+      setError(err instanceof PortalError ? err.message : "Could not switch workspace");
     } finally {
-      setBusy(false);
+      setSwitching(false);
     }
   }
 
-  if (!token) {
-    return (
-      <div className="flex min-h-dvh items-center justify-center bg-zinc-950 p-4">
-        <form onSubmit={(e) => void login(e)} className="card w-full max-w-sm space-y-4">
-          <div className="text-center">
-            <h1 className="text-lg font-bold text-brand-accent">Merchant Portal</h1>
-            <p className="text-sm text-zinc-400">View orders placed through your store link.</p>
-          </div>
-          <div>
-            <label className="label" htmlFor="mp-email">Email</label>
-            <input id="mp-email" type="email" className="input" required autoFocus value={email} onChange={(e) => setEmail(e.target.value)} />
-          </div>
-          <div>
-            <label className="label" htmlFor="mp-password">Password</label>
-            <input id="mp-password" type="password" className="input" required value={password} onChange={(e) => setPassword(e.target.value)} />
-          </div>
-          {error ? <p className="text-sm text-red-400">{error}</p> : null}
-          <button className="btn-accent w-full" disabled={busy}>{busy ? "Signing in…" : "Sign in"}</button>
-          <p className="text-center text-xs text-zinc-500">Don't have portal access? Ask your dispatch contact to set it up.</p>
-        </form>
-      </div>
-    );
-  }
+  // One shared sign-in for everyone — this page is a destination, not its
+  // own login: visiting it without a session goes to the same login
+  // everyone else uses, which routes back here once it resolves to a
+  // merchant workspace.
+  if (!token) return <Navigate to="/" replace />;
 
   return (
     <div className="mx-auto max-w-3xl space-y-4 p-4">
@@ -149,7 +134,14 @@ export function MerchantPortal(): React.JSX.Element {
           <h1 className="text-xl font-bold">{merchantName ?? "Your store"}</h1>
           <p className="text-sm text-zinc-400">Orders placed through your store link.</p>
         </div>
-        <button className="btn !px-3 !py-1 text-xs" onClick={signOut}>Sign out</button>
+        <div className="flex gap-2">
+          {hasStaffAccess ? (
+            <button className="btn !px-3 !py-1 text-xs" disabled={switching} onClick={() => void switchToStaff()}>
+              {switching ? "Switching…" : "Switch to staff dashboard"}
+            </button>
+          ) : null}
+          <button className="btn !px-3 !py-1 text-xs" onClick={signOut}>Sign out</button>
+        </div>
       </header>
 
       <div className="flex gap-1 border-b border-zinc-800">

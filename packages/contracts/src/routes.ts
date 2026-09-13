@@ -130,6 +130,9 @@ export const API = {
     createProduct: "/api/merchant-portal/products",
     updateProduct: (id: string) => `/api/merchant-portal/products/${id}`,
     deleteProduct: (id: string) => `/api/merchant-portal/products/${id}`,
+    /** Jumps to staff/rider access on the same account, if any — no
+     *  second password entry (see auth.ts's own switchToMerchant). */
+    switchToStaff: "/api/merchant-portal/switch-to-staff",
   },
 
   products: {

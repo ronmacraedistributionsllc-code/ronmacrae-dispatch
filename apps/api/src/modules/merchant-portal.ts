@@ -10,6 +10,7 @@ import { moneyField } from "../geo-mappers.js";
 import type { PaymentMethod } from "@ronmacrae/contracts";
 import { PAYMENT_METHOD_LABELS } from "@ronmacrae/contracts";
 import { CreateProduct, productToDto } from "./merchants.js";
+import { resolveStaffContext, toUserDto } from "./auth.js";
 
 /**
  * A merchant's own login (spec: "a merchant should have a login where
@@ -111,7 +112,36 @@ export async function merchantPortalRoutes(app: FastifyInstance, ctx: AppCtx): P
   app.get("/api/merchant-portal/me", async (req) => {
     const auth = await requireMerchantAuth(ctx, req);
     const merchant = await ctx.prisma.merchant.findUniqueOrThrow({ where: { id: auth.merchantId } });
-    return { merchant: { id: merchant.id, name: merchant.name, active: merchant.active } };
+    // hasStaffAccess lets the portal offer "Switch workspace" without
+    // guessing — the actual switch (an access token, no re-login) is
+    // POST /api/merchant-portal/switch-to-staff below.
+    const user = await ctx.prisma.user.findUniqueOrThrow({ where: { id: auth.userId }, select: { id: true, role: true, platformRole: true } });
+    const staffContext = await resolveStaffContext(ctx, user);
+    return { merchant: { id: merchant.id, name: merchant.name, active: merchant.active }, hasStaffAccess: staffContext !== null };
+  });
+
+  // The reverse of /api/auth/switch-to-merchant — an already-authenticated
+  // merchant session jumping to its staff/rider access, if any, without a
+  // second password entry. Deliberately access-token-only (no refresh
+  // cookie): this switched-in staff session lasts ~15 minutes, then needs
+  // a real re-login — a documented, acceptable limit rather than
+  // replicating the full session/cookie machinery from a merchant-token
+  // context.
+  app.post("/api/merchant-portal/switch-to-staff", async (req) => {
+    const auth = await requireMerchantAuth(ctx, req);
+    const user = await ctx.prisma.user.findUniqueOrThrow({ where: { id: auth.userId }, include: { rider: { select: { id: true } } } });
+    const staffContext = await resolveStaffContext(ctx, user);
+    if (!staffContext) throw httpErrors.createError(403, "This account has no staff or rider access to switch to.");
+    const accessToken = await ctx.jwt.issueAccess({
+      id: user.id,
+      name: user.name,
+      role: staffContext.role,
+      riderId: user.rider?.id,
+      businessId: staffContext.businessId ?? undefined,
+      platformRole: staffContext.platformRole ?? undefined,
+    });
+    await ctx.audit.record({ id: user.id, role: staffContext.role }, "auth.switch_workspace", "user", user.id);
+    return { accessToken, user: toUserDto(user), businessId: staffContext.businessId, platformRole: staffContext.platformRole };
   });
 
   app.get("/api/merchant-portal/orders", async (req) => {

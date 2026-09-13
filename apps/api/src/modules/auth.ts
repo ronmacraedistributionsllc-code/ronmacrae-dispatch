@@ -43,6 +43,12 @@ const LoginBody = z.object({
    *  business-switcher UI yet, so a multi-business admin currently has to
    *  log in again with this to reach a second business. */
   businessId: z.string().optional(),
+  /** Finalizes a workspace:"select" response (an account with more than
+   *  one merchant workspace and no staff/rider access at all) — the
+   *  frontend re-submits the exact same credentials plus the chosen id,
+   *  rather than a separate confirm endpoint. Ignored for an account that
+   *  has staff/rider access (that path never returns "select" today). */
+  merchantId: z.string().optional(),
 });
 
 interface StaffContext {
@@ -56,12 +62,20 @@ interface StaffContext {
  *  is for. A platform owner gets no businessId at all — the owner console
  *  is separate, business-scoped routes never accept an owner's token (see
  *  guards.ts's requireStaff, which requires a businessId, not just a role
- *  match) rather than silently treating "no business" as "every business". */
-async function resolveStaffContext(
+ *  match) rather than silently treating "no business" as "every business".
+ *
+ *  Returns `null` (never throws) when the user has no active staff
+ *  membership and isn't a rider or platform owner — the caller decides
+ *  what that means: /api/auth/login falls through to check merchant-portal
+ *  access before giving up, while /api/auth/refresh (a session that could
+ *  only exist by having resolved successfully at login time) treats it as
+ *  the account having been removed out from under an existing session and
+ *  throws via requireStaffContext below. */
+export async function resolveStaffContext(
   ctx: AppCtx,
   user: { id: string; role: Role; platformRole: string | null },
   requestedBusinessId?: string,
-): Promise<StaffContext> {
+): Promise<StaffContext | null> {
   if (user.platformRole === "owner") {
     return { businessId: null, role: user.role, platformRole: "owner", memberships: [] };
   }
@@ -73,12 +87,32 @@ async function resolveStaffContext(
     include: { business: { select: { id: true, name: true } } },
   });
   const memberships = staffMemberships.map((m) => ({ businessId: m.businessId, businessName: m.business.name, role: m.role }));
-  if (memberships.length === 0) {
-    throw httpErrors.createError(403, "This account has no active business membership");
-  }
+  if (memberships.length === 0) return null;
   const chosen =
     (requestedBusinessId ? memberships.find((m) => m.businessId === requestedBusinessId) : undefined) ?? memberships[0]!;
   return { businessId: chosen.businessId, role: chosen.role, platformRole: null, memberships };
+}
+
+async function requireStaffContext(
+  ctx: AppCtx,
+  user: { id: string; role: Role; platformRole: string | null },
+  requestedBusinessId?: string,
+): Promise<StaffContext> {
+  const resolved = await resolveStaffContext(ctx, user, requestedBusinessId);
+  if (!resolved) throw httpErrors.createError(403, "This account has no active business membership");
+  return resolved;
+}
+
+/** A merchant-portal workspace this user can switch into, surfaced
+ *  alongside a successful staff login (or offered on its own when the
+ *  account has no staff/rider access at all) — see /api/auth/login and
+ *  /api/auth/switch-to-merchant. */
+async function merchantWorkspacesFor(ctx: AppCtx, userId: string) {
+  const rows = await ctx.prisma.merchantStaff.findMany({
+    where: { userId, active: true, merchant: { active: true } },
+    include: { merchant: { select: { id: true, name: true } } },
+  });
+  return rows.map((r) => ({ type: "merchant" as const, id: r.merchant.id, name: r.merchant.name }));
 }
 
 export async function authRoutes(app: FastifyInstance, ctx: AppCtx): Promise<void> {
@@ -106,7 +140,36 @@ export async function authRoutes(app: FastifyInstance, ctx: AppCtx): Promise<voi
         throw httpErrors.createError(401, "TOTP code required");
       }
     }
+    // One shared sign-in for everyone (spec: "no separate rider, merchant,
+    // logistics, or admin login pages") — the same credentials are checked
+    // against staff/rider access first, then merchant-portal access,
+    // rather than the caller having to know in advance which kind of
+    // account this is or visit a different page for each.
     const staffContext = await resolveStaffContext(ctx, user, body.businessId);
+    const merchantWorkspaces = await merchantWorkspacesFor(ctx, user.id);
+
+    if (!staffContext) {
+      if (merchantWorkspaces.length === 0) {
+        // Genuinely no accessible workspace — a clear, honest explanation,
+        // never a silent or generic failure (spec: "if they genuinely have
+        // no membership, give a clear explanation and no unauthorized access").
+        throw httpErrors.createError(
+          403,
+          "This account isn't connected to any business yet. Ask an admin to add you, or check for an invite.",
+        );
+      }
+      const chosen = body.merchantId ? merchantWorkspaces.find((w) => w.id === body.merchantId) : undefined;
+      if (merchantWorkspaces.length > 1 && !chosen) {
+        // More than one merchant workspace and no staff access at all —
+        // needs an explicit choice, no token issued yet.
+        return { workspace: "select" as const, options: merchantWorkspaces };
+      }
+      const only = chosen ?? merchantWorkspaces[0]!;
+      const token = await ctx.jwt.issueMerchantPortal(user.id, only.id);
+      await ctx.audit.record({ id: user.id, role: "merchant" }, "auth.login", "user", user.id);
+      return { workspace: "merchant" as const, token, merchant: { id: only.id, name: only.name } };
+    }
+
     const tokenPair = await issueTokenPair(ctx, user, staffContext, req.headers["user-agent"]);
     await ctx.audit.record({ id: user.id, role: user.role }, "auth.login", "user", user.id);
     reply.setCookie(REFRESH_COOKIE, tokenPair.refresh, {
@@ -117,13 +180,32 @@ export async function authRoutes(app: FastifyInstance, ctx: AppCtx): Promise<voi
       expires: tokenPair.expiresAt,
     });
     return {
+      workspace: "staff" as const,
       user: toUserDto(user),
       riderId: user.rider?.id ?? null,
       businessId: staffContext.businessId,
       platformRole: staffContext.platformRole,
       memberships: staffContext.memberships,
       accessToken: tokenPair.access,
+      // Surfaced so the app can offer "Switch workspace" without a second
+      // login — see /api/auth/switch-to-merchant. Empty for the common
+      // single-workspace case.
+      otherWorkspaces: merchantWorkspaces,
     };
+  });
+
+  // Lets an already-authenticated staff/rider session jump into a merchant
+  // workspace it also has access to, without a second password entry —
+  // the "switch workspace" the spec asks for, not a second login page.
+  app.post("/api/auth/switch-to-merchant", { preHandler: ctx.requireAuth }, async (req) => {
+    const body = z.object({ merchantId: z.string().optional() }).parse(req.body ?? {});
+    const workspaces = await merchantWorkspacesFor(ctx, req.user!.sub);
+    if (workspaces.length === 0) throw httpErrors.createError(403, "This account has no merchant access to switch to.");
+    const target = body.merchantId ? workspaces.find((w) => w.id === body.merchantId) : workspaces[0];
+    if (!target) throw httpErrors.createError(404, "Merchant workspace not found");
+    const token = await ctx.jwt.issueMerchantPortal(req.user!.sub, target.id);
+    await ctx.audit.record({ id: req.user!.sub, role: req.user!.role }, "auth.switch_workspace", "merchant", target.id);
+    return { token, merchant: { id: target.id, name: target.name } };
   });
 
   app.post("/api/auth/refresh", async (req, reply) => {
@@ -145,8 +227,8 @@ export async function authRoutes(app: FastifyInstance, ctx: AppCtx): Promise<voi
     // scratch — a multi-business admin's session must not silently jump to a
     // different business (e.g. "first membership") on every token refresh.
     const staffContext = session.businessId
-      ? await resolveStaffContext(ctx, user, session.businessId)
-      : await resolveStaffContext(ctx, user);
+      ? await requireStaffContext(ctx, user, session.businessId)
+      : await requireStaffContext(ctx, user);
     const tokenPair = await issueTokenPair(ctx, user, staffContext, req.headers["user-agent"]);
     reply.setCookie(REFRESH_COOKIE, tokenPair.refresh, {
       path: "/api/auth",
@@ -187,7 +269,11 @@ export async function authRoutes(app: FastifyInstance, ctx: AppCtx): Promise<voi
     const rider = user.rider
       ? riderToDto(user.rider, { currentJobId: await currentJobIdFor(ctx, user.rider.id) })
       : null;
-    return { user: toUserDto(user), rider };
+    // Kept available for the whole session (not just the login instant) so
+    // a "Switch workspace" control can show up anywhere in the app, not
+    // only right after signing in.
+    const otherWorkspaces = await merchantWorkspacesFor(ctx, user.id);
+    return { user: toUserDto(user), rider, otherWorkspaces };
   });
 
   app.put("/api/auth/password", { preHandler: ctx.requireAuth }, async (req) => {

@@ -1,8 +1,9 @@
 import React, { useEffect, useState } from "react";
-import { NavLink, useLocation } from "react-router-dom";
-import { useAuth } from "../lib/auth.js";
+import { NavLink, useLocation, useNavigate } from "react-router-dom";
+import { useAuth, MERCHANT_PORTAL_TOKEN_KEY } from "../lib/auth.js";
 import { useRealtime, type ConnectionStatus } from "../lib/realtime.js";
 import { AlertsToaster } from "./alerts-toaster.js";
+import { apiFetch } from "../lib/api.js";
 
 const TABS = [
   { to: "/", label: "Dashboard", icon: "🏠", end: true },
@@ -40,8 +41,15 @@ const CONNECTION_DOT: Record<ConnectionStatus, string> = {
 };
 
 export function Layout({ children }: { children: React.ReactNode }): React.JSX.Element {
-  const { user, logout } = useAuth();
+  const { user, logout, otherWorkspaces } = useAuth();
+  const navigate = useNavigate();
   const { unreadCount, markRead, status } = useRealtime();
+
+  async function switchToMerchant(merchantId: string) {
+    const body = await apiFetch<{ token: string }>("/auth/switch-to-merchant", { method: "POST", body: JSON.stringify({ merchantId }) });
+    sessionStorage.setItem(MERCHANT_PORTAL_TOKEN_KEY, body.token);
+    navigate("/merchant");
+  }
   const { pathname } = useLocation();
   const [moreOpen, setMoreOpen] = useState(false);
   // Visiting any screen acknowledges pending alerts — coarse, but simple and honest
@@ -107,6 +115,16 @@ export function Layout({ children }: { children: React.ReactNode }): React.JSX.E
         <div className="mt-auto hidden md:block">
           <div className="truncate text-sm text-zinc-200">{user?.name}</div>
           <div className="text-xs text-zinc-500">{user?.role}</div>
+          {otherWorkspaces.length > 0 ? (
+            <div className="mt-3 space-y-1">
+              <div className="text-xs text-zinc-500">Switch workspace</div>
+              {otherWorkspaces.map((w) => (
+                <button key={w.id} className="btn w-full text-left text-xs" onClick={() => void switchToMerchant(w.id)}>
+                  🏬 {w.name}
+                </button>
+              ))}
+            </div>
+          ) : null}
           <button className="btn mt-3 w-full" onClick={() => void logout()}>
             Sign out
           </button>

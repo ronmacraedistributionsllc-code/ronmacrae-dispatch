@@ -3,6 +3,17 @@ import { useNavigate } from "react-router-dom";
 import { useAuth } from "../lib/auth.js";
 import { ApiError } from "../lib/api.js";
 
+/**
+ * The one shared sign-in page for everyone (spec: "There must be one
+ * shared sign-in/sign-up page for everyone. No separate rider, merchant,
+ * logistics, or admin login pages... securely determine the person's
+ * active role/membership and automatically route them"). Staff, riders,
+ * and merchants all submit the same form; useAuth().login() reports back
+ * which workspace the credentials resolve to and this page routes
+ * accordingly — including a plain "choose one" step for the one case that
+ * genuinely needs a decision (an account with more than one merchant
+ * workspace and no staff/rider access to default to).
+ */
 export function Login(): React.JSX.Element {
   const { login, loading, user } = useAuth();
   const [identifier, setIdentifier] = useState("");
@@ -10,6 +21,7 @@ export function Login(): React.JSX.Element {
   const [totpCode, setTotpCode] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [options, setOptions] = useState<{ type: "merchant"; id: string; name: string }[] | null>(null);
   const navigate = useNavigate();
 
   if (!loading && user) {
@@ -20,18 +32,55 @@ export function Login(): React.JSX.Element {
     );
   }
 
-  async function onSubmit(e: FormEvent) {
-    e.preventDefault();
+  async function attemptLogin(merchantId?: string) {
     setError(null);
     setBusy(true);
     try {
-      await login(identifier.trim(), password, totpCode.trim() || undefined);
-      navigate("/", { replace: true });
+      const outcome = await login(identifier.trim(), password, totpCode.trim() || undefined, merchantId);
+      if (outcome.workspace === "select") {
+        setOptions(outcome.options);
+        return;
+      }
+      setOptions(null);
+      navigate(outcome.workspace === "merchant" ? "/merchant" : "/", { replace: true });
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Sign-in failed. Is the API running?");
     } finally {
       setBusy(false);
     }
+  }
+
+  async function onSubmit(e: FormEvent) {
+    e.preventDefault();
+    await attemptLogin();
+  }
+
+  if (options) {
+    return (
+      <div className="flex min-h-dvh items-center justify-center bg-zinc-950 p-4">
+        <div className="card w-full max-w-sm space-y-3">
+          <h1 className="text-center text-lg font-bold text-brand-accent">Choose a workspace</h1>
+          <p className="text-center text-sm text-zinc-400">This login has access to more than one store.</p>
+          {error ? <p className="text-sm text-red-400">{error}</p> : null}
+          <div className="space-y-2">
+            {options.map((o) => (
+              <button
+                key={o.id}
+                type="button"
+                className="btn w-full justify-start"
+                disabled={busy}
+                onClick={() => void attemptLogin(o.id)}
+              >
+                {o.name}
+              </button>
+            ))}
+          </div>
+          <button type="button" className="w-full text-center text-xs text-zinc-500 underline" onClick={() => setOptions(null)}>
+            Back
+          </button>
+        </div>
+      </div>
+    );
   }
 
   return (
