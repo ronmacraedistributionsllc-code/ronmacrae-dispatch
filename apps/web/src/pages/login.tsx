@@ -2,6 +2,7 @@ import React, { useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../lib/auth.js";
 import { ApiError } from "../lib/api.js";
+import { CompactThemeSelect } from "../lib/theme.js";
 
 /**
  * The one shared sign-in page for everyone (spec: "There must be one
@@ -141,6 +142,10 @@ export function Login(): React.JSX.Element {
           <p><a className="text-brand-accent underline" href="/join/merchant">Sign up as merchant</a> <span className="text-zinc-600">for stores and business owners</span></p>
           <p><a className="text-brand-accent underline" href="/join/rider">Sign up as courier</a> <span className="text-zinc-600">for delivery personnel</span></p>
           <p><a className="text-brand-accent underline" href="/book">Sign up as customer</a> <span className="text-zinc-600">when placing an order</span></p>
+        </div>
+        <div className="mt-6 flex items-center justify-center gap-2 border-t border-zinc-800 pt-4 text-xs text-zinc-500">
+          <span>Theme</span>
+          <CompactThemeSelect />
         </div>
       </div>
     </div>

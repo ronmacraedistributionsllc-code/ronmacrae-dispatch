@@ -4,6 +4,7 @@ import { useAuth, MERCHANT_PORTAL_TOKEN_KEY, LOGISTICS_PORTAL_TOKEN_KEY } from "
 import { useRealtime, type ConnectionStatus } from "../lib/realtime.js";
 import { AlertsToaster } from "./alerts-toaster.js";
 import { apiFetch } from "../lib/api.js";
+import { CompactThemeSelect } from "../lib/theme.js";
 
 const TABS = [
   { to: "/", label: "Dashboard", icon: "🏠", end: true },
@@ -130,6 +131,9 @@ export function Layout({ children }: { children: React.ReactNode }): React.JSX.E
         <div className="mt-auto hidden md:block">
           <div className="truncate text-sm text-zinc-200">{user?.name}</div>
           <div className="text-xs text-zinc-500">{user?.role}</div>
+          <div className="mt-3">
+            <CompactThemeSelect />
+          </div>
           {otherWorkspaces.length > 0 ? (
             <div className="mt-3 space-y-1">
               <div className="text-xs text-zinc-500">Switch workspace</div>

@@ -15,14 +15,109 @@
   }
 }
 
-:root { --theme-bg: #09090b; --theme-fg: #f4f4f5; --theme-panel: rgba(24,24,27,.6); --theme-border: #27272a; }
-:root[data-theme="midnight-gold"] { --theme-bg: #100d08; --theme-fg: #fff7df; --theme-panel: rgba(35,27,14,.78); --theme-border: #5a421d; }
-:root[data-theme="clean-light"] { --theme-bg: #f5f7fb; --theme-fg: #172033; --theme-panel: rgba(255,255,255,.88); --theme-border: #d8dfeb; }
-:root[data-theme="night-courier"] { --theme-bg: #07151a; --theme-fg: #e2fbf4; --theme-panel: rgba(9,35,39,.8); --theme-border: #174e52; }
+/* Theme tokens. The default (no data-theme, or data-theme="ronmacrae") is the
+ * existing brand look. Every other theme only flips these variables — the
+ * Tailwind zinc/brand utilities below are remapped onto them so a theme
+ * applies consistently across every page without touching component markup. */
+:root {
+  --theme-bg: #09090b;
+  --theme-panel: rgba(24, 24, 27, 0.6);
+  --theme-panel2: rgba(39, 39, 42, 0.5);
+  --theme-input: #18181b;
+  --theme-border: #27272a;
+  --theme-border-strong: #3f3f46;
+  --theme-fg: #f4f4f5;
+  --theme-fg-muted: #a1a1aa;
+  --theme-fg-subtle: #71717a;
+  --theme-accent: #f2b705;
+  --theme-brand: #123f2e;
+  --theme-brand-dark: #0b2b1f;
+}
+:root[data-theme="midnight-gold"] {
+  --theme-bg: #100d08;
+  --theme-panel: rgba(35, 27, 14, 0.78);
+  --theme-panel2: rgba(60, 45, 22, 0.6);
+  --theme-input: #1c140a;
+  --theme-border: #5a421d;
+  --theme-border-strong: #7a5c2a;
+  --theme-fg: #fff7df;
+  --theme-fg-muted: #d9c58f;
+  --theme-fg-subtle: #9a8553;
+  --theme-accent: #f2b705;
+  --theme-brand: #6b4a12;
+  --theme-brand-dark: #4a310a;
+}
+:root[data-theme="clean-light"] {
+  --theme-bg: #f5f7fb;
+  --theme-panel: rgba(255, 255, 255, 0.88);
+  --theme-panel2: rgba(226, 232, 240, 0.7);
+  --theme-input: #ffffff;
+  --theme-border: #d8dfeb;
+  --theme-border-strong: #c2cbd9;
+  --theme-fg: #172033;
+  --theme-fg-muted: #3f4a5f;
+  --theme-fg-subtle: #6b7688;
+  --theme-accent: #c88a04;
+  --theme-brand: #123f2e;
+  --theme-brand-dark: #0b2b1f;
+}
+:root[data-theme="night-courier"] {
+  --theme-bg: #07151a;
+  --theme-panel: rgba(9, 35, 39, 0.8);
+  --theme-panel2: rgba(14, 48, 53, 0.6);
+  --theme-input: #0a2025;
+  --theme-border: #174e52;
+  --theme-border-strong: #1f6b70;
+  --theme-fg: #e2fbf4;
+  --theme-fg-muted: #a3d6cd;
+  --theme-fg-subtle: #5d8a86;
+  --theme-accent: #f2b705;
+  --theme-brand: #0e4a4d;
+  --theme-brand-dark: #093235;
+}
+/* Jamaica: black + green + gold — a premium Jamaican logistics feel, not a
+ * flag pasted everywhere. Deep green surfaces, warm gold accents, high
+ * contrast, readable text. */
+:root[data-theme="jamaica"] {
+  --theme-bg: #060a07;
+  --theme-panel: rgba(13, 30, 20, 0.85);
+  --theme-panel2: rgba(21, 47, 31, 0.6);
+  --theme-input: #0c1a11;
+  --theme-border: #1f5c3a;
+  --theme-border-strong: #2c7a4c;
+  --theme-fg: #eafff2;
+  --theme-fg-muted: #a7d7b7;
+  --theme-fg-subtle: #5f8a6c;
+  --theme-accent: #f7c948;
+  --theme-brand: #14682f;
+  --theme-brand-dark: #0d4520;
+}
 body { background-color: var(--theme-bg); }
+
+/* Map the neutral Tailwind utilities this app actually uses onto the theme
+ * tokens. Kept explicit (not a blanket remap) so status colours (red/amber/
+ * emerald) and any deliberate non-theme choice are left untouched. */
 .bg-zinc-950 { background-color: var(--theme-bg) !important; }
 .bg-zinc-900\/60 { background-color: var(--theme-panel) !important; }
+.bg-zinc-900 { background-color: var(--theme-input) !important; }
+.bg-zinc-800 { background-color: var(--theme-panel2) !important; }
 .border-zinc-800 { border-color: var(--theme-border) !important; }
+.border-zinc-700 { border-color: var(--theme-border-strong) !important; }
+.text-zinc-100 { color: var(--theme-fg) !important; }
+.text-zinc-200 { color: var(--theme-fg) !important; }
+.text-zinc-300 { color: var(--theme-fg-muted) !important; }
+.text-zinc-400 { color: var(--theme-fg-muted) !important; }
+.text-zinc-500 { color: var(--theme-fg-subtle) !important; }
+.text-zinc-600 { color: var(--theme-fg-subtle) !important; }
+.placeholder-zinc-500::placeholder { color: var(--theme-fg-subtle) !important; }
+.bg-brand { background-color: var(--theme-brand) !important; }
+.hover\:bg-brand-dark:hover { background-color: var(--theme-brand-dark) !important; }
+.bg-brand-accent { background-color: var(--theme-accent) !important; }
+.text-brand-accent { color: var(--theme-accent) !important; }
+.border-brand-accent { border-color: var(--theme-accent) !important; }
+.text-brand-dark { color: var(--theme-brand-dark) !important; }
+.focus\:border-brand:focus { border-color: var(--theme-brand) !important; }
+
 .card { background-color: var(--theme-panel); border-color: var(--theme-border); }
 
 @layer components {

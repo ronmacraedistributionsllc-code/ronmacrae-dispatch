@@ -144,6 +144,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = { ...loadRootEnv(), ...proce
       throw new Error("Invalid configuration:\n  VAPID_PUBLIC_KEY/VAPID_PRIVATE_KEY: must be set when DEV_DB is not enabled (opt-in browser push)");
     }
   }
+  // Fail fast (rather than booting and 502-ing on every send) when real email
+  // is requested but its credentials are missing — this is the single most
+  // common reason a "confirmation OTP never arrives" in production.
+  if (cfg.EMAIL_PROVIDER === "resend") {
+    if (!cfg.RESEND_API_KEY) throw new Error("Invalid configuration:\n  RESEND_API_KEY: must be set when EMAIL_PROVIDER=resend");
+    if (!cfg.EMAIL_FROM) throw new Error("Invalid configuration:\n  EMAIL_FROM: must be set when EMAIL_PROVIDER=resend (an address on a domain verified with Resend)");
+  }
   return cfg;
 }
 

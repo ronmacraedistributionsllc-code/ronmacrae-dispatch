@@ -1,7 +1,8 @@
 import React from "react";
 
 export const THEMES = [
-  { id: "ronmacrae", label: "Ronmacrae Blue" },
+  { id: "ronmacrae", label: "Ronmacrae (default)" },
+  { id: "jamaica", label: "Jamaica" },
   { id: "midnight-gold", label: "Midnight Gold" },
   { id: "clean-light", label: "Clean Light" },
   { id: "night-courier", label: "Night Courier" },
@@ -29,4 +30,20 @@ export function ThemeSwitcher(): React.JSX.Element {
     </select>
     <p className="text-xs text-zinc-500">Saved on this device and applied across public and signed-in screens.</p>
   </div>;
+}
+
+/** Compact theme picker for embedding in footers/headers where the full
+ *  Settings form doesn't belong — same persistence, same themes. */
+export function CompactThemeSelect(): React.JSX.Element {
+  const [theme, setSelected] = React.useState<ThemeId>(getTheme);
+  return (
+    <select
+      aria-label="Theme"
+      className="input !w-auto !py-1 text-xs"
+      value={theme}
+      onChange={(e) => { const next = e.target.value as ThemeId; setSelected(next); setTheme(next); }}
+    >
+      {THEMES.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
+    </select>
+  );
 }
