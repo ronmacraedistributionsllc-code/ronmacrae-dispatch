@@ -174,4 +174,31 @@ describe("settlements: outstanding-by-merchant and recording a hand-in", () => {
     });
     expect(dispatcherAttempt.statusCode).toBe(200);
   });
+
+  it("two concurrent settlement requests for the same COD job can never both succeed — only one real settlement is ever created for the money", async () => {
+    const auth = await adminToken(harness);
+    const rider = await makeRider(harness);
+    const merchant = await makeMerchant(harness, auth);
+    const job = await makeHandedInJob(harness, rider.id, merchant.id, 900);
+
+    // Genuinely concurrent — both requests fire before either has a chance
+    // to commit, the same race a retried request or two accountants
+    // working the same board at once would produce.
+    const [first, second] = await Promise.all([
+      harness.app.inject({ method: "POST", url: "/api/settlements", headers: { authorization: `Bearer ${auth}` }, payload: { riderId: rider.id, merchantId: merchant.id, jobIds: [job.id] } }),
+      harness.app.inject({ method: "POST", url: "/api/settlements", headers: { authorization: `Bearer ${auth}` }, payload: { riderId: rider.id, merchantId: merchant.id, jobIds: [job.id] } }),
+    ]);
+    const statuses = [first.statusCode, second.statusCode].sort();
+    expect(statuses).toEqual([200, 409]);
+
+    // Exactly one settlement record exists for this job — never two, even
+    // though both requests raced to create one.
+    const settlements = await harness.prisma.settlement.findMany({ where: { riderId: rider.id }, include: { lines: true } });
+    expect(settlements).toHaveLength(1);
+    expect(settlements[0]!.lines.map((l) => l.jobId)).toEqual([job.id]);
+
+    // And the job itself only ever recorded one handed_in -> approved transition.
+    const approvedEvents = await harness.prisma.codEvent.findMany({ where: { jobId: job.id, to: "approved" } });
+    expect(approvedEvents).toHaveLength(1);
+  });
 });

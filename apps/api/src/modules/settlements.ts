@@ -121,18 +121,39 @@ export async function settlementRoutes(app: FastifyInstance, ctx: AppCtx): Promi
       if (!merchant) throw httpErrors.createError(404, "Merchant not found");
     }
 
-    const jobs = await ctx.prisma.job.findMany({
-      where: { id: { in: body.jobIds }, riderId: body.riderId, businessId, paymentMethod: "cod", codStatus: "handed_in", merchantId: body.merchantId ?? null },
-    });
-    if (jobs.length !== body.jobIds.length) {
-      throw httpErrors.createError(409, "One or more of these orders are no longer eligible to settle (already settled, or not this courier/merchant) — refresh and try again");
-    }
-    if (jobs.length === 0) throw httpErrors.createError(400, "No orders to settle");
-
-    const cur = jobs[0]!.currency;
-    const totalMinor = jobs.reduce((s, j) => s + (j.codHandedInAmount ?? j.amountCollected ?? 0), 0);
-
+    // Everything that decides eligibility AND claims it must happen inside
+    // one transaction, on a conditional update (codStatus still
+    // "handed_in" at claim time, not just at this earlier read) — the same
+    // atomic-claim principle offers.ts uses so only one courier can accept
+    // an open delivery, generalized to money: without this, two concurrent
+    // settlement requests covering the same job (two accountants, or a
+    // retried request) could both pass this initial check before either
+    // commits, and both create a real Settlement record + "Settled via …"
+    // audit trail for the same COD cash — a genuine double-settlement, not
+    // just a UI glitch.
     const settlement = await ctx.prisma.$transaction(async (tx) => {
+      const jobs = await tx.job.findMany({
+        where: { id: { in: body.jobIds }, riderId: body.riderId, businessId, paymentMethod: "cod", codStatus: "handed_in", merchantId: body.merchantId ?? null },
+      });
+      if (jobs.length !== new Set(body.jobIds).size) {
+        throw httpErrors.createError(409, "One or more of these orders are no longer eligible to settle (already settled, or not this courier/merchant) — refresh and try again");
+      }
+      if (jobs.length === 0) throw httpErrors.createError(400, "No orders to settle");
+
+      const cur = jobs[0]!.currency;
+      const totalMinor = jobs.reduce((s, j) => s + (j.codHandedInAmount ?? j.amountCollected ?? 0), 0);
+
+      // The actual claim — conditioned on codStatus, not just id, so a
+      // concurrent claim on the same rows loses this race cleanly instead
+      // of both succeeding.
+      const claimed = await tx.job.updateMany({
+        where: { id: { in: jobs.map((j) => j.id) }, codStatus: "handed_in" },
+        data: { codStatus: "approved", codApprovedById: req.user!.sub, codApprovedAt: new Date() },
+      });
+      if (claimed.count !== jobs.length) {
+        throw httpErrors.createError(409, "One or more of these orders were just settled by another request — refresh and try again");
+      }
+
       const created = await tx.settlement.create({
         data: {
           businessId,
@@ -149,10 +170,6 @@ export async function settlementRoutes(app: FastifyInstance, ctx: AppCtx): Promi
         include: { rider: true, merchant: true, receivedBy: true, lines: true },
       });
       for (const job of jobs) {
-        await tx.job.update({
-          where: { id: job.id },
-          data: { codStatus: "approved", codApprovedById: req.user!.sub, codApprovedAt: new Date() },
-        });
         await tx.codEvent.create({
           data: {
             jobId: job.id,
@@ -169,7 +186,7 @@ export async function settlementRoutes(app: FastifyInstance, ctx: AppCtx): Promi
       return created;
     });
 
-    await ctx.audit.record(actor, "settlement.create", "settlement", settlement.id, { riderId: body.riderId, merchantId: body.merchantId ?? null, amountMinor: totalMinor, jobCount: jobs.length });
+    await ctx.audit.record(actor, "settlement.create", "settlement", settlement.id, { riderId: body.riderId, merchantId: body.merchantId ?? null, amountMinor: settlement.amount, jobCount: settlement.lines.length });
     return { settlement: toDto(settlement) };
   });
 }
