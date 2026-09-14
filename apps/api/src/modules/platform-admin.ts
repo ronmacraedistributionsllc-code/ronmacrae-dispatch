@@ -167,7 +167,7 @@ export async function platformAdminRoutes(app: FastifyInstance, ctx: AppCtx): Pr
         attachedLogisticsCompany: businessName,
       },
     });
-    if (!rider) throw httpErrors.createError(404, "Rider not found");
+    if (!rider) throw httpErrors.createError(404, "Courier not found");
     const statusCounts = await ctx.prisma.job.groupBy({ by: ["status"], where: { riderId: rider.id }, _count: true });
     const visibleRatings = await ctx.prisma.rating.findMany({ where: { riderId: rider.id, hidden: false }, orderBy: { createdAt: "desc" }, take: 20 });
     const ratingAgg = await ctx.prisma.rating.aggregate({ where: { riderId: rider.id, hidden: false }, _avg: { score: true }, _count: true });

@@ -10,8 +10,20 @@
   }
   body {
     @apply bg-zinc-950 text-zinc-100 antialiased;
+    background: var(--theme-bg, #09090b);
+    color: var(--theme-fg, #f4f4f5);
   }
 }
+
+:root { --theme-bg: #09090b; --theme-fg: #f4f4f5; --theme-panel: rgba(24,24,27,.6); --theme-border: #27272a; }
+:root[data-theme="midnight-gold"] { --theme-bg: #100d08; --theme-fg: #fff7df; --theme-panel: rgba(35,27,14,.78); --theme-border: #5a421d; }
+:root[data-theme="clean-light"] { --theme-bg: #f5f7fb; --theme-fg: #172033; --theme-panel: rgba(255,255,255,.88); --theme-border: #d8dfeb; }
+:root[data-theme="night-courier"] { --theme-bg: #07151a; --theme-fg: #e2fbf4; --theme-panel: rgba(9,35,39,.8); --theme-border: #174e52; }
+body { background-color: var(--theme-bg); }
+.bg-zinc-950 { background-color: var(--theme-bg) !important; }
+.bg-zinc-900\/60 { background-color: var(--theme-panel) !important; }
+.border-zinc-800 { border-color: var(--theme-border) !important; }
+.card { background-color: var(--theme-panel); border-color: var(--theme-border); }
 
 @layer components {
   .card {

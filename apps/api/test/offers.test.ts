@@ -50,10 +50,10 @@ afterAll(async () => {
 describe("offer broadcast + accept — concurrency", () => {
   it("only one of two riders racing the same offer set wins the job", async () => {
     const customer = await makeCustomer(harness);
+    const dispatcher = await dispatcherToken(harness);
     const job = await makeJob(harness, customer.id);
     const riderA = await makeRider(harness);
     const riderB = await makeRider(harness);
-    const dispatcher = await dispatcherToken(harness);
 
     const broadcastRes = await harness.app.inject({
       method: "POST",
@@ -110,10 +110,10 @@ describe("offer broadcast + accept — concurrency", () => {
 
   it("a rider's offer-accept and a dispatcher's manual assignment racing the same job never both win", async () => {
     const customer = await makeCustomer(harness);
+    const dispatcher = await dispatcherToken(harness);
     const job = await makeJob(harness, customer.id);
     const riderA = await makeRider(harness); // will accept an offer
     const riderB = await makeRider(harness); // dispatcher assigns directly
-    const dispatcher = await dispatcherToken(harness);
 
     const broadcastRes = await harness.app.inject({
       method: "POST",
@@ -412,7 +412,6 @@ describe("rider status is rider-controlled, not job-lifecycle-controlled", () =>
 
   it("a rider can go 'unavailable' while still carrying an active job, but not fully 'offline'", async () => {
     const customer = await makeCustomer(harness);
-    const dispatcher = await dispatcherToken(harness);
     const rider = await makeRider(harness, { dailyCapacity: 3 });
     const riderTok = await riderToken(harness, rider.id);
     const job = await makeJob(harness, customer.id, { riderId: rider.id, status: "assigned" });

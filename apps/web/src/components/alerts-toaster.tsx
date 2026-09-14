@@ -27,7 +27,7 @@ function toastFor(msg: RealtimeMessage, isRider: boolean): { text: string; tone:
       return { text: `${urgent}You've been assigned ${label}`, tone: msg.payload.job.priority === "urgent" ? "danger" : "info" };
     }
     const label = msg.payload.job.jobNumber ?? msg.payload.job.id.slice(0, 8);
-    return { text: `${label} assigned to ${msg.payload.job.riderName ?? "a rider"}`, tone: "info" };
+    return { text: `${label} assigned to ${msg.payload.job.riderName ?? "a courier"}`, tone: "info" };
   }
   if (msg.type === "sos") {
     return { text: `SOS — ${msg.payload.riderName}${msg.payload.note ? `: ${msg.payload.note}` : ""}`, tone: "danger" };

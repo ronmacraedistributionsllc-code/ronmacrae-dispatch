@@ -94,7 +94,7 @@ export function Reports(): React.JSX.Element {
             <input id="rp-to" type="date" className="input" value={filters.to} onChange={(e) => set({ to: e.target.value })} />
           </div>
           <div>
-            <label className="label" htmlFor="rp-rider">Rider</label>
+            <label className="label" htmlFor="rp-rider">Courier</label>
             <select id="rp-rider" className="input" value={filters.riderId} onChange={(e) => set({ riderId: e.target.value })}>
               <option value="">All riders</option>
               {riders.data?.riders.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
@@ -175,7 +175,7 @@ export function Reports(): React.JSX.Element {
               <table className="w-full text-left text-sm">
                 <thead>
                   <tr className="text-xs uppercase tracking-wide text-zinc-500">
-                    <th className="py-1 pr-4">Rider</th>
+                    <th className="py-1 pr-4">Courier</th>
                     <th className="py-1 pr-4">Jobs completed</th>
                     <th className="py-1">Estimated earnings</th>
                   </tr>
@@ -198,7 +198,7 @@ export function Reports(): React.JSX.Element {
             {report.data.byLogisticsCompany.length === 0 ? (
               <p className="text-sm text-zinc-500">
                 No completed deliveries by a logistics-company-attached rider in this range
-                {report.data.summary.unattachedJobsCompleted > 0 ? ` (${report.data.summary.unattachedJobsCompleted} completed by freelance/merchant-attached riders instead).` : "."}
+                {report.data.summary.unattachedJobsCompleted > 0 ? ` (${report.data.summary.unattachedJobsCompleted} completed by freelance/merchant-attached couriers instead).` : "."}
               </p>
             ) : (
               <>
@@ -206,7 +206,7 @@ export function Reports(): React.JSX.Element {
                   <thead>
                     <tr className="text-xs uppercase tracking-wide text-zinc-500">
                       <th className="py-1 pr-4">Company</th>
-                      <th className="py-1 pr-4">Riders</th>
+                      <th className="py-1 pr-4">Couriers</th>
                       <th className="py-1">Jobs completed</th>
                     </tr>
                   </thead>

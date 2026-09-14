@@ -58,20 +58,6 @@ async function getRow(ctx: AppCtx, jobId: string, actorOrViewer: { role: string;
   return row;
 }
 
-async function writeCodEvent(
-  ctx: AppCtx,
-  jobId: string,
-  from: CodStatus | null,
-  to: CodStatus,
-  actor: Actor,
-  note: string | null,
-  meta: object = {},
-): Promise<void> {
-  await ctx.prisma.codEvent.create({
-    data: { jobId, from, to, actorType: actorType(actor.role), actorId: actor.id, actorName: actor.name, note, meta },
-  });
-}
-
 export async function codRoutes(app: FastifyInstance, ctx: AppCtx): Promise<void> {
   const monitor = ctx.requireStaff("admin", "dispatcher", "accountant", "viewer");
   // Dispatch is the one actually handed the cash day-to-day (spec item 8 —

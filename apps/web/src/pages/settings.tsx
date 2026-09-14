@@ -4,6 +4,7 @@ import { API } from "@ronmacrae/contracts";
 import type { BusinessSettings } from "@ronmacrae/contracts";
 import { ApiError, apiFetch } from "../lib/api.js";
 import { useAuth } from "../lib/auth.js";
+import { ThemeSwitcher } from "../lib/theme.js";
 
 /**
  * Business settings — dispatch contact details and, notably, where the
@@ -77,6 +78,7 @@ export function Settings(): React.JSX.Element {
         {save.isSuccess ? <p className="text-sm text-emerald-400">Saved.</p> : null}
         {canEdit ? <button className="btn-accent" disabled={save.isPending}>{save.isPending ? "Saving…" : "Save settings"}</button> : null}
       </form>
+      <section className="card"><h2 className="mb-3 font-semibold">Theme</h2><ThemeSwitcher /></section>
     </div>
   );
 }

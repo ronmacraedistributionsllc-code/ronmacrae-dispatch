@@ -6,6 +6,9 @@ import { minorOf, money } from "@ronmacrae/money";
 import type { MerchantDto, MerchantPublicDto, ProductDto, ProductVariantDto } from "@ronmacrae/contracts";
 import { pointFromJson, pointToJson } from "../geo-mappers.js";
 import { hashPassword } from "../lib/password.js";
+import { sendEmailCode, consumeEmailCode } from "./customer-account.js";
+import { DEFAULT_PUBLIC_BUSINESS_SLUG } from "./order.js";
+import { normalizeEmail } from "../lib/email.js";
 
 /**
  * Store/merchant clients of the courier business (spec section 3: "MULTI-
@@ -40,6 +43,18 @@ const MerchantStaffBody = z.object({
    *  account yet — reusing an existing one never touches its password. */
   password: z.string().min(8).max(128).optional(),
 });
+
+const MerchantSignupBody = z.object({
+  ownerName: z.string().min(1).max(120),
+  businessName: z.string().min(1).max(120),
+  email: z.string().email().max(160),
+  phone: z.string().max(30).optional().or(z.literal("")),
+  pickupAddressText: z.string().max(200).optional().or(z.literal("")),
+  password: z.string().min(8).max(128),
+});
+
+const MerchantVerifyBody = z.object({ email: z.string().email().max(160), code: z.string().min(4).max(10) });
+const MERCHANT_EMAIL_VERIFY_PURPOSE = "verify_merchant_email";
 
 /** Exported for reuse by merchant-portal.ts's own catalog routes — same
  *  validation, different caller-supplied authorization (staff: business
@@ -174,6 +189,62 @@ export async function merchantRoutes(app: FastifyInstance, ctx: AppCtx): Promise
   const staff = ctx.requireStaff("admin", "dispatcher");
   const owner = ctx.requireStaff("admin");
 
+  // Public merchant onboarding uses the existing shared User account and
+  // merchant portal membership. The application is inactive until an owner
+  // approves it in Platform Admin; no plaintext password is emailed or stored.
+  app.post("/api/merchant-signup", { config: { rateLimit: { max: 5, timeWindow: "1 minute" } } }, async (req) => {
+    const body = MerchantSignupBody.parse(req.body);
+    const email = normalizeEmail(body.email);
+    if (!email) throw httpErrors.createError(400, "Enter a valid email address.");
+    const business = await ctx.prisma.business.findUnique({ where: { slug: DEFAULT_PUBLIC_BUSINESS_SLUG } });
+    if (!business) throw httpErrors.createError(503, "Merchant sign-up is not available right now");
+    const existingUser = await ctx.prisma.user.findUnique({ where: { email } });
+    if (existingUser) throw httpErrors.createError(409, "This email is already associated with an account");
+    const slug = slugify(body.businessName);
+    const clash = await ctx.prisma.merchant.findUnique({ where: { businessId_slug: { businessId: business.id, slug } } });
+    if (clash) throw httpErrors.createError(409, "A store with that name already exists");
+    const user = await ctx.prisma.user.create({
+      data: { name: body.ownerName, email, phone: body.phone || null, passwordHash: hashPassword(body.password), role: "viewer" },
+    });
+    const merchant = await ctx.prisma.merchant.create({
+      data: {
+        businessId: business.id,
+        name: body.businessName,
+        slug,
+        phone: body.phone || null,
+        email,
+        pickupAddressText: body.pickupAddressText || null,
+        active: false,
+        staff: { create: { userId: user.id, active: true } },
+      },
+    });
+    try {
+      await sendEmailCode(ctx, email, MERCHANT_EMAIL_VERIFY_PURPOSE, "Verify your merchant account", (code) => `Your Ronmacrae merchant verification code is ${code}. It expires in 10 minutes.`);
+    } catch (err) {
+      // The account/application is retained so a provider retry can complete
+      // onboarding; the API truthfully reports that verification was not sent.
+      ctx.log.error({ email, merchantId: merchant.id, error: err instanceof Error ? err.message : String(err) }, "merchant verification email failed");
+      throw err;
+    }
+    await ctx.audit.record({ id: null, role: "anonymous" }, "merchant.signup", "merchant", merchant.id, { email });
+    return { status: "pending", merchantId: merchant.id, email };
+  });
+
+  app.post("/api/merchant-signup/verify", { config: { rateLimit: { max: 20, timeWindow: "1 minute" } } }, async (req) => {
+    const body = MerchantVerifyBody.parse(req.body);
+    const email = normalizeEmail(body.email);
+    if (!email) throw httpErrors.createError(400, "Enter a valid email address.");
+    await consumeEmailCode(ctx, email, MERCHANT_EMAIL_VERIFY_PURPOSE, body.code);
+    await ctx.prisma.user.updateMany({ where: { email }, data: { emailVerifiedAt: new Date() } });
+    return { ok: true, status: "pending", message: "Email verified. Your store is waiting for approval." };
+  });
+
+  app.post("/api/merchant-signup/resend", { config: { rateLimit: { max: 5, timeWindow: "1 minute" } } }, async (req) => {
+    const body = z.object({ email: z.string().email().max(160) }).parse(req.body);
+    await sendEmailCode(ctx, body.email, MERCHANT_EMAIL_VERIFY_PURPOSE, "Verify your merchant account", (code) => `Your Ronmacrae merchant verification code is ${code}. It expires in 10 minutes.`);
+    return { ok: true };
+  });
+
   app.get("/api/merchants", { preHandler: staff }, async (req) => {
     const rows = await ctx.prisma.merchant.findMany({ where: { businessId: req.user!.businessId! }, orderBy: { name: "asc" } });
     return { merchants: rows.map((m) => merchantToDto(m, ctx.config.APP_ORIGIN)) };
@@ -263,7 +334,7 @@ export async function merchantRoutes(app: FastifyInstance, ctx: AppCtx): Promise
     if (!existing && !body.password) throw httpErrors.createError(400, "A password is required to create a new account for this email");
     const user =
       existing ??
-      (await ctx.prisma.user.create({ data: { email, name: body.name || merchant.name, passwordHash: hashPassword(body.password!), role: "viewer" } }));
+       (await ctx.prisma.user.create({ data: { email, name: body.name || merchant.name, passwordHash: hashPassword(body.password!), role: "viewer", emailVerifiedAt: new Date() } }));
     await ctx.prisma.merchantStaff.upsert({
       where: { userId_merchantId: { userId: user.id, merchantId: merchant.id } },
       create: { userId: user.id, merchantId: merchant.id, active: true },

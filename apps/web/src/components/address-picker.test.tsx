@@ -1,6 +1,6 @@
 import React from "react";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { act, fireEvent, render, screen } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // The real PinMap boots a WebGL map (maplibre-gl) which jsdom can't render.
 // Stand in with a plain button that reports a fixed "drag" point — the thing

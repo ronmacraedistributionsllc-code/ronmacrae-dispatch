@@ -55,9 +55,9 @@ test("customer, rider, and dispatcher exchange messages across the three real co
   await customerPage.getByRole("button", { name: "Send request" }).click();
   await expect(customerPage.getByText(/Waiting for dispatch to confirm/)).toBeVisible();
 
-  // Customer switches to the Rider tab and messages the rider directly —
+   // Customer switches to the Courier tab and messages the courier directly —
   // this must never show up in the dispatcher's Dispatch-conversation view.
-  await tab(customerPage, "Rider").click();
+  await tab(customerPage, "Courier").click();
   await customerPage.getByPlaceholder("Type a message…").fill("Please call when you arrive");
   await customerPage.getByRole("button", { name: "Send" }).click();
   await expect(customerPage.getByText("Please call when you arrive")).toBeVisible();
@@ -77,7 +77,7 @@ test("customer, rider, and dispatcher exchange messages across the three real co
   await expect(chatPanel.getByText("Please call when you arrive")).not.toBeVisible();
 
   // Staff can monitor Customer↔Rider (read-only) but it's clearly marked as such.
-  await chatPanel.getByRole("tab", { name: "Customer & Rider" }).click();
+  await chatPanel.getByRole("tab", { name: "Customer & Courier" }).click();
   await expect(chatPanel.getByText("Please call when you arrive")).toBeVisible();
   await expect(chatPanel.getByText("Monitor-only")).toBeVisible();
   await tab(chatPanel, "Customer").click();
@@ -121,7 +121,7 @@ test("customer, rider, and dispatcher exchange messages across the three real co
 
   // Customer's Rider tab (still open, polling) eventually shows the rider's
   // "Heading to you" reply.
-  await tab(customerPage, "Rider").click();
+  await tab(customerPage, "Courier").click();
   await expect(customerPage.getByText("Heading to you")).toBeVisible({ timeout: 20_000 });
   // ...but the dispatcher's earlier Dispatch-conversation reply never leaks in here.
   await expect(customerPage.getByText("On it — sending our fastest rider!")).not.toBeVisible();

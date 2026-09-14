@@ -42,13 +42,13 @@ export function Settlements(): React.JSX.Element {
     <div className="space-y-4">
       <header>
         <h1 className="text-xl font-bold">Settlements</h1>
-        <p className="text-sm text-zinc-400">Record cash a rider hands in — broken down by which merchant it belongs to.</p>
+        <p className="text-sm text-zinc-400">Record cash a courier hands in — broken down by which merchant it belongs to.</p>
       </header>
 
       <section className="card">
-        <label className="label" htmlFor="settle-rider">Rider</label>
+        <label className="label" htmlFor="settle-rider">Courier</label>
         <select id="settle-rider" className="input max-w-sm" value={riderId} onChange={(e) => setRiderId(e.target.value)}>
-          <option value="">Choose a rider…</option>
+          <option value="">Choose a courier…</option>
           {riders.data?.riders.map((r) => (
             <option key={r.id} value={r.id}>{r.name}</option>
           ))}
@@ -58,7 +58,7 @@ export function Settlements(): React.JSX.Element {
       {riderId && outstanding.data ? (
         <>
           {outstanding.data.merchants.length === 0 ? (
-            <div className="card text-sm text-zinc-400">Nothing outstanding for this rider right now.</div>
+            <div className="card text-sm text-zinc-400">Nothing outstanding for this courier right now.</div>
           ) : (
             <div className="space-y-3">
               {outstanding.data.merchants.map((m) => (

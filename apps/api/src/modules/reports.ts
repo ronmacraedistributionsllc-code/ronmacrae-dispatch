@@ -143,7 +143,7 @@ async function buildReport(ctx: AppCtx, businessId: string, q: ReportQueryInput)
     .sort((a, b) => b.jobsCompleted - a.jobsCompleted);
   const noRateCount = byRider.filter((r) => r.estimatedEarnings == null).length;
   if (noRateCount > 0) {
-    notes.push(`${noRateCount} rider(s) with completed deliveries have no configured pay rate — their earnings are shown as "not set", not $0, and excluded from any earnings total.`);
+    notes.push(`${noRateCount} courier(s) with completed deliveries have no configured pay rate — their earnings are shown as "not set", not $0, and excluded from any earnings total.`);
   }
 
   // Stage 39 (spec: "reports broken out by logistics company") — a job has

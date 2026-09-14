@@ -13,9 +13,9 @@ let harness: TestHarness;
 let seq = 0;
 const uniq = () => `${Date.now()}${++seq}`;
 
-async function adminToken(h: TestHarness) {
+async function adminToken(h: TestHarness, businessId = h.business.id) {
   const user = await h.prisma.user.create({ data: { name: `Admin ${uniq()}`, passwordHash: "unused-in-tests", role: "admin" } });
-  return h.tokenFor({ id: user.id, name: user.name, role: "admin", businessId: h.business.id });
+  return h.tokenFor({ id: user.id, name: user.name, role: "admin", businessId });
 }
 
 async function makeMerchant(h: TestHarness, auth: string) {
@@ -52,6 +52,36 @@ afterAll(async () => {
 });
 
 describe("merchant portal", () => {
+  it("supports public merchant signup, email verification, approval, and portal login", async () => {
+    const publicBusiness = await harness.prisma.business.create({ data: { name: "Public Dispatch", slug: "ronmacrae" } });
+    const email = `new-owner-${uniq()}@vbr.example`;
+    const signup = await harness.app.inject({
+      method: "POST",
+      url: "/api/merchant-signup",
+      payload: { ownerName: "New Owner", businessName: `New Store ${uniq()}`, email, phone: `+187655${uniq().slice(-5)}`, pickupAddressText: "Kingston", password: "securepass1" },
+    });
+    expect(signup.statusCode).toBe(200);
+    const { merchantId } = signup.json() as { merchantId: string };
+    const sent = (harness.ctx.email as unknown as { sent: { to: string; text: string }[] }).sent.find((m) => m.to === email);
+    const code = sent?.text.match(/code is (\d+)/)?.[1];
+    expect(code).toBeTruthy();
+
+    const verify = await harness.app.inject({ method: "POST", url: "/api/merchant-signup/verify", payload: { email, code } });
+    expect(verify.statusCode).toBe(200);
+    const beforeApproval = await harness.app.inject({ method: "POST", url: "/api/merchant-portal/login", payload: { email, password: "securepass1" } });
+    expect(beforeApproval.statusCode).toBe(403);
+
+    const owner = await adminToken(harness, publicBusiness.id);
+    const approve = await harness.app.inject({ method: "PATCH", url: `/api/platform/merchants/${merchantId}`, headers: { authorization: `Bearer ${owner}` }, payload: { active: true } });
+    expect(approve.statusCode).toBe(403);
+    // Business admins approve merchant applications in their own business by
+    // activating the existing merchant record through the staff route.
+    const staffApprove = await harness.app.inject({ method: "PATCH", url: `/api/merchants/${merchantId}`, headers: { authorization: `Bearer ${owner}` }, payload: { active: true } });
+    expect(staffApprove.statusCode).toBe(200);
+    const login = await harness.app.inject({ method: "POST", url: "/api/merchant-portal/login", payload: { email, password: "securepass1" } });
+    expect(login.statusCode).toBe(200);
+  });
+
   it("logs in with granted credentials, and sees only its own merchant's orders", async () => {
     const admin = await adminToken(harness);
     const merchantA = await makeMerchant(harness, admin);

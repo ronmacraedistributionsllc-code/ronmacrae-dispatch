@@ -89,7 +89,7 @@ export function DispatchMap(): React.JSX.Element {
 
     for (const [riderId, loc] of Object.entries(locations)) {
       seen.add(riderId);
-      const name = riderById.get(riderId)?.name ?? "Rider";
+      const name = riderById.get(riderId)?.name ?? "Courier";
       const lngLat: [number, number] = [loc.point.lng, loc.point.lat];
       let marker = markersRef.current.get(riderId);
       if (!marker) {
@@ -127,7 +127,7 @@ export function DispatchMap(): React.JSX.Element {
       <header>
         <h1 className="text-xl font-bold">Live map</h1>
         <p className="text-sm text-zinc-400">
-          Rider positions update live while a rider has opted in to share their location (or, for a job with no real
+          Courier positions update live while a courier has opted in to share their location (or, for a job with no real
           GPS yet, the preview simulator). Each marker's colour and the list below show how fresh a position is —
           treat anything not green as possibly stale.
         </p>
@@ -136,16 +136,16 @@ export function DispatchMap(): React.JSX.Element {
         <div ref={mapContainer} className="h-[60vh] w-full overflow-hidden rounded-lg" />
       </section>
       <section className="card">
-        <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-zinc-400">Riders on the map</h2>
+        <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-zinc-400">Couriers on the map</h2>
         {rows.length === 0 ? (
-          <p className="text-sm text-zinc-500">No rider positions yet.</p>
+            <p className="text-sm text-zinc-500">No courier positions yet.</p>
         ) : (
           <ul className="space-y-1 text-sm" data-testid="rider-map-list">
             {rows.map(([riderId, loc]) => (
               <li key={riderId} data-testid={`rider-row-${riderId}`} className="flex items-center justify-between gap-2">
                 <span className="flex items-center gap-2 text-zinc-200">
                   <span className="inline-block size-2.5 rounded-full" style={{ background: TRACKING_COLOR[loc.trackingState] ?? TRACKING_COLOR.unavailable }} />
-                  {riders.data?.riders.find((r) => r.id === riderId)?.name ?? "Rider"}
+                  {riders.data?.riders.find((r) => r.id === riderId)?.name ?? "Courier"}
                 </span>
                 <span className="text-xs text-zinc-500">
                   {loc.trackingState} · {timeAgo(loc.at)}

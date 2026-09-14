@@ -3,12 +3,12 @@ import { API } from "@ronmacrae/contracts";
 import { ApiError, apiFetch } from "../lib/api.js";
 
 /**
- * Public rider application — no login, no app (spec: "no way for a rider
+  * Public courier application — no login, no app (spec: "no way for a courier
  * to sign up which it should"). Two real steps, not just a form:
  *   1. Submit details -> lands as a `pending` RiderMembership.
  *   2. Prove ownership of the email just given (a code, valid 10 minutes)
  *      before the account can ever sign in at all — see auth.ts's login
- *      route, which blocks a rider with an unverified email outright.
+  *      route, which blocks a courier with an unverified email outright.
  * Verifying the email is separate from a dispatcher approving the
  * application (Team screen) — both have to happen, in either order.
  */
@@ -125,7 +125,7 @@ export function JoinRider(): React.JSX.Element {
     <div className="flex min-h-dvh items-center justify-center bg-zinc-950 p-4">
       <form onSubmit={(e) => void submit(e)} className="card w-full max-w-sm space-y-4">
         <div className="text-center">
-          <h1 className="text-lg font-bold text-brand-accent">Apply to ride</h1>
+            <h1 className="text-lg font-bold text-brand-accent">Apply to become a courier</h1>
           <p className="text-sm text-zinc-400">A dispatcher reviews every application before you start.</p>
         </div>
         <div>

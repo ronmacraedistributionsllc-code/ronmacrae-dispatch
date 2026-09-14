@@ -1,4 +1,4 @@
-import type { Prisma, PrismaClient } from "@prisma/client";
+import type { Prisma } from "@prisma/client";
 import type { AppCtx } from "../../ctx.js";
 import type { GeoPoint, JobStatus } from "@ronmacrae/contracts";
 import { pointFromJson } from "../../geo-mappers.js";

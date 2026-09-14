@@ -184,7 +184,7 @@ export class RidersService {
     const existing = await this.app.prisma.rider.findUnique({ where: { phone } });
     if (existing) {
       const existingMembership = await this.app.prisma.riderMembership.findUnique({ where: { riderId_businessId: { riderId: existing.id, businessId } } });
-      if (existingMembership?.status === "active") throw httpErrors.createError(409, "A rider with this phone number is already a member of your business");
+      if (existingMembership?.status === "active") throw httpErrors.createError(409, "A courier with this phone number is already a member of your business");
       const membershipStatus = existing.platformStatus === "approved" ? "active" : "pending";
       if (existingMembership) {
         await this.app.prisma.riderMembership.update({ where: { id: existingMembership.id }, data: { status: membershipStatus, approvedAt: membershipStatus === "active" ? new Date() : null } });
@@ -263,7 +263,7 @@ export class RidersService {
     const existing = await this.app.prisma.rider.findUnique({ where: { phone }, include: { user: { select: { email: true, emailVerifiedAt: true } } } });
     if (existing) {
       const existingMembership = await this.app.prisma.riderMembership.findUnique({ where: { riderId_businessId: { riderId: existing.id, businessId } } });
-      if (existingMembership?.status === "active") throw httpErrors.createError(409, "This phone number is already an active rider with us");
+      if (existingMembership?.status === "active") throw httpErrors.createError(409, "This phone number is already an active courier with us");
       const status = existing.platformStatus === "approved" ? "active" : "pending";
       if (existingMembership) {
         await this.app.prisma.riderMembership.update({ where: { id: existingMembership.id }, data: { status, approvedAt: status === "active" ? new Date() : null } });
@@ -279,7 +279,7 @@ export class RidersService {
       // with nothing actually sent. An already-verified rider (a genuine
       // second-business application) needs nothing further here.
       if (!existing.user?.emailVerifiedAt) {
-        await sendEmailCode(this.app, existing.user?.email || input.email, RIDER_EMAIL_VERIFY_PURPOSE, "Verify your email", (code) => `Your Ronmacrae rider sign-up code is ${code}. It expires in 10 minutes.`);
+        await sendEmailCode(this.app, existing.user?.email || input.email, RIDER_EMAIL_VERIFY_PURPOSE, "Verify your email", (code) => `Your Ronmacrae courier sign-up code is ${code}. It expires in 10 minutes.`);
       }
       return { status, riderId: existing.id };
     }
@@ -316,7 +316,7 @@ export class RidersService {
       create: { riderId: rider.id, businessId, status: "pending" },
       update: { status: "pending" },
     });
-    await sendEmailCode(this.app, input.email, RIDER_EMAIL_VERIFY_PURPOSE, "Verify your email", (code) => `Your Ronmacrae rider sign-up code is ${code}. It expires in 10 minutes.`);
+    await sendEmailCode(this.app, input.email, RIDER_EMAIL_VERIFY_PURPOSE, "Verify your email", (code) => `Your Ronmacrae courier sign-up code is ${code}. It expires in 10 minutes.`);
     return { status: "pending", riderId: rider.id };
   }
 
@@ -324,7 +324,7 @@ export class RidersService {
    *  guard, so this is safe to expose without extra rate-limiting logic
    *  here specifically. */
   async resendVerification(email: string): Promise<void> {
-    await sendEmailCode(this.app, email, RIDER_EMAIL_VERIFY_PURPOSE, "Verify your email", (code) => `Your Ronmacrae rider sign-up code is ${code}. It expires in 10 minutes.`);
+    await sendEmailCode(this.app, email, RIDER_EMAIL_VERIFY_PURPOSE, "Verify your email", (code) => `Your Ronmacrae courier sign-up code is ${code}. It expires in 10 minutes.`);
   }
 
   /** Proves ownership of the email given at signup — required before this
@@ -354,7 +354,7 @@ export class RidersService {
    *  app (audit trail stays intact either way). */
   async decideMembership(businessId: string, riderId: string, approve: boolean): Promise<void> {
     const membership = await this.app.prisma.riderMembership.findUnique({ where: { riderId_businessId: { riderId, businessId } } });
-    if (!membership || membership.status !== "pending") throw httpErrors.createError(404, "No pending application found for this rider");
+    if (!membership || membership.status !== "pending") throw httpErrors.createError(404, "No pending application found for this courier");
     await this.app.prisma.riderMembership.update({
       where: { id: membership.id },
       data: approve ? { status: "active", approvedAt: new Date() } : { status: "removed" },
@@ -363,7 +363,7 @@ export class RidersService {
 
   async update(businessId: string, id: string, input: z.infer<typeof UpdateBody>, currency: string): Promise<RiderDto> {
     const row = await this.app.prisma.rider.findFirst({ where: { id, memberships: { some: { businessId } } } });
-    if (!row) throw httpErrors.createError(404, "Rider not found");
+    if (!row) throw httpErrors.createError(404, "Courier not found");
     const updated = await this.app.prisma.rider.update({
       where: { id },
       data: {
@@ -403,7 +403,7 @@ export class RidersService {
       where: { id: riderId },
       include: { homeZone: { select: { name: true } } },
     });
-    if (!row) throw httpErrors.createError(404, "Rider not found");
+    if (!row) throw httpErrors.createError(404, "Courier not found");
     if (actor.role === "rider" && actor.riderId !== riderId) {
       throw httpErrors.createError(403, "You can only change your own status");
     }
@@ -412,7 +412,7 @@ export class RidersService {
       // network — not some other business's rider, even one this rider
       // happens to also carry jobs for.
       const membership = await this.app.prisma.riderMembership.findUnique({ where: { riderId_businessId: { riderId, businessId: actor.businessId ?? "__none__" } } });
-      if (membership?.status !== "active") throw httpErrors.createError(404, "Rider not found");
+      if (membership?.status !== "active") throw httpErrors.createError(404, "Courier not found");
     }
     if (body.status === "offline") {
       const active = await this.app.prisma.job.count({ where: { riderId, status: { in: [...ACTIVE_JOB_STATUSES] } } });
@@ -447,7 +447,7 @@ export class RidersService {
     input: { point: GeoPoint; trackingState?: "active" | "degraded" | "paused" | "unavailable"; clientSeq?: number },
   ): Promise<void> {
     const row = await this.app.prisma.rider.findFirst({ where: { id: riderId }, select: { id: true } });
-    if (!row) throw httpErrors.createError(404, "Rider not found");
+    if (!row) throw httpErrors.createError(404, "Courier not found");
     const last = await this.app.prisma.riderLocation.findFirst({
       where: { riderId },
       orderBy: { clientSeq: "desc" },
@@ -554,7 +554,7 @@ export async function riderRoutes(app: FastifyInstance, ctx: AppCtx): Promise<vo
 
   app.get<{ Params: { id: string } }>("/api/riders/:id", { preHandler: ctx.requireStaff("admin", "dispatcher", "accountant", "viewer") }, async (req) => {
     const rider = await svc.get(req.user!.businessId!, req.params.id);
-    if (!rider) throw httpErrors.createError(404, "Rider not found");
+     if (!rider) throw httpErrors.createError(404, "Courier not found");
     return { rider };
   });
 
@@ -565,7 +565,7 @@ export async function riderRoutes(app: FastifyInstance, ctx: AppCtx): Promise<vo
     async (req) => {
       const body = SignupBody.parse(req.body);
       const business = await ctx.prisma.business.findUnique({ where: { slug: DEFAULT_PUBLIC_BUSINESS_SLUG } });
-      if (!business) throw httpErrors.createError(503, "Rider sign-up is not available right now");
+       if (!business) throw httpErrors.createError(503, "Courier sign-up is not available right now");
       const result = await svc.selfSignup(business.id, body);
       await ctx.audit.record({ id: null, role: "anonymous" }, "rider.signup", "rider", result.riderId, { status: result.status });
       return result;

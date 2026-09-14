@@ -72,7 +72,7 @@ function CreateMerchantForm({ onDone }: { onDone: () => void }): React.JSX.Eleme
         </div>
         <div className="sm:col-span-2">
           <label className="label" htmlFor="m-pickup">Pickup address (optional — used to calculate delivery fees)</label>
-          <input id="m-pickup" className="input" value={pickupAddressText} onChange={(e) => setPickupAddressText(e.target.value)} placeholder="Where riders collect orders for this store" />
+          <input id="m-pickup" className="input" value={pickupAddressText} onChange={(e) => setPickupAddressText(e.target.value)} placeholder="Where couriers collect orders for this store" />
         </div>
       </div>
       {create.error ? <p className="text-sm text-red-400">{create.error instanceof ApiError ? create.error.message : "Could not create merchant"}</p> : null}
@@ -151,7 +151,7 @@ function GrantPortalAccessForm({ merchantId, onDone }: { merchantId: string; onD
     <form className="space-y-2 rounded-lg border border-zinc-700 p-3" onSubmit={(e) => { e.preventDefault(); void grant.mutate(); }}>
       <p className="text-xs text-zinc-400">
         Lets this person sign in (the same sign-in page everyone uses) to view this store's own orders. If this email
-        already has an account (staff, rider, or another store), this just adds this store to it — their existing
+        already has an account (staff, courier, or another store), this just adds this store to it — their existing
         password is never changed.
       </p>
       <div className="grid gap-2 sm:grid-cols-3">

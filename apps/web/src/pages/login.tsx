@@ -137,9 +137,11 @@ export function Login(): React.JSX.Element {
             {busy ? "Signing in…" : "Sign in"}
           </button>
         </form>
-        <p className="mt-4 text-center text-sm text-zinc-400">
-          Want to ride with us? <a className="text-brand-accent underline" href="/join/rider">Apply to become a rider</a>
-        </p>
+        <div className="mt-4 space-y-2 text-center text-sm text-zinc-400">
+          <p><a className="text-brand-accent underline" href="/join/merchant">Sign up as merchant</a> <span className="text-zinc-600">for stores and business owners</span></p>
+          <p><a className="text-brand-accent underline" href="/join/rider">Sign up as courier</a> <span className="text-zinc-600">for delivery personnel</span></p>
+          <p><a className="text-brand-accent underline" href="/book">Sign up as customer</a> <span className="text-zinc-600">when placing an order</span></p>
+        </div>
       </div>
     </div>
   );

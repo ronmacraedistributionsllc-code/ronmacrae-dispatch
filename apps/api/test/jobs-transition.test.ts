@@ -28,11 +28,6 @@ async function makeRider(h: TestHarness) {
   return { rider, token };
 }
 
-async function dispatcherToken(h: TestHarness) {
-  const user = await h.prisma.user.create({ data: { name: "Test Dispatcher", passwordHash: "unused-in-tests", role: "dispatcher" } });
-  return h.tokenFor({ id: user.id, name: user.name, role: "dispatcher" });
-}
-
 async function makeAssignedJob(h: TestHarness, customerId: string, riderId: string) {
   return h.prisma.job.create({ data: { businessId: h.business.id,  customerId, riderId, status: "assigned", paymentMethod: "cod", amountExpected: 1000, currency: "JMD", pin: "1234" },
   });

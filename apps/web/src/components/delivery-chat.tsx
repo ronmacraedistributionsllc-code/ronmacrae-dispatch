@@ -69,7 +69,6 @@ export function DeliveryChat({ queryKey, fetchMessages, sendMessage, quickReplie
   useEffect(() => {
     if (!onRealtimeNudge) return;
     return onRealtimeNudge(() => void qc.invalidateQueries({ queryKey: ["delivery-chat", queryKey] }));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [queryKey]);
 
   useEffect(() => {

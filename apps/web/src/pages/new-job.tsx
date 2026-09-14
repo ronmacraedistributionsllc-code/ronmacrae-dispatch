@@ -8,7 +8,7 @@ import { AddressPicker, type ConfirmedLocation } from "../components/address-pic
 
 /** Store channels: where the order came from / which courier handles it. */
 export const CHANNELS: { value: JobSource; label: string }[] = [
-  { value: "courier", label: "Local delivery (our riders)" },
+  { value: "courier", label: "Local delivery (our couriers)" },
   { value: "manual", label: "In-store / phone" },
   { value: "knutsford", label: "Knutsford" },
   { value: "zipmail", label: "Zipmail" },

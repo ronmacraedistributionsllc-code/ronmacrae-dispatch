@@ -46,7 +46,7 @@ test("accountant filters the operating report by rider and sees an honest rider-
   await page.goto("/reports");
   await expect(page.getByRole("heading", { name: "Operating reports" })).toBeVisible();
 
-  await page.getByLabel("Rider").selectOption({ label: "Report E2E Rider" });
+  await page.getByLabel("Courier").selectOption({ label: "Report E2E Rider" });
   const byRiderRow = page.getByRole("row").filter({ hasText: "Report E2E Rider" });
   await expect(byRiderRow).toBeVisible();
   await expect(byRiderRow.getByText("1", { exact: true })).toBeVisible();

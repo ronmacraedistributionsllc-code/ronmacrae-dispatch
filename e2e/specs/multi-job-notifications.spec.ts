@@ -33,7 +33,7 @@ async function makeRider(request: APIRequestContext, auth: Record<string, string
  * rider invisible to further broadcasts) — while a rider who has explicitly
  * marked themselves unavailable gets nothing at all from the same broadcast.
  */
-test("a rider carrying a job still gets new offers live, while an unavailable rider gets none", async ({ page, request, browser }) => {
+test("a rider carrying a job still gets new offers live, while an unavailable rider gets none", async ({ request, browser }) => {
   const auth = await dispatcherAuth(request);
   const busyRider = await makeRider(request, auth, "Multi-Job Busy Rider");
   const unavailableRider = await makeRider(request, auth, "Multi-Job Unavailable Rider");

@@ -10,7 +10,7 @@ const ROLE_LABEL: Record<Role, string> = {
   dispatcher: "Dispatcher",
   accountant: "Accountant",
   viewer: "Viewer",
-  rider: "Rider",
+  rider: "Courier",
 };
 
 interface InviteDto {
@@ -62,12 +62,12 @@ export function Team(): React.JSX.Element {
     <div className="space-y-6">
       <header>
         <h1 className="text-xl font-bold">Team</h1>
-        <p className="text-sm text-zinc-400">Staff logins (dispatcher, accountant, viewer, admin) and rider accounts.</p>
+        <p className="text-sm text-zinc-400">Staff logins (dispatcher, accountant, viewer, admin) and courier accounts.</p>
       </header>
 
       {canEdit && pending.data && pending.data.riders.length > 0 ? (
         <section className="space-y-3">
-          <h2 className="font-semibold text-amber-400">🔔 Pending rider applications ({pending.data.riders.length})</h2>
+          <h2 className="font-semibold text-amber-400">🔔 Pending courier applications ({pending.data.riders.length})</h2>
           <div className="space-y-2">
             {pending.data.riders.map((r) => (
               <div key={r.id} className="card flex flex-wrap items-center justify-between gap-2 border-amber-800/40">
@@ -142,9 +142,9 @@ export function Team(): React.JSX.Element {
 
       <section className="space-y-3">
         <div className="flex items-center justify-between gap-3">
-          <h2 className="font-semibold">Riders</h2>
+          <h2 className="font-semibold">Couriers</h2>
           {canEdit ? (
-            <button className="btn-accent" onClick={() => setAddingRider((v) => !v)}>{addingRider ? "Cancel" : "+ Add rider"}</button>
+          <button className="btn-accent" onClick={() => setAddingRider((v) => !v)}>{addingRider ? "Cancel" : "+ Add courier"}</button>
           ) : null}
         </div>
         {addingRider ? (
@@ -152,7 +152,7 @@ export function Team(): React.JSX.Element {
         ) : null}
         {riders.isLoading ? <p className="text-sm text-zinc-400">Loading…</p> : null}
         {riders.data && riders.data.riders.length === 0 ? (
-          <div className="card text-sm text-zinc-400">No riders yet — add one so jobs can actually be assigned and delivered.</div>
+          <div className="card text-sm text-zinc-400">No couriers yet — add one so jobs can actually be assigned and delivered.</div>
         ) : null}
         <div className="space-y-2">
           {riders.data?.riders.map((r) => (
@@ -279,8 +279,8 @@ function CreateRiderForm({ onDone }: { onDone: () => void }): React.JSX.Element 
           <input id="r-password" className="input" minLength={8} value={password} onChange={(e) => setPassword(e.target.value)} />
         </div>
       </div>
-      {create.error ? <p className="text-sm text-red-400">{create.error instanceof ApiError ? create.error.message : "Could not create this rider"}</p> : null}
-      <button className="btn-accent" disabled={create.isPending || !canSubmit}>{create.isPending ? "Creating…" : "Add rider"}</button>
+      {create.error ? <p className="text-sm text-red-400">{create.error instanceof ApiError ? create.error.message : "Could not create this courier"}</p> : null}
+      <button className="btn-accent" disabled={create.isPending || !canSubmit}>{create.isPending ? "Creating…" : "Add courier"}</button>
     </form>
   );
 }

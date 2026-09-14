@@ -27,7 +27,7 @@ export function LogisticsCompanies(): React.JSX.Element {
       <header className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-xl font-bold">Logistics companies</h1>
-          <p className="text-sm text-zinc-400">Fleet operators who supply their own riders — the other side of the marketplace from merchants.</p>
+          <p className="text-sm text-zinc-400">Fleet operators who supply their own couriers — the other side of the marketplace from merchants.</p>
         </div>
         {canEdit ? (
           <button className="btn-accent" onClick={() => setCreating((v) => !v)}>{creating ? "Cancel" : "+ New logistics company"}</button>
@@ -38,7 +38,7 @@ export function LogisticsCompanies(): React.JSX.Element {
 
       {list.isLoading ? <p className="text-sm text-zinc-400">Loading…</p> : null}
       {list.data && list.data.logisticsCompanies.length === 0 ? (
-        <div className="card text-sm text-zinc-400">No logistics companies yet — create one, then grant it a portal login and have Platform Admin attach riders to it.</div>
+        <div className="card text-sm text-zinc-400">No logistics companies yet — create one, then grant it a portal login and have Platform Admin attach couriers to it.</div>
       ) : null}
       <div className="space-y-3">
         {list.data?.logisticsCompanies.map((c) => (
@@ -62,7 +62,7 @@ function CreateForm({ onDone }: { onDone: () => void }): React.JSX.Element {
       <div className="grid gap-3 sm:grid-cols-2">
         <div>
           <label className="label" htmlFor="lc-name">Company name</label>
-          <input id="lc-name" className="input" required value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Swift Riders Ltd" />
+          <input id="lc-name" className="input" required value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Swift Couriers Ltd" />
         </div>
         <div>
           <label className="label" htmlFor="lc-phone">Phone (optional)</label>
@@ -91,7 +91,7 @@ function CompanyRow({ company, canEdit, onChanged }: { company: LogisticsCompany
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
           <h2 className="font-semibold">{company.name}</h2>
-          <p className="text-xs text-zinc-500">{company.riderCount} attached rider{company.riderCount === 1 ? "" : "s"} · {company.phone ?? company.email ?? "No contact on file"}</p>
+          <p className="text-xs text-zinc-500">{company.riderCount} attached courier{company.riderCount === 1 ? "" : "s"} · {company.phone ?? company.email ?? "No contact on file"}</p>
         </div>
         <span className={`rounded px-2 py-0.5 text-xs font-medium ${company.active ? "bg-emerald-900/50 text-emerald-300" : "bg-zinc-800 text-zinc-500"}`}>
           {company.active ? "Active" : "Disabled"}
@@ -126,7 +126,7 @@ function GrantPortalAccessForm({ companyId, onDone }: { companyId: string; onDon
     <form className="space-y-2 rounded-lg border border-zinc-700 p-3" onSubmit={(e) => { e.preventDefault(); void grant.mutate(); }}>
       <p className="text-xs text-zinc-400">
         Lets this person sign in (the same sign-in page everyone uses) to view this company's fleet dashboard. If this
-        email already has an account (staff, rider, merchant, or another logistics company), this just adds this
+        email already has an account (staff, courier, merchant, or another logistics company), this just adds this
         company to it — their existing password is never changed.
       </p>
       <div className="grid gap-2 sm:grid-cols-3">

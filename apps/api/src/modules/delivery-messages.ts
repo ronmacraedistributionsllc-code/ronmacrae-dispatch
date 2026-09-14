@@ -36,7 +36,7 @@ const RATE_LIMIT_MAX = 15;
 
 const SenderRoleLabel: Record<MessageSenderRole, string> = {
   customer: "Customer",
-  rider: "Rider",
+    rider: "Courier",
   dispatcher: "Dispatch",
   system: "System",
 };
@@ -499,7 +499,7 @@ export async function deliveryMessageRoutes(app: FastifyInstance, ctx: AppCtx): 
     const request = await ctx.prisma.addressChangeRequest.create({
       data: { jobId: req.params.id, requestedByRole: "rider", proposedAddressText: body.proposedAddressText, note: body.note || null },
     });
-    await sendSystemMessage(ctx, req.params.id, job.businessId, job.riderId, `Rider requested a new delivery address: "${body.proposedAddressText}". Waiting for dispatch to confirm.`);
+    await sendSystemMessage(ctx, req.params.id, job.businessId, job.riderId, `Courier requested a new delivery address: "${body.proposedAddressText}". Waiting for dispatch to confirm.`);
     await ctx.audit.record({ id: req.user!.sub, role: req.user!.role }, "address_change.request", "job", req.params.id, { requestId: request.id });
     return addressChangeToDto({ ...request, reviewedBy: null });
   });

@@ -37,7 +37,6 @@ import {
   jobInclude,
   jobToDto,
   type Actor,
-  type JobRow,
   type Viewer,
 } from "./dto.js";
 import { getJobRow, latestRiderPoint, nextJobNumber } from "./repository.js";
@@ -195,7 +194,7 @@ export async function transitionJob(
   if (actor.role === "rider") {
     if (row.riderId !== actor.riderId) throw httpErrors.createError(403, "Not your job");
     if (TRANSITION_PRIMARY_ACTOR[to] !== "rider") {
-      throw httpErrors.createError(403, `Riders cannot move a job to ${to}`);
+      throw httpErrors.createError(403, `Couriers cannot move a job to ${to}`);
     }
   } else {
     assertJobBusiness(actor, row.businessId);

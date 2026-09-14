@@ -64,8 +64,8 @@ export function OpsBoard(): React.JSX.Element {
       </header>
 
       <section className="card">
-        <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-zinc-400">Riders</h2>
-        {data.riders.length === 0 ? <p className="text-sm text-zinc-500">No active riders.</p> : null}
+         <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-zinc-400">Couriers</h2>
+         {data.riders.length === 0 ? <p className="text-sm text-zinc-500">No active couriers.</p> : null}
 
         {/* Desktop/tablet: dense table. A 6-column table is unusable on a
          *  phone (forces sideways scrolling, tiny tap targets), so mobile
@@ -74,7 +74,7 @@ export function OpsBoard(): React.JSX.Element {
           <table className="w-full text-left text-sm">
             <thead>
               <tr className="text-xs uppercase tracking-wide text-zinc-500">
-                <th className="py-1 pr-3">Rider</th>
+                 <th className="py-1 pr-3">Courier</th>
                 <th className="py-1 pr-3">Availability</th>
                 <th className="py-1 pr-3">Active / capacity</th>
                 <th className="py-1 pr-3">Connection</th>

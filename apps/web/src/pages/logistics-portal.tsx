@@ -128,7 +128,7 @@ export function LogisticsPortal(): React.JSX.Element {
       <header className="flex items-center justify-between gap-3">
         <div>
           <h1 className="text-xl font-bold">{companyName ?? "Your fleet"}</h1>
-          <p className="text-sm text-zinc-400">Riders Platform Admin has attached to your company.</p>
+          <p className="text-sm text-zinc-400">Couriers Platform Admin has attached to your company.</p>
         </div>
         <div className="flex gap-2">
           {hasStaffAccess ? (
@@ -157,7 +157,7 @@ export function LogisticsPortal(): React.JSX.Element {
 
       {riders === null ? <p className="text-sm text-zinc-400">Loading…</p> : null}
       {riders && riders.length === 0 ? (
-        <div className="card text-sm text-zinc-400">No riders attached yet — ask Platform Admin to attach riders to your company.</div>
+        <div className="card text-sm text-zinc-400">No couriers attached yet — ask Platform Admin to attach couriers to your company.</div>
       ) : null}
       <div className="space-y-2">
         {riders?.map((r) => (

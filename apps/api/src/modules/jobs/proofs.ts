@@ -9,7 +9,7 @@ import type { AppCtx } from "../../ctx.js";
 import { isStaff } from "../guards.js";
 import type { ProofDto, ProofKind } from "@ronmacrae/contracts";
 import { PROOF_KINDS } from "@ronmacrae/contracts";
-import { pointFromJson, pointToJson } from "../../geo-mappers.js";
+import { pointToJson } from "../../geo-mappers.js";
 import { randomToken } from "../../lib/ids.js";
 import { proofToDto } from "./dto.js";
 
@@ -103,8 +103,6 @@ export async function proofRoutes(app: FastifyInstance, ctx: AppCtx): Promise<vo
 
       const ext = file.mimetype ? EXT_BY_MIME[file.mimetype] : undefined;
       if (!ext) throw httpErrors.createError(415, "Unsupported file type (jpg, png, webp or pdf)");
-      const mime = file.mimetype;
-
       const key = `${randomToken(18)}.${ext}`;
       const absPath = join(UPLOAD_ROOT, key);
       mkdirSync(dirname(absPath), { recursive: true });

@@ -210,8 +210,8 @@ export type ConversationKind = (typeof CONVERSATION_KINDS)[number];
 
 export const CONVERSATION_KIND_LABELS: Record<ConversationKind, string> = {
   customer_dispatch: "Customer ↔ Dispatch",
-  customer_rider: "Customer ↔ Rider",
-  rider_dispatch: "Rider ↔ Dispatch",
+  customer_rider: "Customer ↔ Courier",
+  rider_dispatch: "Courier ↔ Dispatch",
 };
 
 export const PROOF_KINDS = [

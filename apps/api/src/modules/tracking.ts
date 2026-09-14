@@ -8,9 +8,6 @@ import { pointFromJson, moneyField } from "../geo-mappers.js";
 import {
   customerStatusHistory,
   createTrackingLink,
-  getJobRow,
-  latestRiderPoint,
-  listEvents,
   revokeTrackingLinkByToken,
 } from "./jobs/index.js";
 import { getBusinessSettings } from "./settings.js";

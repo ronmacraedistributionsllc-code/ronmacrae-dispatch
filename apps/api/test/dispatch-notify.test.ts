@@ -93,9 +93,10 @@ describe("dispatch order-alert email", () => {
     const { jobId } = create.json() as { jobId: string };
     // the merchant's own email plus the new dispatch alert = 2
     await vi.waitFor(() => expect(emailProvider().sent.length).toBe(before + 2));
-    const sent = emailProvider().sent[emailProvider().sent.length - 1]!;
-    expect(sent.to).toBe("dispatch@example.com");
-    expect(sent.subject).toContain("NEW ORDER");
+    const sent = emailProvider().sent.find((message) => message.to === "dispatch@example.com");
+    expect(sent).toBeTruthy();
+    expect(sent!.to).toBe("dispatch@example.com");
+    expect(sent!.subject).toContain("NEW ORDER");
 
     await vi.waitFor(async () => {
       const row = await harness.prisma.job.findUniqueOrThrow({ where: { id: jobId } });

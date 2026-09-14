@@ -222,7 +222,7 @@ export async function offerRoutes(app: FastifyInstance, ctx: AppCtx): Promise<vo
       // rider tapping Accept — re-check it's still active at accept time,
       // not just when the offer went out.
       const membership = await tx.riderMembership.findUnique({ where: { riderId_businessId: { riderId, businessId: offer.businessId } } });
-      if (membership?.status !== "active") throw httpErrors.createError(409, "You're no longer an active rider for this business");
+      if (membership?.status !== "active") throw httpErrors.createError(409, "You're no longer an active courier for this business");
       // Conditional claim: only succeeds if the job is still unassigned `new`. This is the
       // single point of truth that prevents two riders (or a rider and a dispatcher manual
       // assignment) from both winning the same job.
@@ -237,7 +237,7 @@ export async function offerRoutes(app: FastifyInstance, ctx: AppCtx): Promise<vo
         where: { id: offer.jobId, status: "new", riderId: null },
         data: { riderId, status: "accepted", stage: "heading_to_pickup" },
       });
-      if (!claimed.count) throw httpErrors.createError(409, "Another rider has already claimed this job");
+      if (!claimed.count) throw httpErrors.createError(409, "Another courier has already claimed this job");
       // Capacity was checked when this offer (and any others still open for this
       // rider) was broadcast, but a rider can hold several open offers from
       // separate broadcasts at once now that carrying jobs no longer excludes

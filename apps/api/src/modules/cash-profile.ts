@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { httpErrors } from "@fastify/sensible";
-import { money, sum, type Money } from "@ronmacrae/money";
+import { money, sum } from "@ronmacrae/money";
 import type { AppCtx } from "../ctx.js";
 import type { CashBucketDto, RiderCashBusinessProfileDto, RiderCashMerchantProfileDto, RiderCashProfileDto } from "@ronmacrae/contracts";
 
@@ -99,7 +99,7 @@ async function buildBusinessProfile(ctx: AppCtx, riderId: string, businessId: st
     ctx.prisma.job.count({ where: { riderId, businessId, status: "delivered" } }),
   ]);
   if (!business) throw httpErrors.createError(404, "Business not found");
-  if (!rider) throw httpErrors.createError(404, "Rider not found");
+  if (!rider) throw httpErrors.createError(404, "Courier not found");
 
   const collectedJobs = codJobs.filter((j) => j.codStatus === "collected");
   const handedInJobs = codJobs.filter((j) => j.codStatus === "handed_in");
@@ -128,7 +128,7 @@ async function buildBusinessProfile(ctx: AppCtx, riderId: string, businessId: st
   const earningsPayable = rider.payRate != null ? money(rider.payRate * deliveredCount, rider.payCurrency) : null;
   const earningsNote =
     rider.payRate == null
-      ? "No pay rate configured for this rider — earnings are shown as not set, never $0."
+      ? "No pay rate configured for this courier — earnings are shown as not set, never $0."
       : "Estimate only: pay rate × delivered jobs at this business to date. No payout-tracking exists yet (Payout/PayoutLine are unused), so this never decreases as money is actually paid out — see WORK_IN_PROGRESS.md's Stage 27 notes.";
 
   return {
@@ -147,7 +147,7 @@ async function buildBusinessProfile(ctx: AppCtx, riderId: string, businessId: st
 
 export async function buildRiderCashProfile(ctx: AppCtx, riderId: string, businessIds?: string[]): Promise<RiderCashProfileDto> {
   const rider = await ctx.prisma.rider.findUnique({ where: { id: riderId }, select: { name: true } });
-  if (!rider) throw httpErrors.createError(404, "Rider not found");
+  if (!rider) throw httpErrors.createError(404, "Courier not found");
 
   const ids =
     businessIds ??
@@ -181,7 +181,7 @@ export async function cashProfileRoutes(app: FastifyInstance, ctx: AppCtx): Prom
       // 404, not 403 — a business must never learn whether a rider id
       // exists at all if they've never worked together, same rule as
       // every other cross-business boundary in this codebase.
-      if (!membership) throw httpErrors.createError(404, "Rider not found");
+      if (!membership) throw httpErrors.createError(404, "Courier not found");
       return buildRiderCashProfile(ctx, req.params.id, [businessId]);
     },
   );

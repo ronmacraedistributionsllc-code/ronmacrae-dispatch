@@ -74,6 +74,11 @@ export const API = {
      *  only (spec 9, Stage 27). */
     cash: (riderId: string) => `/api/riders/${riderId}/cash`,
   },
+  merchantSignup: {
+    signup: "/api/merchant-signup",
+    verify: "/api/merchant-signup/verify",
+    resend: "/api/merchant-signup/resend",
+  },
 
   /** dispatcher operations board — spec 5C */
   opsBoard: "/api/ops-board",

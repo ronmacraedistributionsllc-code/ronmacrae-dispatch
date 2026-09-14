@@ -67,7 +67,7 @@ export function CodReconciliation(): React.JSX.Element {
       <header>
         <h1 className="text-xl font-bold">COD reconciliation</h1>
         <p className="text-sm text-zinc-400">
-          Cash collected from customers vs. what riders have handed in to the office — separate from delivery fees or rider earnings.
+          Cash collected from customers vs. what couriers have handed in to the office — separate from delivery fees or courier earnings.
         </p>
       </header>
 

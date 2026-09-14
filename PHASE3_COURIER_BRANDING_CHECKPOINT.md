@@ -1,6 +1,6 @@
 # Phase 3 — Courier Branding & Access Checkpoint
 
-**Status: IN PROGRESS.** This supersedes `PHASE1_JOBS_CHECKPOINT.md` and
+**Status: IN PROGRESS (Tasks A and B complete).** This supersedes `PHASE1_JOBS_CHECKPOINT.md` and
 `PHASE2_JOBS_SCREEN_CHECKPOINT.md` for `/continue-build` purposes — those
 describe the project in its earliest state (a single-business jobs board,
 27 tests total) and are badly out of date. The app today is a multi-tenant
@@ -21,8 +21,8 @@ Five tasks, requested together, of which one is done:
 - **A — Courier verification email (DONE, this checkpoint).** Fixed a
   silent-failure bug; production delivery is still unconfirmed (no real
   inbox/Resend/Render dashboard access from the session that fixed this).
-- **B — Rename "Rider" to "Courier" in all user-facing text** (not
-  implemented). Must NOT rename internal identifiers (`Rider` model,
+- **B — Rename "Rider" to "Courier" in all user-facing text** (DONE, this
+  checkpoint update). Must NOT rename internal identifiers (`Rider` model,
   `RiderDto`, `/api/bearer/*`, `role: "rider"`) — text only.
 - **C — Shared signup gains a "Merchant Business" option**, with a real
   pending-application → admin approval → owner-portal flow (not
@@ -65,6 +65,12 @@ Five tasks, requested together, of which one is done:
 | `DEV_DB=1 npx vitest run` (`apps/api`) | **276/276 pass**, 39 files |
 | `npm run build --workspace apps/api --workspace apps/web` | success |
 | `rm -f apps/api/data/e2e-test.db && cd e2e && npx playwright test --workers=1` | **34/35 pass** — 1 known pre-existing failure, see below |
+| `npm run typecheck --workspace apps/api --workspace apps/web --workspace packages/contracts --workspace packages/notifications` | 0 errors |
+| `npm run build --workspace apps/api --workspace apps/web --workspace packages/contracts --workspace packages/notifications` | success |
+| `npm run test:unit --workspace packages/contracts` | **8/8 pass** |
+| `npm run test:unit --workspace packages/notifications` | **6/6 pass** |
+| `DEV_DB=1 npx vitest run --root apps/api test/rider-signup.test.ts` | **7/7 pass** |
+| `DEV_DB=1 npx vitest run --root apps/api` (this run) | **270/276 pass** — 6 unrelated 5-second timeouts in merchant/address/notification tests; rider signup passed |
 
 The one e2e failure, `specs/booking.spec.ts` (address-autocomplete
 timeout on the offline geocoding fallback), is confirmed pre-existing and
@@ -74,6 +80,10 @@ produces spurious extra failures from shared dev-server/db/realtime-hub
 contention, not real regressions.
 
 ## Out of scope / notes
+
+- Task B changed human-facing labels, errors, email copy, notification labels,
+  and conversation labels only. Routes, role values, DTO/model names, event
+  names, query keys, and other internal `rider` identifiers remain unchanged.
 
 - Task A's production-email diagnosis is NOT complete — no real inbox,
   Resend dashboard, or Render dashboard was reachable this session. The
@@ -97,4 +107,9 @@ npm run typecheck --workspace apps/api --workspace apps/web
 DEV_DB=1 npx vitest run --root apps/api
 npm run build --workspace apps/api --workspace apps/web
 rm -f apps/api/data/e2e-test.db && cd e2e && npx playwright test --workers=1
+npm run typecheck --workspace apps/api --workspace apps/web --workspace packages/contracts --workspace packages/notifications
+npm run build --workspace apps/api --workspace apps/web --workspace packages/contracts --workspace packages/notifications
+npm run test:unit --workspace packages/contracts
+npm run test:unit --workspace packages/notifications
+DEV_DB=1 npx vitest run --root apps/api test/rider-signup.test.ts
 ```

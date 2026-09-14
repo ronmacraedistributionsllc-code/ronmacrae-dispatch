@@ -100,6 +100,7 @@ export async function merchantPortalRoutes(app: FastifyInstance, ctx: AppCtx): P
     if (!email) throw genericError();
     const user = await ctx.prisma.user.findUnique({ where: { email } });
     if (!user || !verifyPassword(body.password, user.passwordHash)) throw genericError();
+    if (!user.emailVerifiedAt) throw httpErrors.createError(403, "Please verify your email before signing in.");
     const membership = await ctx.prisma.merchantStaff.findFirst({
       where: { userId: user.id, active: true },
       include: { merchant: { select: { id: true, name: true, active: true } } },
@@ -132,7 +133,7 @@ export async function merchantPortalRoutes(app: FastifyInstance, ctx: AppCtx): P
     const auth = await requireMerchantAuth(ctx, req);
     const user = await ctx.prisma.user.findUniqueOrThrow({ where: { id: auth.userId }, include: { rider: { select: { id: true } } } });
     const staffContext = await resolveStaffContext(ctx, user);
-    if (!staffContext) throw httpErrors.createError(403, "This account has no staff or rider access to switch to.");
+    if (!staffContext) throw httpErrors.createError(403, "This account has no staff or courier access to switch to.");
     const accessToken = await ctx.jwt.issueAccess({
       id: user.id,
       name: user.name,

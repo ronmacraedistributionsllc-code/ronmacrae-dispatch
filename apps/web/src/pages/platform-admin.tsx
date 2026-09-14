@@ -49,7 +49,7 @@ export function PlatformAdmin(): React.JSX.Element {
     { key: "businesses", label: "Businesses" },
     { key: "merchants", label: "Merchants" },
     { key: "logistics", label: "Logistics" },
-    { key: "riders", label: "Riders" },
+    { key: "riders", label: "Couriers" },
     { key: "staff", label: "Staff" },
     { key: "messages", label: "Messages" },
     { key: "audit", label: "Audit log" },
@@ -58,7 +58,7 @@ export function PlatformAdmin(): React.JSX.Element {
     <div className="space-y-4">
       <header>
         <h1 className="text-xl font-bold">Platform Admin</h1>
-        <p className="text-sm text-zinc-400">Every business, merchant, rider, and staff account on the platform.</p>
+        <p className="text-sm text-zinc-400">Every business, merchant, courier, and staff account on the platform.</p>
       </header>
       <div className="flex gap-1 border-b border-zinc-800">
         {TABS.map((t) => (
@@ -107,7 +107,7 @@ function BusinessesTab(): React.JSX.Element {
           <div key={b.id} className="card flex flex-wrap items-center justify-between gap-2">
             <div>
               <p className="font-medium">{b.name}</p>
-              <p className="text-xs text-zinc-500">{b.merchantCount} merchants · {b.staffCount} staff · {b.riderCount} riders · {b.jobCount} orders</p>
+              <p className="text-xs text-zinc-500">{b.merchantCount} merchants · {b.staffCount} staff · {b.riderCount} couriers · {b.jobCount} orders</p>
             </div>
             <div className="flex items-center gap-2">
               <StatusPill active={b.active} />
@@ -171,7 +171,7 @@ function LogisticsTab(): React.JSX.Element {
           <div key={c.id} className="card flex flex-wrap items-center justify-between gap-2">
             <div>
               <p className="font-medium">{c.name} <span className="text-xs text-zinc-500">· {c.business.name}</span></p>
-              <p className="text-xs text-zinc-500">{c.riderCount} attached riders · {c.staffCount} portal logins</p>
+              <p className="text-xs text-zinc-500">{c.riderCount} attached couriers · {c.staffCount} portal logins</p>
             </div>
             <div className="flex items-center gap-2">
               <StatusPill active={c.active} />
@@ -203,7 +203,7 @@ function RidersTab(): React.JSX.Element {
       void qc.invalidateQueries({ queryKey: ["platform", "riders"] });
       void qc.invalidateQueries({ queryKey: ["platform", "rider"] });
     },
-    onError: (err) => window.alert(err instanceof ApiError ? err.message : "Could not update this rider"),
+    onError: (err) => window.alert(err instanceof ApiError ? err.message : "Could not update this courier"),
   });
   return (
     <div className="space-y-3">

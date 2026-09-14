@@ -78,7 +78,7 @@ export async function settlementRoutes(app: FastifyInstance, ctx: AppCtx): Promi
     async (req) => {
       const businessId = req.user!.businessId!;
       const membership = await ctx.prisma.riderMembership.findUnique({ where: { riderId_businessId: { riderId: req.params.riderId, businessId } } });
-      if (!membership) throw httpErrors.createError(404, "Rider not found");
+      if (!membership) throw httpErrors.createError(404, "Courier not found");
       const jobs = await outstandingJobsFor(ctx, businessId, req.params.riderId);
       const groups = new Map<string | null, { merchantName: string; jobs: OutstandingRow[] }>();
       for (const job of jobs) {
@@ -115,7 +115,7 @@ export async function settlementRoutes(app: FastifyInstance, ctx: AppCtx): Promi
     const actor = { id: req.user!.sub, name: req.user!.name, role: req.user!.role };
 
     const membership = await ctx.prisma.riderMembership.findUnique({ where: { riderId_businessId: { riderId: body.riderId, businessId } } });
-    if (!membership) throw httpErrors.createError(404, "Rider not found");
+      if (!membership) throw httpErrors.createError(404, "Courier not found");
     if (body.merchantId) {
       const merchant = await ctx.prisma.merchant.findFirst({ where: { id: body.merchantId, businessId } });
       if (!merchant) throw httpErrors.createError(404, "Merchant not found");
@@ -125,7 +125,7 @@ export async function settlementRoutes(app: FastifyInstance, ctx: AppCtx): Promi
       where: { id: { in: body.jobIds }, riderId: body.riderId, businessId, paymentMethod: "cod", codStatus: "handed_in", merchantId: body.merchantId ?? null },
     });
     if (jobs.length !== body.jobIds.length) {
-      throw httpErrors.createError(409, "One or more of these orders are no longer eligible to settle (already settled, or not this rider/merchant) — refresh and try again");
+      throw httpErrors.createError(409, "One or more of these orders are no longer eligible to settle (already settled, or not this courier/merchant) — refresh and try again");
     }
     if (jobs.length === 0) throw httpErrors.createError(400, "No orders to settle");
 

@@ -86,7 +86,16 @@ export async function sendDispatchOrderNotification(
     </div>`;
 
   const result = await ctx.email.send({ to, subject: `NEW ORDER #${orderRef} — ${format(total)}`, text, html, refId: job.id });
+  await ctx.audit.record({ id: null, role: "system" }, `dispatch.notify.${result.status}`, "job", job.id, {
+    provider: ctx.email.name,
+    providerRef: result.providerRef ?? null,
+    recipient: to,
+    error: result.error ?? null,
+  });
   if (result.status === "failed") {
+    // Release the in-flight idempotency claim. A provider failure is not a
+    // delivery and must remain retryable rather than looking successful.
+    await ctx.prisma.job.updateMany({ where: { id: job.id, dispatchNotifiedAt: { not: null } }, data: { dispatchNotifiedAt: null } });
     ctx.log.error({ jobId: job.id, error: result.error }, "dispatch order email send failed");
   }
   return { status: result.status, error: result.error };

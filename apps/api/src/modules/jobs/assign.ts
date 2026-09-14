@@ -38,13 +38,13 @@ export async function assignJob(
   if (!row) throw httpErrors.createError(404, "Job not found");
   assertJobBusiness(actor, row.businessId);
   const rider = await ctx.prisma.rider.findUnique({ where: { id: input.riderId } });
-  if (!rider) throw httpErrors.createError(404, "Rider not found");
+  if (!rider) throw httpErrors.createError(404, "Courier not found");
   if (!rider.active) throw httpErrors.createError(409, `${rider.name} is not active`);
   // A dispatcher can only assign to a rider actually in their own network —
   // not to some other business's rider, even one they happen to share via a
   // separate membership elsewhere.
   const membership = await ctx.prisma.riderMembership.findUnique({ where: { riderId_businessId: { riderId: input.riderId, businessId: row.businessId } } });
-  if (membership?.status !== "active") throw httpErrors.createError(404, "Rider not found");
+  if (membership?.status !== "active") throw httpErrors.createError(404, "Courier not found");
   if (row.status !== "new" && row.status !== "assigned") {
     throw httpErrors.createError(409, `Only new or unaccepted jobs can be assigned (job is ${row.status})`);
   }
@@ -223,7 +223,7 @@ export async function unassignJob(
         actorType: actorType(actor.role),
         actorId: actor.id,
         actorName: actor.name,
-        note: reason ?? (declined ? "declined by rider" : null),
+        note: reason ?? (declined ? "declined by courier" : null),
         meta: { declined } as object,
       },
     });

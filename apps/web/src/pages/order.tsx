@@ -140,7 +140,6 @@ export function PublicOrder(): React.JSX.Element {
       cancelled = true;
       clearTimeout(t);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [JSON.stringify(items.map((r) => [r.productVariantId, r.productId, r.name, r.quantity, r.unitPrice])), destination?.point.lat, destination?.point.lng, merchantSlug]);
 
   const canSubmit = name.trim().length > 0 && phone.replace(/[^\d]/g, "").length >= 7 && destination != null && items.some((r) => toItemInput(r) != null) && !busy;

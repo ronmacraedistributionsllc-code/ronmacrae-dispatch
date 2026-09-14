@@ -3,6 +3,9 @@ import ReactDOM from "react-dom/client";
 import { registerSW } from "virtual:pwa-register";
 import App from "./app.js";
 import "./styles.css";
+import { getTheme, setTheme } from "./lib/theme.js";
+
+setTheme(getTheme());
 
 // Registers the service worker and, when a new deploy is detected, reloads this
 // tab once the new worker has taken over — see src/sw.ts's activate handler

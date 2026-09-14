@@ -100,7 +100,7 @@ export function JobOffersPanel({ jobId, jobStatus, canWrite }: { jobId: string; 
             />
           </div>
           <button className="btn !px-3 !py-1 text-xs" disabled={busy} onClick={() => void broadcast.mutate()}>
-            {list.length > 0 ? "Broadcast again" : "Broadcast to available riders"}
+            {list.length > 0 ? "Broadcast again" : "Broadcast to available couriers"}
           </button>
           {hasOpen ? (
             <button className="btn !px-3 !py-1 text-xs" disabled={busy} onClick={() => void rebroadcast.mutate()}>
@@ -122,7 +122,7 @@ export function JobOffersPanel({ jobId, jobStatus, canWrite }: { jobId: string; 
             const status = effectiveStatus(o);
             return (
             <li key={o.id} data-testid={`offer-rider-${o.riderId ?? o.id}`} className="flex flex-wrap items-center gap-2 rounded bg-zinc-900/60 px-2 py-1 text-sm">
-              <span className="min-w-24 text-zinc-200">{o.riderName ?? "Rider"}</span>
+              <span className="min-w-24 text-zinc-200">{o.riderName ?? "Courier"}</span>
               {o.urgent ? <span className="rounded bg-red-900/70 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-red-200">Urgent</span> : null}
               <span className={`rounded px-2 py-0.5 text-xs font-medium ${OFFER_BADGE[status]}`}>{status}</span>
               <span className="text-xs text-zinc-500">

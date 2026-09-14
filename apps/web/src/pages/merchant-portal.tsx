@@ -174,7 +174,7 @@ export function MerchantPortal(): React.JSX.Element {
                   ))}
                 </ul>
                 <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
-                  <span className="text-zinc-400">{o.paymentMethodLabel}{o.riderName ? ` · rider: ${o.riderName}` : ""}</span>
+                  <span className="text-zinc-400">{o.paymentMethodLabel}{o.riderName ? ` · courier: ${o.riderName}` : ""}</span>
                   <span className="font-semibold">{formatMoney(o.total)}</span>
                 </div>
                 {o.status === "delivered" ? <RateOrder jobId={o.id} token={token} /> : null}
@@ -286,7 +286,7 @@ function RateOrder({ jobId, token }: { jobId: string; token: string }): React.JS
   if (done) return <p className="text-xs text-emerald-400">Rated — thank you.</p>;
   return (
     <div className="flex items-center gap-1 text-lg">
-      <span className="mr-1 text-xs text-zinc-500">Rate rider:</span>
+      <span className="mr-1 text-xs text-zinc-500">Rate courier:</span>
       {[1, 2, 3, 4, 5].map((n) => (
         <button key={n} type="button" disabled={busy} className={n <= score ? "text-amber-400" : "text-zinc-700"} onClick={() => void submit(n)}>★</button>
       ))}

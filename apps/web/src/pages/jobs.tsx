@@ -109,7 +109,7 @@ function JobRow({ job, riders, canWrite, busy, offersOpen, queueOpen, chatOpen, 
                   disabled={busy}
                   onChange={(e) => setRiderId(e.target.value)}
                 >
-                  <option value="">Rider…</option>
+                  <option value="">Courier…</option>
                   {riders.map((r) => (
                     <option key={r.id} value={r.id}>
                       {r.name} · {r.status}
@@ -267,7 +267,7 @@ export function Jobs(): React.JSX.Element {
       <header className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="text-xl font-bold">Jobs</h1>
-          <p className="text-sm text-zinc-400">Dispatch queue — assign riders, move jobs, keep track of cash</p>
+          <p className="text-sm text-zinc-400">Dispatch queue — assign couriers, move jobs, keep track of cash</p>
         </div>
         {canWrite ? null : (
           <span className="rounded px-2 py-0.5 text-xs font-medium bg-zinc-800 text-zinc-400">read-only</span>
@@ -355,7 +355,7 @@ export function Jobs(): React.JSX.Element {
                 <th className="py-1 pr-3">Status</th>
                 <th className="py-1 pr-3">Stage</th>
                 <th className="py-1 pr-3">Expected</th>
-                <th className="py-1 pr-3">Rider</th>
+                <th className="py-1 pr-3">Courier</th>
                 {canWrite ? <th className="py-1">Actions</th> : null}
               </tr>
             </thead>
@@ -455,7 +455,7 @@ function DispatcherJobChat({ jobId, canWrite }: { jobId: string; canWrite: boole
           {pending.map((r) => (
             <div key={r.id} className="rounded bg-zinc-900/40 p-2 text-sm">
               <p className="text-zinc-200">
-                {r.requestedByRole === "customer" ? "Customer" : "Rider"} proposed: <span className="font-medium">{r.proposedAddressText}</span>
+                {r.requestedByRole === "customer" ? "Customer" : "Courier"} proposed: <span className="font-medium">{r.proposedAddressText}</span>
               </p>
               {r.note ? <p className="text-xs text-zinc-500">Note: {r.note}</p> : null}
               {canWrite ? (
@@ -477,7 +477,7 @@ function DispatcherJobChat({ jobId, canWrite }: { jobId: string; canWrite: boole
         fetchSummary={() => apiFetch<ConversationsDto>(API.messages.conversations(jobId))}
         // Staff is a party to two of these (Customer, Rider) and only
         // monitors the third — named plainly either way (spec item 5).
-        labelFor={{ customer_dispatch: "Customer", customer_rider: "Customer & Rider", rider_dispatch: "Rider" }}
+        labelFor={{ customer_dispatch: "Customer", customer_rider: "Customer & Courier", rider_dispatch: "Courier" }}
         renderChat={({ kind, canWrite: conversationWritable }) => (
           <DeliveryChat
             queryKey={`staff-${jobId}-${kind}`}

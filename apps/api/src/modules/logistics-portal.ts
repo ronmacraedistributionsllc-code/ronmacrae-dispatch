@@ -88,7 +88,7 @@ export async function logisticsPortalRoutes(app: FastifyInstance, ctx: AppCtx): 
     const auth = await requireLogisticsAuth(ctx, req);
     const user = await ctx.prisma.user.findUniqueOrThrow({ where: { id: auth.userId }, include: { rider: { select: { id: true } } } });
     const staffContext = await resolveStaffContext(ctx, user);
-    if (!staffContext) throw httpErrors.createError(403, "This account has no staff or rider access to switch to.");
+    if (!staffContext) throw httpErrors.createError(403, "This account has no staff or courier access to switch to.");
     const accessToken = await ctx.jwt.issueAccess({
       id: user.id,
       name: user.name,
@@ -121,14 +121,14 @@ export async function logisticsPortalRoutes(app: FastifyInstance, ctx: AppCtx): 
   app.get<{ Params: { riderId: string } }>("/api/logistics-portal/riders/:riderId/messages", async (req) => {
     const auth = await requireLogisticsAuth(ctx, req);
     const rider = await ctx.prisma.rider.findFirst({ where: { id: req.params.riderId, attachedLogisticsCompanyId: auth.logisticsCompanyId } });
-    if (!rider) throw httpErrors.createError(404, "Rider not found");
+    if (!rider) throw httpErrors.createError(404, "Courier not found");
     return listLogisticsRiderThread(ctx, auth.logisticsCompanyId, rider.id, "logistics", auth.userId, true);
   });
 
   app.post<{ Params: { riderId: string } }>("/api/logistics-portal/riders/:riderId/messages", async (req) => {
     const auth = await requireLogisticsAuth(ctx, req);
     const rider = await ctx.prisma.rider.findFirst({ where: { id: req.params.riderId, attachedLogisticsCompanyId: auth.logisticsCompanyId } });
-    if (!rider) throw httpErrors.createError(404, "Rider not found");
+    if (!rider) throw httpErrors.createError(404, "Courier not found");
     const body = SendPlatformMessageBody.parse(req.body);
     const user = await ctx.prisma.user.findUniqueOrThrow({ where: { id: auth.userId } });
     await sendLogisticsRiderMessage(ctx, auth.logisticsCompanyId, rider.id, "logistics", auth.userId, user.name, body.body);

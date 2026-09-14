@@ -50,7 +50,7 @@ test("dispatcher broadcasts an offer and the rider accepts it from their dashboa
   // rider-picker <option>s also read "Offer Test Rider", so an unscoped text locator
   // would be ambiguous.
   const offersPanel = page.getByTestId(`offers-panel-${job.job.id}`);
-  await offersPanel.getByRole("button", { name: "Broadcast to available riders" }).click();
+  await offersPanel.getByRole("button", { name: "Broadcast to available couriers" }).click();
   // The accumulated dev db can have other, stale "Offer Test Rider"-named riders left
   // over from earlier interrupted runs (same display name, different ids) also eligible
   // for this broadcast — scope by this run's own rider id, not by display text.

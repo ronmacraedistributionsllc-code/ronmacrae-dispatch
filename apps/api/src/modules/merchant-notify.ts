@@ -129,7 +129,17 @@ export async function sendMerchantOrderEmail(ctx: AppCtx, jobId: string, force =
     html,
     refId: job.id,
   });
+  await ctx.audit.record({ id: null, role: "system" }, `merchant.notify.${result.status}`, "job", job.id, {
+    provider: ctx.email.name,
+    providerRef: result.providerRef ?? null,
+    recipients,
+    error: result.error ?? null,
+  });
   if (result.status === "failed") {
+    // The timestamp is a short idempotency claim while the provider call is
+    // in flight. A failed provider call must release it so the explicit retry
+    // path, or a later order-processing retry, can genuinely try again.
+    await ctx.prisma.job.updateMany({ where: { id: job.id, merchantNotifiedAt: { not: null } }, data: { merchantNotifiedAt: null } });
     ctx.log.error({ jobId: job.id, error: result.error }, "merchant order email send failed");
   }
   return { status: result.status, error: result.error };
