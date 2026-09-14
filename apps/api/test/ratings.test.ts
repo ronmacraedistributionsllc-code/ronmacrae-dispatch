@@ -79,7 +79,7 @@ describe("customer rating (tracking-token-gated)", () => {
     const duplicate = await harness.app.inject({ method: "POST", url: `/api/tracking/${link.token}/rate`, payload: { score: 1 } });
     expect(duplicate.statusCode).toBe(409);
 
-    const row = await harness.prisma.rating.findUniqueOrThrow({ where: { jobId_raterType_target: { jobId: delivered.id, raterType: "customer", target: "rider" } } });
+    const row = await harness.prisma.rating.findUniqueOrThrow({ where: { jobId_raterType: { jobId: delivered.id, raterType: "customer" } } });
     expect(row.score).toBe(5);
     expect(row.riderId).toBe(rider.id);
   });
@@ -110,10 +110,10 @@ describe("customer rates merchant (tracking-token-gated)", () => {
     expect(rateMerchant.statusCode).toBe(200);
 
     // Two distinct rows: one for the courier, one for the merchant.
-    const courierRow = await harness.prisma.rating.findUniqueOrThrow({ where: { jobId_raterType_target: { jobId: job.id, raterType: "customer", target: "rider" } } });
+    const courierRow = await harness.prisma.rating.findUniqueOrThrow({ where: { jobId_raterType: { jobId: job.id, raterType: "customer" } } });
     expect(courierRow.score).toBe(5);
     expect(courierRow.riderId).toBe(rider.id);
-    const merchantRow = await harness.prisma.rating.findUniqueOrThrow({ where: { jobId_raterType_target: { jobId: job.id, raterType: "customer", target: "merchant" } } });
+    const merchantRow = await harness.prisma.rating.findUniqueOrThrow({ where: { jobId_raterType: { jobId: job.id, raterType: "customer_merchant" } } });
     expect(merchantRow.score).toBe(4);
     expect(merchantRow.merchantId).toBe(merchant.id);
 
@@ -202,7 +202,7 @@ describe("platform-admin: ratings visible on rider detail, and moderation", () =
     const job = await harness.prisma.job.create({ data: { businessId: harness.business.id, customerId: customer.id, riderId: rider.id, status: "delivered" } });
     const link = await trackingLink(harness, job.id);
     await harness.app.inject({ method: "POST", url: `/api/tracking/${link.token}/rate`, payload: { score: 3 } });
-    const rating = await harness.prisma.rating.findUniqueOrThrow({ where: { jobId_raterType_target: { jobId: job.id, raterType: "customer", target: "rider" } } });
+    const rating = await harness.prisma.rating.findUniqueOrThrow({ where: { jobId_raterType: { jobId: job.id, raterType: "customer" } } });
 
     const res = await harness.app.inject({ method: "PATCH", url: `/api/platform/ratings/${rating.id}`, headers: { authorization: `Bearer ${admin}` }, payload: { hidden: true } });
     expect(res.statusCode).toBe(403);
