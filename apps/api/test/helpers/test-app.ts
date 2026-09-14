@@ -75,6 +75,21 @@ export async function buildTestHarness(dbName: string): Promise<TestHarness> {
     QUEUE_DRIVER: "memory",
     NOTIFICATION_PROVIDER: "memory",
     LOG_LEVEL: "error",
+    // Every test in one file shares this one harness/app instance, so every
+    // `app.inject()` call — across every `it()` block — counts against the
+    // same in-memory rate-limit bucket, unlike real traffic spread across
+    // many actual users/IPs. Several login/signup routes set their own
+    // deliberately tight per-route limit (e.g. 10/min on merchant-portal
+    // login) that RATE_LIMIT_MAX alone can't raise — a per-route `config.
+    // rateLimit` fully replaces the plugin's global default for that route,
+    // it doesn't read RATE_LIMIT_MAX at all. DISABLE_RATE_LIMIT (see
+    // server.ts) skips registering the plugin altogether instead, which
+    // makes every per-route override inert too. Never set outside this
+    // harness — same "e2e's own RATE_LIMIT_MAX override, Stage 21 notes"
+    // problem class, just needing the stronger fix once real coverage grew
+    // enough sequential same-route calls in one file to hit a specific
+    // route's own limit, not just the shared global one.
+    DISABLE_RATE_LIMIT: "1",
   });
   const log = createLogger("error", "api-test");
   const basePrisma = getPrisma(config);

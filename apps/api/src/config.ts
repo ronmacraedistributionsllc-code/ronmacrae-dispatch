@@ -104,6 +104,18 @@ const EnvSchema = z.object({
    *  shares one IP (localhost) and a long serial run can otherwise exceed
    *  a production-sane ceiling on request count alone, not actual abuse. */
   RATE_LIMIT_MAX: z.coerce.number().int().positive().default(1000),
+  /** Skips registering the rate-limit plugin at all — for the API vitest
+   *  harness only (test-app.ts), never set in dev or production. Several
+   *  routes set their own deliberately tight per-route limit (e.g. 10/min
+   *  on merchant-portal login) that RATE_LIMIT_MAX above can't raise, since
+   *  a route's own `config.rateLimit` fully replaces the plugin's global
+   *  default rather than reading this value — as real test coverage of one
+   *  such route grows, enough sequential calls in one file (which all
+   *  share the harness's single in-process app, so they share one rate-
+   *  limit bucket too) can trip that route's own limit even though nothing
+   *  resembling abuse happened. Same underlying problem class as
+   *  RATE_LIMIT_MAX's own e2e override, just needing the stronger fix. */
+  DISABLE_RATE_LIMIT: z.string().default("").transform((v) => v === "1" || v === "true"),
 
   /** Web Push (VAPID). Dev default below when DEV_DB=1; required otherwise. */
   VAPID_PUBLIC_KEY: z.string().default(""),

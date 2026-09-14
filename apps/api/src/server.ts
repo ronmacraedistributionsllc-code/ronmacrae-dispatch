@@ -53,15 +53,23 @@ export async function createApp(ctx: AppCtx): Promise<FastifyInstance> {
 
   await app.register(fastifySensible);
   await app.register(fastifyCookie);
-  await app.register(fastifyRateLimit, {
-    max: ctx.config.RATE_LIMIT_MAX,
-    timeWindow: "1 minute",
-    errorResponseBuilder: (_req, context) => ({
-      statusCode: 429,
-      error: "Too Many Requests",
-      message: `Rate limit exceeded, try again in ${context.after}`,
-    }),
-  });
+  // Skipped entirely under the vitest harness (see config.ts's own doc
+  // comment on DISABLE_RATE_LIMIT) — a per-route override wouldn't be
+  // reachable by raising RATE_LIMIT_MAX alone, since it replaces this
+  // plugin's global default rather than reading that value; not
+  // registering the plugin at all makes every route's rateLimit config
+  // (global-default and per-route override alike) inert instead.
+  if (!ctx.config.DISABLE_RATE_LIMIT) {
+    await app.register(fastifyRateLimit, {
+      max: ctx.config.RATE_LIMIT_MAX,
+      timeWindow: "1 minute",
+      errorResponseBuilder: (_req, context) => ({
+        statusCode: 429,
+        error: "Too Many Requests",
+        message: `Rate limit exceeded, try again in ${context.after}`,
+      }),
+    });
+  }
   await app.register(fastifyMultipart, {
     limits: { fileSize: ctx.config.MAX_UPLOAD_BYTES },
   });

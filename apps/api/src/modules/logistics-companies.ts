@@ -122,19 +122,21 @@ export async function logisticsCompanyRoutes(app: FastifyInstance, ctx: AppCtx):
         staff: { create: { userId: user.id, active: true } },
       },
     });
+    // See merchants.ts's matching comment: signup must never fail because
+    // the verification email did — the account already exists and is
+    // usable once approved, regardless of whether this send succeeds.
+    let emailSent = true;
     try {
       await sendEmailCode(ctx, email, LOGISTICS_EMAIL_VERIFY_PURPOSE, "Verify your logistics company account", (code) => `Your Ronmacrae logistics company verification code is ${code}. It expires in 10 minutes.`);
     } catch (err) {
-      // The account/application is retained so a provider retry can complete
-      // onboarding; the API truthfully reports that verification was not sent.
+      emailSent = false;
       ctx.log.error({ email, logisticsCompanyId: company.id, error: err instanceof Error ? err.message : String(err) }, "logistics company verification email failed");
-      throw err;
     }
-    await ctx.audit.record({ id: null, role: "anonymous" }, "logistics_company.signup", "logistics_company", company.id, { email });
+    await ctx.audit.record({ id: null, role: "anonymous" }, "logistics_company.signup", "logistics_company", company.id, { email, emailSent });
     void notifyOwnersOfApplication(ctx, "logistics_company", { id: company.id, name: company.name, applicantEmail: email }).catch((err) =>
       ctx.log.error({ err: String(err), logisticsCompanyId: company.id }, "platform-owner application notification failed"),
     );
-    return { status: "pending", logisticsCompanyId: company.id, email };
+    return { status: "pending", logisticsCompanyId: company.id, email, emailSent };
   });
 
   app.post("/api/logistics-signup/verify", { config: { rateLimit: { max: 20, timeWindow: "1 minute" } } }, async (req) => {

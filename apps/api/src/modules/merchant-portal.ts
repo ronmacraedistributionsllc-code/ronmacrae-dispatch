@@ -180,7 +180,11 @@ export async function merchantPortalRoutes(app: FastifyInstance, ctx: AppCtx): P
     if (!email) throw genericError();
     const user = await ctx.prisma.user.findUnique({ where: { email } });
     if (!user || !verifyPassword(body.password, user.passwordHash)) throw genericError();
-    if (!user.emailVerifiedAt) throw httpErrors.createError(403, "Please verify your email before signing in.");
+    // Email verification is no longer a login gate — only admin approval
+    // (merchant.active, checked below) is. A never-delivered verification
+    // email (a real production failure mode — see sendEmailCode's doc
+    // comment in customer-account.ts) must never be able to permanently
+    // lock a real, correctly-approved account out of its own login.
     const membership = await ctx.prisma.merchantStaff.findFirst({
       where: { userId: user.id, active: true },
       include: { merchant: { select: { id: true, name: true, active: true } } },

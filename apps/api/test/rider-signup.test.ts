@@ -60,19 +60,24 @@ describe("public rider self-signup", () => {
 
     // Logging in itself is never membership-gated for riders (that's a
     // separate concern — see resolveStaffContext's rider branch in
-    // auth.ts); what pending actually blocks is showing up as an
+    // auth.ts) NOR email-verification-gated (a never-delivered
+    // verification email must never be able to permanently lock out an
+    // otherwise-legitimate account — see the same route's own comment);
+    // what pending actually blocks is showing up as an
     // available/assignable rider for this business.
     const membershipBefore = await harness.prisma.riderMembership.findUniqueOrThrow({
       where: { riderId_businessId: { riderId, businessId: harness.business.id } },
     });
     expect(membershipBefore.status).toBe("pending");
-    // Can't sign in yet — email ownership hasn't been proven.
-    const loginUnverified = await harness.app.inject({
+    // Can sign in right away, by email — password alone is the login
+    // credential; nothing about pending membership or unverified email
+    // blocks authentication itself.
+    const loginBeforeVerify = await harness.app.inject({
       method: "POST",
       url: "/api/auth/login",
       payload: { identifier: email, password: "riderpass1" },
     });
-    expect(loginUnverified.statusCode).toBe(403);
+    expect(loginBeforeVerify.statusCode).toBe(200);
 
     const code = latestVerificationCode(email);
     const verify = await harness.app.inject({
@@ -82,10 +87,8 @@ describe("public rider self-signup", () => {
     });
     expect(verify.statusCode).toBe(200);
 
-    // Now sign-in works, by email — phone stays the identity/matching key,
-    // not the login credential, but membership is still pending, so this
-    // only proves login itself isn't membership-gated (see the comment
-    // above resolveStaffContext's rider branch in auth.ts).
+    // Still works after verifying too — verifying is optional proof of
+    // email ownership, not a prerequisite this login route re-checks.
     const loginVerified = await harness.app.inject({
       method: "POST",
       url: "/api/auth/login",
@@ -193,7 +196,7 @@ describe("public rider self-signup", () => {
     expect(goodAttempt.statusCode).toBe(200);
   });
 
-  it("an unverified rider is refused login even after their application is approved — activation requires verification, not just approval", async () => {
+  it("a rider who never verified their email logs in immediately once approved — the same credentials they signed up with, no re-verification required", async () => {
     const phone = `+1876555${uniq().slice(-4)}`;
     const email = `neververified-${uniq()}@example.com`;
     const signup = await harness.app.inject({
@@ -202,16 +205,20 @@ describe("public rider self-signup", () => {
       payload: { name: "Never Verified", phone, email, vehicle: "motorcycle", password: "riderpass1" },
     });
     const { riderId } = signup.json() as { riderId: string };
+    const user = await harness.prisma.user.findUniqueOrThrow({ where: { email } });
+    expect(user.emailVerifiedAt).toBeNull(); // genuinely never verified...
 
     const auth = await adminToken(harness);
     const decide = await harness.app.inject({ method: "POST", url: `/api/riders/${riderId}/decide`, headers: { authorization: `Bearer ${auth}` }, payload: { approve: true } });
     expect(decide.statusCode).toBe(200);
     const membership = await harness.prisma.riderMembership.findUniqueOrThrow({ where: { riderId_businessId: { riderId, businessId: harness.business.id } } });
-    expect(membership.status).toBe("active"); // genuinely approved...
+    expect(membership.status).toBe("active"); // ...but genuinely approved.
 
-    // ...but never verified their email, so login must still be refused.
+    // Login must still succeed — the exact password they signed up with,
+    // no second signup and no email verification just to start using an
+    // approved account.
     const login = await harness.app.inject({ method: "POST", url: "/api/auth/login", payload: { identifier: email, password: "riderpass1" } });
-    expect(login.statusCode).toBe(403);
+    expect(login.statusCode).toBe(200);
   });
 
   it("an expired code is refused the same as one that was never sent", async () => {
@@ -246,32 +253,34 @@ describe("public rider self-signup: email provider failure is never silent", () 
     }
   }
 
-  it("a send failure during signup is reported to the applicant, not swallowed as a false success", async () => {
+  it("a send failure during signup is reported honestly (emailSent: false) but never fails the signup itself — the applicant already has a real, usable account", async () => {
     const phone = `+1876555${uniq().slice(-4)}`;
     const email = `sendfails-${uniq()}@example.com`;
     const signup = await withFailingProvider(() =>
       harness.app.inject({ method: "POST", url: "/api/rider-signup", payload: { name: "Send Fails", phone, email, vehicle: "motorcycle", password: "riderpass1" } }),
     );
-    // A 502, not a false 200 "check your email" — the applicant must be
-    // told the truth about what actually happened.
-    expect(signup.statusCode).toBe(502);
+    // A real 200 with emailSent: false — not a false "email sent, check
+    // your inbox" claim, but also not a failed signup: the outage was in
+    // sending a verification code, not in creating the account, and
+    // signup must never fail because of the former (see selfSignup's own
+    // comment) — a provider outage used to 502 the whole response even
+    // though the rider/user/membership rows below already existed,
+    // leaving a real account the applicant could never get back to
+    // (resubmitting hit "already exists") and could never log into either
+    // (login used to require emailVerifiedAt, which a never-delivered
+    // code can never satisfy).
+    expect(signup.statusCode).toBe(200);
+    expect((signup.json() as { emailSent: boolean }).emailSent).toBe(false);
 
-    // The application itself was still created (not lost) — only the
-    // email attempt failed.
     const rider = await harness.prisma.rider.findUniqueOrThrow({ where: { phone: normalizePhone(phone) } });
     expect(rider).toBeTruthy();
     const membership = await harness.prisma.riderMembership.findUniqueOrThrow({ where: { riderId_businessId: { riderId: rider.id, businessId: harness.business.id } } });
     expect(membership.status).toBe("pending");
 
-    // No never-delivered code is left sitting around, and — critically —
-    // resubmitting the exact same form (once the provider is healthy
-    // again, simulated here by exiting withFailingProvider) actually gets
-    // a real code out this time, not another silent no-op.
-    const retry = await harness.app.inject({ method: "POST", url: "/api/rider-signup", payload: { name: "Send Fails", phone, email, vehicle: "motorcycle", password: "riderpass1" } });
-    expect(retry.statusCode).toBe(200);
-    const code = latestVerificationCode(email);
-    const verify = await harness.app.inject({ method: "POST", url: "/api/rider-signup/verify", payload: { email, code } });
-    expect(verify.statusCode).toBe(200);
+    // And — the actual fix — login works immediately with the password
+    // just chosen, verification email or not.
+    const login = await harness.app.inject({ method: "POST", url: "/api/auth/login", payload: { identifier: email, password: "riderpass1" } });
+    expect(login.statusCode).toBe(200);
   });
 
   it("resend-verification also surfaces a provider failure honestly instead of claiming success", async () => {

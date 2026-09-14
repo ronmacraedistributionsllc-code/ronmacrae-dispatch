@@ -99,6 +99,62 @@ describe("merchant portal", () => {
     expect(notifyEmail?.text).toContain(email);
   });
 
+  it("a merchant who never verifies their email logs in immediately once approved — the exact production bug: signup succeeds (even if the verification email fails to send), and approval alone gates login, not a never-completed verification step", async () => {
+    const publicBusiness = await harness.prisma.business.upsert({ where: { slug: "ronmacrae" }, create: { name: "Public Dispatch", slug: "ronmacrae" }, update: {} });
+    const email = `never-verified-${uniq()}@vbr.example`;
+    const password = "securepass1";
+    const signup = await harness.app.inject({
+      method: "POST",
+      url: "/api/merchant-signup",
+      payload: { ownerName: "Never Verified Owner", businessName: `Unverified Store ${uniq()}`, email, phone: `+187655${uniq().slice(-5)}`, pickupAddressText: "Kingston", password },
+    });
+    expect(signup.statusCode).toBe(200);
+    const { merchantId } = signup.json() as { merchantId: string };
+    const user = await harness.prisma.user.findUniqueOrThrow({ where: { email } });
+    expect(user.emailVerifiedAt).toBeNull(); // never verified — /verify was never called
+
+    // Before approval: refused, but for being unapproved, never for being
+    // unverified — login must never conflate the two.
+    const beforeApproval = await harness.app.inject({ method: "POST", url: "/api/merchant-portal/login", payload: { email, password } });
+    expect(beforeApproval.statusCode).toBe(403);
+    expect((beforeApproval.json() as { error: { message: string } }).error.message).not.toMatch(/verify/i);
+
+    const admin = await adminToken(harness, publicBusiness.id);
+    const approve = await harness.app.inject({ method: "PATCH", url: `/api/merchants/${merchantId}`, headers: { authorization: `Bearer ${admin}` }, payload: { active: true } });
+    expect(approve.statusCode).toBe(200);
+
+    // Approved, still never verified — login must succeed anyway, with
+    // the exact password chosen at signup. No re-verification, no second
+    // signup, no "please verify your email" wall.
+    const login = await harness.app.inject({ method: "POST", url: "/api/merchant-portal/login", payload: { email, password } });
+    expect(login.statusCode).toBe(200);
+  });
+
+  it("a verification-email provider outage during signup is reported honestly (emailSent: false) but never fails the signup itself — the account is real and already usable once approved", async () => {
+    await harness.prisma.business.upsert({ where: { slug: "ronmacrae" }, create: { name: "Public Dispatch", slug: "ronmacrae" }, update: {} });
+    const email = `outage-${uniq()}@vbr.example`;
+    const realSend = harness.ctx.email.send.bind(harness.ctx.email);
+    harness.ctx.email.send = async () => ({ status: "failed" as const, error: "simulated provider outage" });
+    let signup;
+    try {
+      signup = await harness.app.inject({
+        method: "POST",
+        url: "/api/merchant-signup",
+        payload: { ownerName: "Outage Owner", businessName: `Outage Store ${uniq()}`, email, phone: `+187655${uniq().slice(-5)}`, pickupAddressText: "Kingston", password: "securepass1" },
+      });
+    } finally {
+      harness.ctx.email.send = realSend;
+    }
+    // Real 200, not the 502 this used to return — the account/application
+    // is genuinely created regardless of whether the email attempt
+    // succeeded; the response says so honestly instead of throwing.
+    expect(signup.statusCode).toBe(200);
+    expect((signup.json() as { emailSent: boolean }).emailSent).toBe(false);
+    const merchant = await harness.prisma.merchant.findFirst({ where: { email } });
+    expect(merchant).toBeTruthy();
+    expect(merchant?.applicationStatus).toBe("pending");
+  });
+
   it("Platform Admin can reject a pending merchant application with a reason — distinct from a plain disable — and login stays refused", async () => {
     await harness.prisma.business.upsert({ where: { slug: "ronmacrae" }, create: { name: "Public Dispatch", slug: "ronmacrae" }, update: {} });
     const email = `rejected-owner-${uniq()}@vbr.example`;

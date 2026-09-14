@@ -258,7 +258,7 @@ export class RidersService {
    * one exception: their membership here can go straight to active, same
    * rule `create()` already uses for a re-adding staff member.
    */
-  async selfSignup(businessId: string, input: z.infer<typeof SignupBody>): Promise<{ status: "pending" | "active"; riderId: string }> {
+  async selfSignup(businessId: string, input: z.infer<typeof SignupBody>): Promise<{ status: "pending" | "active"; riderId: string; emailSent: boolean }> {
     const phone = normalizePhone(input.phone);
     const existing = await this.app.prisma.rider.findUnique({ where: { phone }, include: { user: { select: { email: true, emailVerifiedAt: true } } } });
     if (existing) {
@@ -278,10 +278,20 @@ export class RidersService {
       // them a working code, not silently look like success a second time
       // with nothing actually sent. An already-verified rider (a genuine
       // second-business application) needs nothing further here.
+      // Email verification is no longer required to sign in (only
+      // platform/membership approval is) — a failed resend here is
+      // reported honestly, not thrown, so resubmitting never itself
+      // becomes the thing that fails.
+      let emailSent = true;
       if (!existing.user?.emailVerifiedAt) {
-        await sendEmailCode(this.app, existing.user?.email || input.email, RIDER_EMAIL_VERIFY_PURPOSE, "Verify your email", (code) => `Your Ronmacrae courier sign-up code is ${code}. It expires in 10 minutes.`);
+        try {
+          await sendEmailCode(this.app, existing.user?.email || input.email, RIDER_EMAIL_VERIFY_PURPOSE, "Verify your email", (code) => `Your Ronmacrae courier sign-up code is ${code}. It expires in 10 minutes.`);
+        } catch (err) {
+          emailSent = false;
+          this.app.log.error({ riderId: existing.id, error: err instanceof Error ? err.message : String(err) }, "courier verification email failed");
+        }
       }
-      return { status, riderId: existing.id };
+      return { status, riderId: existing.id, emailSent };
     }
 
     const emailOwner = await this.app.prisma.user.findUnique({ where: { email: input.email } });
@@ -316,8 +326,16 @@ export class RidersService {
       create: { riderId: rider.id, businessId, status: "pending" },
       update: { status: "pending" },
     });
-    await sendEmailCode(this.app, input.email, RIDER_EMAIL_VERIFY_PURPOSE, "Verify your email", (code) => `Your Ronmacrae courier sign-up code is ${code}. It expires in 10 minutes.`);
-    return { status: "pending", riderId: rider.id };
+    // See the existing-rider branch above's comment — signup must not
+    // fail because this send did; the rider/membership rows already exist.
+    let emailSent = true;
+    try {
+      await sendEmailCode(this.app, input.email, RIDER_EMAIL_VERIFY_PURPOSE, "Verify your email", (code) => `Your Ronmacrae courier sign-up code is ${code}. It expires in 10 minutes.`);
+    } catch (err) {
+      emailSent = false;
+      this.app.log.error({ riderId: rider.id, error: err instanceof Error ? err.message : String(err) }, "courier verification email failed");
+    }
+    return { status: "pending", riderId: rider.id, emailSent };
   }
 
   /** Resend the verification code — same cooldown as sendEmailCode's own
@@ -567,7 +585,7 @@ export async function riderRoutes(app: FastifyInstance, ctx: AppCtx): Promise<vo
       const business = await ctx.prisma.business.findUnique({ where: { slug: DEFAULT_PUBLIC_BUSINESS_SLUG } });
        if (!business) throw httpErrors.createError(503, "Courier sign-up is not available right now");
       const result = await svc.selfSignup(business.id, body);
-      await ctx.audit.record({ id: null, role: "anonymous" }, "rider.signup", "rider", result.riderId, { status: result.status });
+      await ctx.audit.record({ id: null, role: "anonymous" }, "rider.signup", "rider", result.riderId, { status: result.status, emailSent: result.emailSent });
       return result;
     },
   );

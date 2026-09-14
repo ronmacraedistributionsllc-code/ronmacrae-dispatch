@@ -146,13 +146,13 @@ export async function authRoutes(app: FastifyInstance, ctx: AppCtx): Promise<voi
       throw httpErrors.createError(401, "Invalid credentials");
     }
     if (!user.active) throw httpErrors.createError(403, "Account disabled");
-    // Only a rider's own public self-signup (riders.ts) ever leaves email
-    // unverified — an admin/dispatcher directly creating any login (staff
-    // or rider) is itself the vouching, and sets emailVerifiedAt right
-    // away, so this never blocks those.
-    if (user.role === "rider" && user.email && !user.emailVerifiedAt) {
-      throw httpErrors.createError(403, "Please verify your email before signing in — check your inbox for the code.");
-    }
+    // Email verification is no longer a login gate for anyone, riders
+    // included (a never-delivered verification email — a real production
+    // failure mode, see sendEmailCode's doc comment in
+    // customer-account.ts — must never be able to permanently lock out an
+    // otherwise-legitimate account). A rider's actual job access is
+    // already separately gated by RiderMembership/platformStatus per
+    // route, not by this login check.
     if (user.totpEnabled && user.totpSecret) {
       if (!body.totpCode || !verifyTotp(user.totpSecret, body.totpCode)) {
         throw httpErrors.createError(401, "TOTP code required");

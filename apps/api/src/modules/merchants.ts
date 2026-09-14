@@ -220,21 +220,31 @@ export async function merchantRoutes(app: FastifyInstance, ctx: AppCtx): Promise
         staff: { create: { userId: user.id, active: true } },
       },
     });
+    // Signup itself must never fail because the verification email did —
+    // the account is real and already created; email verification is no
+    // longer a gate on using it (only admin approval is — see
+    // merchant-portal.ts's login route). A provider outage here used to
+    // 502 the whole signup response even though the merchant/user rows
+    // above already existed, leaving a real account the applicant could
+    // never get back to (retrying hit "already associated with an
+    // account") and could never log into either (the old login route
+    // required emailVerifiedAt, which a never-delivered code can never
+    // satisfy). Both are fixed now: this reports honestly instead of
+    // throwing, and login no longer depends on this at all.
+    let emailSent = true;
     try {
       await sendEmailCode(ctx, email, MERCHANT_EMAIL_VERIFY_PURPOSE, "Verify your merchant account", (code) => `Your Ronmacrae merchant verification code is ${code}. It expires in 10 minutes.`);
     } catch (err) {
-      // The account/application is retained so a provider retry can complete
-      // onboarding; the API truthfully reports that verification was not sent.
+      emailSent = false;
       ctx.log.error({ email, merchantId: merchant.id, error: err instanceof Error ? err.message : String(err) }, "merchant verification email failed");
-      throw err;
     }
-    await ctx.audit.record({ id: null, role: "anonymous" }, "merchant.signup", "merchant", merchant.id, { email });
+    await ctx.audit.record({ id: null, role: "anonymous" }, "merchant.signup", "merchant", merchant.id, { email, emailSent });
     // Best-effort — never blocks the applicant's own response, see
     // platform-notify.ts's doc comment.
     void notifyOwnersOfApplication(ctx, "merchant", { id: merchant.id, name: merchant.name, applicantEmail: email }).catch((err) =>
       ctx.log.error({ err: String(err), merchantId: merchant.id }, "platform-owner application notification failed"),
     );
-    return { status: "pending", merchantId: merchant.id, email };
+    return { status: "pending", merchantId: merchant.id, email, emailSent };
   });
 
   app.post("/api/merchant-signup/verify", { config: { rateLimit: { max: 20, timeWindow: "1 minute" } } }, async (req) => {
