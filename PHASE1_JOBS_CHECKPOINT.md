@@ -2757,3 +2757,32 @@ section. Do not skip that honesty note.
 (no Render dashboard / Resend dashboard / real inbox access from this
 session); the Rider→Courier rename; shared signup with a merchant
 option; courier business-access scoping; the theme switcher.
+
+## OpenCode/Luna session — Tasks B, C (partial), E (partial)
+
+Full narrative and honest per-task status is in
+`PHASE3_COURIER_BRANDING_CHECKPOINT.md` at the repo root — that file, not
+this one, is what the user's OpenCode ("Luna") setup reads to continue
+work via `/continue-build`. Summary: Task B (rename) done; Task C
+(merchant signup/approval) and Task E (theme) real but partial, with
+named gaps; Task D (courier business-access scoping) not started despite
+a roster model existing.
+
+## Commands run and results (OpenCode/Luna session, independently re-verified)
+
+| # | Command | Result |
+| --- | --- | --- |
+| 1 | `npm run typecheck --workspace apps/api --workspace apps/web` | **PASS** — 0 errors |
+| 2 | `DEV_DB=1 npx vitest run --root apps/api` | **PASS — 287/287** across 39 files, up from 276 |
+| 3 | `npm run test:unit --workspace apps/web` | **PASS — 10/10**, 3 files |
+| 4 | `npm run test:unit --workspace packages/contracts` | **PASS — 8/8** |
+| 5 | `npm run test:unit --workspace packages/notifications` | **PASS — 6/6** |
+| 6 | `npm run build --workspace apps/api --workspace apps/web` | **PASS** — clean |
+| 7 | Full e2e suite (35 specs), serial (`--workers=1`), fresh `e2e-test.db` | **PASS — 35/35**, up from 34/35 — a genuine fix to the long-standing `booking.spec.ts` flake, not a workaround |
+| 8 | `DEV_DB=1 node apps/api/scripts/prepare-db.mjs` | schema valid; new `Rating`/`MerchantRider` changes are purely additive — safe for `prisma db push` against production Postgres |
+
+**Not done**: Task D (courier business-access scoping) — not started.
+Task C's distinct-rejection-state, Bearer/Logistics-Company self-signup,
+admin-notification-on-new-application, and true e2e browser coverage.
+Task E's four specifically-named themes and the preview/screenshot
+deliverable. Confirming real production email delivery.

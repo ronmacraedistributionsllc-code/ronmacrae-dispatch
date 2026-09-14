@@ -4259,3 +4259,47 @@ dashboard / Resend dashboard / a real inbox this session cannot reach);
 anything about *why* delivery might be failing beyond the one code-level
 bug found (unverified sending domain, wrong API key, and provider rate
 limiting are equally possible and unchecked).
+
+## OpenCode/Luna session — Tasks B, C (partial), E (partial); D not started
+
+Handed the courier-branding work (Tasks B–E) to the user's OpenCode
+("Luna") setup, which works from `PHASE3_COURIER_BRANDING_CHECKPOINT.md`
+at the repo root via its own `/continue-build` command, not this file.
+Luna pushed 5 commits directly (`331ce11` through `11eb040`) — full
+detail, and an honest per-task status corrected against her own initial
+self-report, is in that checkpoint file; this entry is a pointer, not a
+duplicate.
+
+**Independently re-verified** (not just trusting Luna's own report):
+typecheck clean, `apps/api` vitest **287/287** across 39 files (up from
+this session's 276), `apps/web`/`packages/contracts`/
+`packages/notifications` unit tests all green, build clean, and — the
+standout result — the full e2e suite now genuinely **35/35**, including
+a real fix (not a workaround) to the `booking.spec.ts` flake every prior
+stage in this project's history, including this session's own Stages
+36–39 and the recovery checkpoint, had dismissed as pre-existing and
+environmental. It wasn't only that; the test just never exercised the
+app's own legitimate "no geocoding match, confirm a manual pin" fallback
+path, and Luna's fix does.
+
+**Done and verified**: Task B (Rider→Courier rename, user-facing text
+only, internal identifiers untouched). Task A gained a complementary
+boot-time check (fail fast if `EMAIL_PROVIDER=resend` lacks real
+credentials) and the active provider is now visible on `/api/health`.
+
+**Partially done** — real functionality shipped, with concrete named
+gaps (see the checkpoint file for the full list): Task C (merchant
+self-signup → pending → approval → real portal access all work and are
+tested; missing a distinct rejected state, a Bearer/Logistics Company
+self-signup option, admin notification on new applications, and true
+end-to-end browser test coverage). Task E (a real `jamaica` theme +
+selector shipped; the four specifically-named themes were not built, no
+preview/screenshot deliverable).
+
+**Not started**: Task D (courier business-access scoping). A
+`MerchantRider` roster model exists and is properly enforced on the
+*merchant* side (a merchant can't touch another merchant's roster or
+orders), but nothing restricts what a *courier* sees — their job list,
+orders, cash, messages, tracking, and routes are filtered exactly as
+before this phase. This is the spec's explicit security requirement and
+remains open; treat it as the next task.
