@@ -79,6 +79,31 @@ interface StaffContext {
  *  only exist by having resolved successfully at login time) treats it as
  *  the account having been removed out from under an existing session and
  *  throws via requireStaffContext below. */
+async function realStaffMemberships(ctx: AppCtx, userId: string) {
+  const staffMemberships = await ctx.prisma.staffMembership.findMany({
+    where: { userId, active: true },
+    include: { business: { select: { id: true, name: true } } },
+  });
+  return staffMemberships.map((m) => ({ businessId: m.businessId, businessName: m.business.name, role: m.role }));
+}
+
+/**
+ * Roles and memberships (spec: "one account may legitimately have
+ * multiple roles... courier + store manager + logistics dispatcher,
+ * without needing three separate accounts") — StaffMembership,
+ * MerchantStaff, LogisticsCompanyStaff, and a Rider profile were always
+ * independent rows keyed off the same shared User, so one account could
+ * already HOLD all of them. What this function got wrong: a rider-role
+ * account short-circuited here unconditionally, before ever checking
+ * whether it also had real, active StaffMembership rows — meaning a
+ * courier who was ALSO a dispatcher could never actually use that staff
+ * access through the shared login, no matter how many StaffMembership
+ * rows an admin had genuinely granted them. Fixed: the rider branch now
+ * resolves real staff memberships the exact same way the non-rider
+ * branch always has, and only falls back to `businessId: null` when
+ * there genuinely are none — every existing rider-only account (the
+ * common case) sees zero behavior change.
+ */
 export async function resolveStaffContext(
   ctx: AppCtx,
   user: { id: string; role: Role; platformRole: string | null },
@@ -88,13 +113,15 @@ export async function resolveStaffContext(
     return { businessId: null, role: user.role, platformRole: "owner", memberships: [] };
   }
   if (user.role === "rider") {
-    return { businessId: null, role: user.role, platformRole: null, memberships: [] };
+    const memberships = await realStaffMemberships(ctx, user.id);
+    if (memberships.length === 0) {
+      return { businessId: null, role: user.role, platformRole: null, memberships: [] };
+    }
+    const chosen =
+      (requestedBusinessId ? memberships.find((m) => m.businessId === requestedBusinessId) : undefined) ?? memberships[0]!;
+    return { businessId: chosen.businessId, role: chosen.role, platformRole: null, memberships };
   }
-  const staffMemberships = await ctx.prisma.staffMembership.findMany({
-    where: { userId: user.id, active: true },
-    include: { business: { select: { id: true, name: true } } },
-  });
-  const memberships = staffMemberships.map((m) => ({ businessId: m.businessId, businessName: m.business.name, role: m.role }));
+  const memberships = await realStaffMemberships(ctx, user.id);
   if (memberships.length === 0) return null;
   const chosen =
     (requestedBusinessId ? memberships.find((m) => m.businessId === requestedBusinessId) : undefined) ?? memberships[0]!;
@@ -311,7 +338,17 @@ export async function authRoutes(app: FastifyInstance, ctx: AppCtx): Promise<voi
     // a "Switch workspace" control can show up anywhere in the app, not
     // only right after signing in.
     const otherWorkspaces = [...(await merchantWorkspacesFor(ctx, user.id)), ...(await logisticsWorkspacesFor(ctx, user.id))];
-    return { user: toUserDto(user), rider, otherWorkspaces };
+    // Both reflect THIS session's own token (req.user, already decoded),
+    // not a fresh recomputation — a rider who also holds real
+    // StaffMembership rows (see resolveStaffContext's own doc comment)
+    // has a businessId and a real staff effectiveRole here too; a rider
+    // with none still gets businessId: null / effectiveRole: "rider",
+    // unchanged. `user.role` (in the UserDto above) is the stable,
+    // identity-level DB column and never changes with which business is
+    // chosen — `effectiveRole` is the actually-granted role for THIS
+    // session, the same one requireStaff() itself checks server-side, and
+    // is what role-gated nav (layout.tsx) needs to ask instead.
+    return { user: toUserDto(user), rider, otherWorkspaces, businessId: req.user!.businessId ?? null, effectiveRole: req.user!.role };
   });
 
   // Stage E (spec: theme switcher, "persist per user") — any signed-in

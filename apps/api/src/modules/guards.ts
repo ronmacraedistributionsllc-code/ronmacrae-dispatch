@@ -36,10 +36,22 @@ export function makeRequireOwner(): preHandlerAsyncHookHandler {
   };
 }
 
+/** Gates on `riderId` being present on the token, not on `role === "rider"`.
+ *  Those used to be equivalent, but no longer are: a courier who is ALSO a
+ *  real dispatcher (roles/memberships — see resolveStaffContext's own doc
+ *  comment in auth.ts) gets a token whose `role` claim is their granted
+ *  staff role ("dispatcher"), needed for requireStaff() to work for them,
+ *  while `riderId` stays populated regardless of `role` (issueTokenPair
+ *  always sets it from `user.rider?.id`, not from `role`) — checking that
+ *  instead is what lets the exact same token pass both this guard and
+ *  requireStaff(), matching "one account, multiple simultaneous
+ *  capabilities" rather than picking only one. Every actual bearer.ts
+ *  route already scopes its own queries on `req.user.riderId`, never on
+ *  `role`, so this is the only place that needed to change. */
 export function makeRequireRider(): preHandlerAsyncHookHandler {
   return async (req: FastifyRequest) => {
     if (!req.user) throw httpErrors.createError(401, "Authentication required");
-    if (req.user.role !== "rider") throw httpErrors.createError(403, "Bearer-only endpoint");
+    if (!req.user.riderId) throw httpErrors.createError(403, "Bearer-only endpoint");
   };
 }
 

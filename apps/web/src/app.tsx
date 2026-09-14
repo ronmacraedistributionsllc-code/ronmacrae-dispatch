@@ -7,6 +7,7 @@ import { Layout } from "./components/layout.js";
 import { Book } from "./pages/book.js";
 import { CodReconciliation } from "./pages/cod.js";
 import { Dashboard } from "./pages/dashboard.js";
+import { RiderDashboard } from "./pages/rider-dashboard.js";
 import { Jobs } from "./pages/jobs.js";
 import { Login } from "./pages/login.js";
 import { MyPackages } from "./pages/my-packages.js";
@@ -46,6 +47,21 @@ function Protected({ children }: { children: React.ReactNode }): React.ReactNode
   if (loading) return <Spinner label="Loading session…" />;
   if (!user) return <Navigate to="/login" replace />;
   return <Layout>{children}</Layout>;
+}
+
+/** Roles/memberships: reaches a courier's own dashboard even when their
+ *  *primary* account type is staff (root "/" defaults to whichever
+ *  dashboard matches user.role — see dashboard.tsx — so a dispatcher who
+ *  is ALSO a real courier had no way to reach the courier side at all,
+ *  even though a Rider profile and its data were already there). Nested
+ *  inside <Protected>, same as OwnerOnly below; redirects home rather
+ *  than rendering an inert "Loading courier profile…" for the (should
+ *  never normally happen, since the nav link only shows when `rider`
+ *  exists) case of someone with no courier profile landing here anyway. */
+function RiderOnly({ children }: { children: React.ReactNode }): React.ReactNode {
+  const { rider } = useAuth();
+  if (!rider) return <Navigate to="/" replace />;
+  return <>{children}</>;
 }
 
 /** Platform-wide authority (spec: the platform-admin console), distinct
@@ -88,6 +104,16 @@ export default function App(): React.JSX.Element {
                 element={
                   <Protected>
                     <Dashboard />
+                  </Protected>
+                }
+              />
+              <Route
+                path="/courier"
+                element={
+                  <Protected>
+                    <RiderOnly>
+                      <RiderDashboard />
+                    </RiderOnly>
                   </Protected>
                 }
               />

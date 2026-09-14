@@ -8,6 +8,11 @@ import { CompactThemeSelect } from "../lib/theme.js";
 
 const TABS = [
   { to: "/", label: "Dashboard", icon: "🏠", end: true },
+  // Roles/memberships: only ever shown to a staff-primary account that's
+  // ALSO a real courier (rider !== null but user.role !== "rider" — a
+  // plain rider already lands on their own dashboard at "/") — filtered
+  // in below, not hidden by any of the STAFF_ONLY_TABS machinery.
+  { to: "/courier", label: "My Courier Dashboard", icon: "🛵" },
   { to: "/ops", label: "Ops board", icon: "📋" },
   { to: "/jobs", label: "Jobs", icon: "📦", end: true },
   { to: "/jobs/new", label: "New order", icon: "➕" },
@@ -50,7 +55,7 @@ const CONNECTION_DOT: Record<ConnectionStatus, string> = {
 };
 
 export function Layout({ children }: { children: React.ReactNode }): React.JSX.Element {
-  const { user, logout, otherWorkspaces } = useAuth();
+  const { user, rider, logout, otherWorkspaces, businessId, effectiveRole } = useAuth();
   const navigate = useNavigate();
   const { unreadCount, markRead, status } = useRealtime();
 
@@ -75,9 +80,17 @@ export function Layout({ children }: { children: React.ReactNode }): React.JSX.E
     // alert while sitting on the same page would clear itself immediately.
   }, [pathname]);
   useEffect(() => setMoreOpen(false), [pathname]);
+  // Roles/memberships: ask what this SESSION is actually granted
+  // (effectiveRole/businessId — the same values requireStaff() itself
+  // checks server-side), not the stable identity-level user.role, which
+  // stays "rider" forever for a courier account even when they're also a
+  // real dispatcher elsewhere (see auth.ts's resolveStaffContext doc
+  // comment). A rider with no staff access at all still has
+  // businessId: null here, so this is unchanged for the common case.
   const tabs = TABS.filter((t) => {
-    if (user?.role === "rider" && STAFF_ONLY_TABS.has(t.to)) return false;
-    if (ADMIN_ACCOUNTANT_ONLY_TABS.has(t.to) && user?.role !== "admin" && user?.role !== "accountant") return false;
+    if (t.to === "/courier") return Boolean(rider) && user?.role !== "rider";
+    if (!businessId && STAFF_ONLY_TABS.has(t.to)) return false;
+    if (ADMIN_ACCOUNTANT_ONLY_TABS.has(t.to) && effectiveRole !== "admin" && effectiveRole !== "accountant") return false;
     if (OWNER_ONLY_TABS.has(t.to) && user?.platformRole !== "owner") return false;
     return true;
   });

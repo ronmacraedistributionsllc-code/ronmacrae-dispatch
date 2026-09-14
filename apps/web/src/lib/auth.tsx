@@ -41,6 +41,21 @@ export interface AuthState {
    *  shows up as a "Switch workspace" control (see layout.tsx) whenever
    *  non-empty. */
   otherWorkspaces: Workspace[];
+  /** This session's own real staff business, if any (roles/memberships:
+   *  "one account, multiple roles" — a courier who is ALSO a dispatcher
+   *  gets a real businessId here too, from the same token, no separate
+   *  "switch" step; see resolveStaffContext's own doc comment in
+   *  auth.ts). Null for a rider-only account, exactly as before this
+   *  existed — nothing changes for the common case. */
+  businessId: string | null;
+  /** The role actually granted for THIS session's chosen business — same
+   *  value requireStaff() itself checks server-side. Distinct from
+   *  `user.role`, the stable identity-level field that never changes with
+   *  which business is chosen: a courier who is also a dispatcher has
+   *  `user.role === "rider"` (their real account type) but
+   *  `effectiveRole === "dispatcher"` (what they're actually granted here
+   *  and now) — role-gated nav should ask this, not `user.role`. */
+  effectiveRole: string | null;
   loading: boolean;
   /** One shared sign-in for every kind of account (spec: "no separate
    *  rider, merchant, logistics, or admin login pages") — the caller
@@ -66,14 +81,18 @@ export function AuthProvider({ children }: { children: ReactNode }): ReactNode {
   const [user, setUser] = useState<UserDto | null>(null);
   const [rider, setRider] = useState<RiderDto | null>(null);
   const [otherWorkspaces, setOtherWorkspaces] = useState<Workspace[]>([]);
+  const [businessId, setBusinessId] = useState<string | null>(null);
+  const [effectiveRole, setEffectiveRole] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
   const loadMe = useCallback(async () => {
     try {
-      const me = await apiFetch<{ user: UserDto; rider: RiderDto | null; otherWorkspaces: Workspace[] }>("/auth/me");
+      const me = await apiFetch<{ user: UserDto; rider: RiderDto | null; otherWorkspaces: Workspace[]; businessId: string | null; effectiveRole: string | null }>("/auth/me");
       setUser(me.user);
       setRider(me.rider);
       setOtherWorkspaces(me.otherWorkspaces ?? []);
+      setBusinessId(me.businessId ?? null);
+      setEffectiveRole(me.effectiveRole ?? null);
       // Stage E ("persist per user") — a saved server-side preference
       // follows this person to a new device, overriding whatever that
       // device's own localStorage already had.
@@ -82,6 +101,8 @@ export function AuthProvider({ children }: { children: ReactNode }): ReactNode {
       setUser(null);
       setRider(null);
       setOtherWorkspaces([]);
+      setBusinessId(null);
+      setEffectiveRole(null);
     } finally {
       setLoading(false);
     }
@@ -133,11 +154,13 @@ export function AuthProvider({ children }: { children: ReactNode }): ReactNode {
     setUser(null);
     setRider(null);
     setOtherWorkspaces([]);
+    setBusinessId(null);
+    setEffectiveRole(null);
   }, []);
 
   const value = useMemo(
-    () => ({ user, rider, otherWorkspaces, loading, login, logout, refresh: loadMe }),
-    [user, rider, otherWorkspaces, loading, login, logout, loadMe],
+    () => ({ user, rider, otherWorkspaces, businessId, effectiveRole, loading, login, logout, refresh: loadMe }),
+    [user, rider, otherWorkspaces, businessId, effectiveRole, loading, login, logout, loadMe],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

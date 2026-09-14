@@ -152,4 +152,84 @@ describe("one shared login for every kind of account", () => {
     const res = await harness.app.inject({ method: "POST", url: "/api/auth/switch-to-merchant", headers: { authorization: `Bearer ${admin}` } });
     expect(res.statusCode).toBe(403);
   });
+
+  it("a courier who is ALSO a real dispatcher logs in with BOTH capabilities at once, from the one same account — no separate accounts, no switch step needed (spec: 'courier + store manager + logistics dispatcher, one account')", async () => {
+    const password = hashPassword("courierdispatcher1");
+    const email = `courier-dispatcher-${uniq()}@example.com`;
+    const rider = await harness.prisma.rider.create({
+      data: {
+        name: "Courier Dispatcher",
+        phone: `+1876555${uniq().slice(-4)}`,
+        vehicle: "motorcycle",
+        status: "available",
+        user: { create: { email, name: "Courier Dispatcher", role: "rider", passwordHash: password } },
+      },
+      include: { user: true },
+    });
+    // Real, active StaffMembership — the exact thing resolveStaffContext's
+    // old rider short-circuit made permanently unreachable for a rider,
+    // no matter how genuinely it was granted.
+    await harness.prisma.staffMembership.create({
+      data: { userId: rider.userId!, businessId: harness.business.id, role: "dispatcher", active: true },
+    });
+
+    const login = await harness.app.inject({ method: "POST", url: "/api/auth/login", payload: { identifier: email, password: "courierdispatcher1" } });
+    expect(login.statusCode).toBe(200);
+    const body = login.json() as { workspace: string; accessToken: string; riderId: string | null; businessId: string | null };
+    expect(body.workspace).toBe("staff");
+    expect(body.riderId).toBe(rider.id); // still a courier...
+    expect(body.businessId).toBe(harness.business.id); // ...AND now genuinely also a dispatcher, same token.
+
+    // The one token actually works for BOTH a staff-guarded route...
+    const jobsList = await harness.app.inject({ method: "GET", url: "/api/jobs", headers: { authorization: `Bearer ${body.accessToken}` } });
+    expect(jobsList.statusCode).toBe(200);
+    // ...and a rider-guarded one.
+    const bearerMe = await harness.app.inject({ method: "GET", url: "/api/bearer/me", headers: { authorization: `Bearer ${body.accessToken}` } });
+    expect(bearerMe.statusCode).toBe(200);
+    expect((bearerMe.json() as { rider: { id: string } }).rider.id).toBe(rider.id);
+
+    // /api/auth/me reports the granted dispatcher role for THIS session
+    // (effectiveRole) separately from the account's own stable identity
+    // (user.role, which stays "rider" — that never changes with which
+    // business happens to be chosen).
+    const me = await harness.app.inject({ method: "GET", url: "/api/auth/me", headers: { authorization: `Bearer ${body.accessToken}` } });
+    expect(me.statusCode).toBe(200);
+    const meBody = me.json() as { user: { role: string }; effectiveRole: string; businessId: string | null; rider: { id: string } | null };
+    expect(meBody.user.role).toBe("rider");
+    expect(meBody.effectiveRole).toBe("dispatcher");
+    expect(meBody.businessId).toBe(harness.business.id);
+    expect(meBody.rider?.id).toBe(rider.id);
+  });
+
+  it("a rider with no staff access at all sees no change: businessId stays null, effectiveRole stays \"rider\", staff routes stay refused", async () => {
+    const password = "riderOnly1";
+    const email = `rider-only-${uniq()}@example.com`;
+    const rider = await harness.prisma.rider.create({
+      data: {
+        name: "Rider Only",
+        phone: `+1876555${uniq().slice(-4)}`,
+        vehicle: "car",
+        status: "available",
+        user: { create: { email, name: "Rider Only", role: "rider", passwordHash: hashPassword(password) } },
+      },
+    });
+
+    const login = await harness.app.inject({ method: "POST", url: "/api/auth/login", payload: { identifier: email, password } });
+    expect(login.statusCode).toBe(200);
+    const body = login.json() as { businessId: string | null; riderId: string | null };
+    expect(body.businessId).toBeNull();
+    expect(body.riderId).toBe(rider.id);
+
+    const me = await harness.app.inject({ method: "GET", url: "/api/auth/me", headers: { authorization: `Bearer ${(login.json() as { accessToken: string }).accessToken}` } });
+    const meBody = me.json() as { effectiveRole: string; businessId: string | null };
+    expect(meBody.effectiveRole).toBe("rider");
+    expect(meBody.businessId).toBeNull();
+
+    const jobsList = await harness.app.inject({
+      method: "GET",
+      url: "/api/jobs",
+      headers: { authorization: `Bearer ${(login.json() as { accessToken: string }).accessToken}` },
+    });
+    expect(jobsList.statusCode).toBe(403);
+  });
 });
