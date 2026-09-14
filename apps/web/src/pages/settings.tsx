@@ -78,7 +78,11 @@ export function Settings(): React.JSX.Element {
         {save.isSuccess ? <p className="text-sm text-emerald-400">Saved.</p> : null}
         {canEdit ? <button className="btn-accent" disabled={save.isPending}>{save.isPending ? "Saving…" : "Save settings"}</button> : null}
       </form>
-      <section className="card"><h2 className="mb-3 font-semibold">Theme</h2><ThemeSwitcher /></section>
+      <section className="card space-y-3">
+        <h2 className="font-semibold">Theme</h2>
+        <ThemeSwitcher />
+        <a href="/theme-preview" className="inline-block text-xs text-brand-accent underline">Preview every theme side by side →</a>
+      </section>
     </div>
   );
 }

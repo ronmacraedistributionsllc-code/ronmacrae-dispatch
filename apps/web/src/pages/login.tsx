@@ -1,5 +1,5 @@
 import React, { useState, type FormEvent } from "react";
-import { useNavigate } from "react-router-dom";
+import { Navigate, useNavigate } from "react-router-dom";
 import { useAuth } from "../lib/auth.js";
 import { ApiError } from "../lib/api.js";
 import { CompactThemeSelect } from "../lib/theme.js";
@@ -25,12 +25,11 @@ export function Login(): React.JSX.Element {
   const [options, setOptions] = useState<{ type: "merchant" | "logistics"; id: string; name: string }[] | null>(null);
   const navigate = useNavigate();
 
+  // An already-authenticated visit to /login (stale tab, bookmark, back
+  // button) must not strand the user on this page — actually redirect them
+  // in, the same way `Protected` redirects an unauthenticated visit out.
   if (!loading && user) {
-    return (
-      <div className="flex h-dvh items-center justify-center text-sm text-zinc-400">
-        Redirecting…
-      </div>
-    );
+    return <Navigate to="/" replace />;
   }
 
   async function attemptLogin(workspaceId?: string) {

@@ -158,6 +158,14 @@ model User {
   lastLoginAt  DateTime?
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
+  /** Stage E (spec: theme switcher, "persist per user"). Null means the
+   *  default theme, same as no value in localStorage — a fresh login on a
+   *  brand-new device applies this over whatever that device's own
+   *  localStorage already had, so the choice genuinely follows the person,
+   *  not just the browser. Free-text (not an enum) so a new theme id never
+   *  needs a migration — an unrecognized value is just treated as unset by
+   *  the frontend's own THEMES allow-list. */
+  theme        String?
 
   rider     Rider?
   staffMemberships StaffMembership[]

@@ -1,6 +1,6 @@
 # Phase 3 — Courier Branding & Access Checkpoint
 
-**Status: IN PROGRESS (A, B, D done; C and E partial).**
+**Status: IN PROGRESS (A, B, D, E done; C partial).**
 This file supersedes `PHASE1_JOBS_CHECKPOINT.md` and
 `PHASE2_JOBS_SCREEN_CHECKPOINT.md` for `/continue-build` purposes (both
 describe the project's earliest, single-business state and are badly out
@@ -83,16 +83,68 @@ file doesn't answer what you need; do not re-read the whole repo.
     "manual URL/API attempts" per the spec), that a courier's own job
     list never includes another courier's job, and that `/api/bearer/me`
     never leaks a pending/removed/other-business relationship.
-- **E — Theme switcher: PARTIAL.** Built: a `jamaica` theme (black/green/
-  gold), CSS variables so every theme (including the existing default) is
-  actually readable everywhere, and a compact selector on the login page
-  and the staff sidebar footer (full switcher lives in Settings). Default
-  theme is unchanged, as required.
-  **Real gaps, not yet done:** the four specifically-named themes
-  (Ronmacrae Blue, Midnight Gold, Clean Light, Night Courier) were not
-  built — `jamaica` is a different theme, not a stand-in for one of the
-  four. No preview/selection screen or screenshots were produced for
-  choosing a future default.
+- **E — Theme switcher: DONE.** Correction to this checkpoint's own prior
+  entry: on closer reading of Luna's actual CSS diff (not just her commit
+  message), 3 of the 4 specifically-named themes — Midnight Gold, Clean
+  Light, Night Courier — were already real, well-built CSS token blocks;
+  only "Ronmacrae Blue" was genuinely missing. Built in this pass:
+  - `apps/web/src/styles.css` — `Ronmacrae Blue` theme (deep navy /
+    electric blue / white), same `:root[data-theme="..."]` token pattern
+    as the other five. `--theme-accent` deliberately kept light
+    (`#5aa9ff`, not a darker mid-blue) — `.btn-accent` always renders
+    `--theme-brand-dark` (near-black) text on top of `--theme-accent`,
+    and every other theme's accent is light gold/amber for exactly this
+    contrast reason.
+  - Per-user **server-side** persistence (the spec's "persist per user"
+    — Luna's version was localStorage-only, per-browser not per-account):
+    `User.theme` column, `PUT /api/auth/theme` (any signed-in staff or
+    rider, their own token only), `theme` on `UserDto`, applied once on
+    session load in `lib/auth.tsx`'s `loadMe()` so a saved preference
+    follows the person to a new device — overriding, not merged with,
+    that device's own localStorage.
+  - `apps/web/src/pages/theme-preview.tsx` (new) — the spec's "visual
+    preview/selection screen": all 6 themes (5 + `jamaica`) as cards with
+    a live mock dispatch-UI preview, swatches, description, an "Active"
+    badge, and a real "Use this theme" button (applies immediately and
+    persists). Linked from both the sidebar's compact selector ("Preview
+    all") and Settings.
+  - Verified live in a real browser against real data (72 seeded jobs):
+    logged in as a genuine business-scoped dispatcher (not the
+    platform-owner demo account — see note below), applied all 4
+    newly-relevant themes to the Jobs screen and the dashboard, confirmed
+    legible contrast and no unstyled/leftover-dark-mode elements in any
+    of them, and confirmed the `PUT /api/auth/theme` round-trip actually
+    persists (a fresh `/api/auth/refresh` reflects the saved value).
+  Default theme is unchanged, as required.
+  **While testing this, found and fixed one real, pre-existing, unrelated
+  bug** (not a Task E regression — predates this stage): `login.tsx`
+  rendered a static "Redirecting…" string for an already-authenticated
+  visit to `/login` but never actually called `navigate()` — a stale tab,
+  bookmark, or back-button nav back to `/login` left a signed-in user
+  permanently stuck on that screen with no way forward. Fixed with
+  `<Navigate to="/" replace />`, the same idiom `Protected` already uses
+  for the opposite case. New e2e coverage:
+  `e2e/specs/smoke.spec.ts`'s "an already-authenticated visit to /login
+  redirects straight into the dashboard".
+  **Also found, NOT a bug, a local-session-only trap worth recording:**
+  the seeded `admin@ronmacrae.example` account had `platformRole: "owner"`
+  granted against the local dev DB earlier in this same working session
+  (via `apps/api/src/grant-platform-owner.ts`, while testing Task C's
+  merchant-approval flow). `resolveStaffContext()`
+  (`apps/api/src/modules/auth.ts`) deliberately returns `businessId: null`
+  for ANY platform-owner session, regardless of that same user's real
+  business `StaffMembership` rows — by design (see the comment in
+  `apps/api/src/modules/guards.ts`'s `makeRequireStaff`), so that account
+  correctly 403s on every business-scoped route (`/api/jobs` included)
+  until it switches back to a plain business-staff context. This produced
+  a confusing "Jobs screen stuck loading, 403 Forbidden" symptom during
+  manual testing that had nothing to do with Task D or E's code — it
+  reproduces on a completely unmodified checkout too, given the same
+  local `grant-platform-owner` action. Not fixed (working as designed);
+  recorded here so a future session doesn't re-diagnose it from scratch.
+  `HANDOFF.md`'s open question "whether `grant-platform-owner` was ever
+  run for the real admin" is the same concern — worth explicitly
+  confirming it was NOT run against the production database.
 
 ## Fixes applied (Task A, concrete — carried over from the prior checkpoint)
 
@@ -133,17 +185,52 @@ file doesn't answer what you need; do not re-read the whole repo.
    (including a positive case proving it's a real scoping rule, not a
    broken lookup).
 
+## Fixes applied (Task E, concrete)
+
+1. `apps/api/prisma/schema.prisma` — `User.theme String?` (nullable,
+   additive — safe `prisma db push` against production Postgres).
+2. `apps/api/src/modules/auth.ts` — `toUserDto()` includes `theme`; new
+   `PUT /api/auth/theme` (`ctx.requireAuth`, any signed-in staff/rider,
+   own token only, `{ theme: string | null }`, max 60 chars, free text so
+   an older/newer client or a removed theme id simply falls back).
+3. `packages/contracts/src/types.ts` / `routes.ts` — `UserDto.theme`,
+   `API.auth.theme`.
+4. `apps/web/src/styles.css` — `Ronmacrae Blue` theme block.
+5. `apps/web/src/lib/theme.tsx` — `THEMES` now lists 6 entries;
+   `chooseTheme()` (local apply + fire-and-forget `PUT` persist, used by
+   every picker) added alongside the existing local-only `setTheme()`;
+   new `applyRemoteTheme()` called once from `loadMe()` on session
+   restore so a saved server preference follows the person to a new
+   device.
+6. `apps/web/src/lib/theme-palettes.ts` (new) — a hand-duplicated mirror
+   of `styles.css`'s token values (not read live — the app's
+   `:root[data-theme=...]` architecture only supports one active theme
+   for the whole document, so the preview page's side-by-side cards use
+   inline styles instead of live CSS-variable scoping) for
+   `theme-preview.tsx`'s mock previews.
+7. `apps/web/src/pages/theme-preview.tsx` (new), routed at
+   `/theme-preview`, linked from the sidebar and Settings.
+8. `apps/web/src/lib/auth.tsx` — `loadMe()` calls `applyRemoteTheme`.
+9. `apps/web/src/pages/login.tsx` — the "Redirecting…" fix described
+   above.
+10. `apps/api/test/auth-theme.test.ts` (new, 3 tests),
+    `apps/web/src/lib/theme.test.tsx` (extended, +6 tests; also fixed a
+    pre-existing test-isolation bug — a `describe` block's own
+    `beforeEach` localStorage reset wasn't shared with sibling blocks,
+    hoisted to file level), `e2e/specs/smoke.spec.ts` (+1 test, the
+    login-redirect fix).
+
 ## Commands run and results — independently re-verified, not just Luna's own report
 
 | Command (working dir: repo root unless noted) | Result |
 | --- | --- |
 | `npm run typecheck --workspace apps/api --workspace apps/web` | 0 errors |
-| `DEV_DB=1 npx vitest run --root apps/api` | **293/293 pass**, 40 files (up from 287/39 — 6 net new for Task D) |
-| `npm run test:unit --workspace apps/web` | **10/10 pass**, 3 files |
+| `DEV_DB=1 npx vitest run --root apps/api` | **296/296 pass**, 41 files (up from 293/40 — `auth-theme.test.ts` new, Task E) |
+| `npm run test:unit --workspace apps/web` | **15/15 pass**, 3 files (up from 10 — `theme.test.tsx` extended, Task E) |
 | `npm run test:unit --workspace packages/contracts` | **8/8 pass** |
 | `npm run test:unit --workspace packages/notifications` | **6/6 pass** |
 | `npm run build --workspace apps/api --workspace apps/web` | success |
-| `rm -f apps/api/data/e2e-test.db && cd e2e && npx playwright test --workers=1` | **35/35 pass** — see below, this includes a genuine fix to the long-standing `booking.spec.ts` flake |
+| `rm -f apps/api/data/e2e-test.db && npx playwright test --config=e2e/playwright.config.ts --workers=1` | **36/36 pass** — up from 35, `smoke.spec.ts`'s new login-redirect test (Task E) |
 | `DEV_DB=1 node apps/api/scripts/prepare-db.mjs` | schema valid, pushes cleanly to sqlite; the `Rating`/`MerchantRider` schema changes (Luna) are purely additive (new enum value, new nullable columns, new model, new indexes) — safe for `prisma db push` against production Postgres with no data-loss warning. Task D added no schema change. |
 
 **The previously "pre-existing, unrelated" `booking.spec.ts` failure is

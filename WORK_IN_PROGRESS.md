@@ -4344,3 +4344,63 @@ question for `offers.ts`, not an access-control bug.
 **Verification**: typecheck clean (api+web); vitest **293/293** across
 40 files (up from 287/39 — 6 net new); build clean; e2e **35/35** serial
 with a fresh db. Full detail in `PHASE3_COURIER_BRANDING_CHECKPOINT.md`.
+
+## Task E — premium themes and per-user persistence (DONE)
+
+Read Luna's actual CSS diff (not just her commit message) before starting
+— corrected an earlier note in this file: 3 of the 4 named themes
+(Midnight Gold, Clean Light, Night Courier) were already real, well-built
+CSS token blocks; only "Ronmacrae Blue" was genuinely missing. Built:
+
+- `Ronmacrae Blue` (deep navy / electric blue / white) in `styles.css`,
+  same `:root[data-theme="..."]` token pattern as the other five.
+  `--theme-accent` kept light (`#5aa9ff`) deliberately — `.btn-accent`
+  always renders near-black `--theme-brand-dark` text on top of it, and
+  every other theme's accent is light gold/amber for the same contrast
+  reason.
+- Per-user **server-side** persistence — the spec asked for "persist per
+  user"; Luna's version was localStorage-only (per-browser, not
+  per-account). Added `User.theme`, `PUT /api/auth/theme`, and applied
+  once on session load so a saved preference follows the person to a new
+  device.
+- `/theme-preview` — the spec's visual preview/selection screen: all 6
+  themes as cards with a live mock-UI preview, swatches, description, an
+  "Active" badge, and a real "Use this theme" button. Linked from the
+  sidebar and Settings.
+
+**Verified live in a real browser**, not just automated tests: logged in
+as a genuine business-scoped dispatcher against 72 real seeded jobs,
+applied Ronmacrae Blue / Midnight Gold / Clean Light / Night Courier to
+the Jobs screen and dashboard, confirmed legible contrast throughout and
+confirmed `PUT /api/auth/theme` really round-trips (a fresh
+`/api/auth/refresh` reflects the saved value).
+
+**Found and fixed one real, pre-existing, unrelated bug while doing that
+manual testing**: `login.tsx` rendered a static "Redirecting…" string for
+an already-authenticated visit to `/login` but never actually called
+`navigate()` — a stale tab, bookmark, or back-button nav to `/login` left
+a signed-in user permanently stuck with no way forward. Fixed with
+`<Navigate to="/" replace />` (the same idiom `Protected` already uses
+for the opposite case); added e2e coverage.
+
+Also diagnosed, and confirmed is **not** a bug: the same manual session
+hit a confusing "Jobs screen stuck loading, 403 Forbidden" symptom. Root
+cause: `admin@ronmacrae.example` had `platformRole: "owner"` granted
+against the local dev DB earlier in this same session (testing Task C's
+merchant-approval flow via `grant-platform-owner.ts`), and
+`resolveStaffContext()` deliberately returns `businessId: null` for any
+platform-owner session regardless of that user's real business
+`StaffMembership` rows — by design (see `guards.ts`'s `makeRequireStaff`
+comment). Reproduces on an unmodified checkout given the same local
+action; nothing to fix. Recorded in `PHASE3_COURIER_BRANDING_CHECKPOINT.md`
+so it isn't re-diagnosed from scratch, and flagged again there that
+`HANDOFF.md`'s open question — whether `grant-platform-owner` was ever
+run against the *production* database — still needs an explicit answer.
+
+**Verification**: typecheck clean (api+web); vitest **296/296** across 41
+files (up from 293/40 — `auth-theme.test.ts` new); web unit **15/15**
+across 3 files (up from 10 — `theme.test.tsx` extended, plus a
+test-isolation fix: a `describe` block's `beforeEach` localStorage reset
+wasn't shared with sibling blocks, hoisted to file level); build clean;
+e2e **36/36** serial with a fresh db (up from 35 — the login-redirect
+test). Full detail in `PHASE3_COURIER_BRANDING_CHECKPOINT.md`.

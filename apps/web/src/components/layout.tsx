@@ -131,8 +131,9 @@ export function Layout({ children }: { children: React.ReactNode }): React.JSX.E
         <div className="mt-auto hidden md:block">
           <div className="truncate text-sm text-zinc-200">{user?.name}</div>
           <div className="text-xs text-zinc-500">{user?.role}</div>
-          <div className="mt-3">
+          <div className="mt-3 flex items-center gap-2">
             <CompactThemeSelect />
+            <NavLink to="/theme-preview" className="text-xs text-zinc-500 underline hover:text-zinc-300">Preview all</NavLink>
           </div>
           {otherWorkspaces.length > 0 ? (
             <div className="mt-3 space-y-1">

@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import type { RiderDto, UserDto } from "@ronmacrae/contracts";
 import { apiFetch, onSessionExpires, setAccessToken } from "./api.js";
+import { applyRemoteTheme } from "./theme.js";
 
 /** sessionStorage key for a merchant-portal session — shared with
  *  merchant-portal.tsx, which reads this same key on mount. Kept here
@@ -73,6 +74,10 @@ export function AuthProvider({ children }: { children: ReactNode }): ReactNode {
       setUser(me.user);
       setRider(me.rider);
       setOtherWorkspaces(me.otherWorkspaces ?? []);
+      // Stage E ("persist per user") — a saved server-side preference
+      // follows this person to a new device, overriding whatever that
+      // device's own localStorage already had.
+      applyRemoteTheme(me.user.theme);
     } catch {
       setUser(null);
       setRider(null);

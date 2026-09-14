@@ -24,6 +24,20 @@ test("admin can log in and see the dashboard", async ({ page }) => {
   await expect(page.getByRole("link", { name: "Zones & Fares" })).toBeVisible();
 });
 
+test("an already-authenticated visit to /login redirects straight into the dashboard", async ({ page }) => {
+  await page.goto("/login");
+  await page.getByLabel("Email or phone").fill("admin@ronmacrae.example");
+  await page.getByLabel("Password").fill("admin1234");
+  await page.getByRole("button", { name: "Sign in" }).click();
+  await expect(page.getByRole("heading", { name: /welcome back/i })).toBeVisible();
+
+  // A stale tab, bookmark, or back-button nav back to /login must not
+  // strand an already-signed-in user on a dead "Redirecting…" screen.
+  await page.goto("/login");
+  await expect(page).toHaveURL("/");
+  await expect(page.getByRole("heading", { name: /welcome back/i })).toBeVisible();
+});
+
 test("dispatcher can quote a fare between zones", async ({ page }) => {
   await page.goto("/login");
   await page.getByLabel("Email or phone").fill("dispatcher@ronmacrae.example");

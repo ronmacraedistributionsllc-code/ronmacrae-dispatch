@@ -33,6 +33,27 @@
   --theme-brand: #123f2e;
   --theme-brand-dark: #0b2b1f;
 }
+/* Ronmacrae Blue: deep navy, electric blue, white — a crisp, corporate-
+ * courier look distinct from the earthy default. Navy surfaces, a bright
+ * electric-blue accent, near-white text for contrast. */
+:root[data-theme="ronmacrae-blue"] {
+  --theme-bg: #060a1a;
+  --theme-panel: rgba(13, 22, 56, 0.82);
+  --theme-panel2: rgba(21, 34, 82, 0.6);
+  --theme-input: #0c1533;
+  --theme-border: #1f2e64;
+  --theme-border-strong: #2d4187;
+  --theme-fg: #f5f8ff;
+  --theme-fg-muted: #a9bbf0;
+  --theme-fg-subtle: #6b7db0;
+  /* Lighter than a "pure" saturated blue on purpose: .btn-accent renders
+   * dark navy text on top of this (same convention every other theme's
+   * gold accent already follows) — a mid-tone blue would fail contrast
+   * there, so this stays vivid but light enough to read dark text well. */
+  --theme-accent: #5aa9ff;
+  --theme-brand: #14275c;
+  --theme-brand-dark: #0a1636;
+}
 :root[data-theme="midnight-gold"] {
   --theme-bg: #100d08;
   --theme-panel: rgba(35, 27, 14, 0.78);

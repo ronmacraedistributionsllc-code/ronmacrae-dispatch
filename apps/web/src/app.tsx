@@ -22,6 +22,7 @@ import { Merchants } from "./pages/merchants.js";
 import { LogisticsCompanies } from "./pages/logistics-companies.js";
 import { Team } from "./pages/team.js";
 import { Settings } from "./pages/settings.js";
+import { ThemePreview } from "./pages/theme-preview.js";
 import { Settlements } from "./pages/settlements.js";
 import { Notifications } from "./pages/notifications.js";
 import { Messages } from "./pages/messages.js";
@@ -199,6 +200,14 @@ export default function App(): React.JSX.Element {
                 element={
                   <Protected>
                     <Settings />
+                  </Protected>
+                }
+              />
+              <Route
+                path="/theme-preview"
+                element={
+                  <Protected>
+                    <ThemePreview />
                   </Protected>
                 }
               />

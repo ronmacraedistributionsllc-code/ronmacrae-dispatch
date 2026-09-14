@@ -20,6 +20,7 @@ export function toUserDto(u: {
   lastLoginAt: Date | null;
   createdAt: Date;
   platformRole?: string | null;
+  theme?: string | null;
 }): UserDto {
   return {
     id: u.id,
@@ -32,6 +33,7 @@ export function toUserDto(u: {
     lastLoginAt: u.lastLoginAt?.toISOString() ?? null,
     createdAt: u.createdAt.toISOString(),
     platformRole: u.platformRole === "owner" ? "owner" : null,
+    theme: u.theme ?? null,
   };
 }
 
@@ -310,6 +312,18 @@ export async function authRoutes(app: FastifyInstance, ctx: AppCtx): Promise<voi
     // only right after signing in.
     const otherWorkspaces = [...(await merchantWorkspacesFor(ctx, user.id)), ...(await logisticsWorkspacesFor(ctx, user.id))];
     return { user: toUserDto(user), rider, otherWorkspaces };
+  });
+
+  // Stage E (spec: theme switcher, "persist per user") — any signed-in
+  // staff or rider, their own shared access token. `theme` is free text,
+  // not validated against the current THEMES list server-side: the
+  // frontend's own allow-list is what decides what's selectable, and an
+  // id from an older/newer client (or a removed theme) simply falls back
+  // to the default rather than needing a server-side migration.
+  app.put("/api/auth/theme", { preHandler: ctx.requireAuth }, async (req) => {
+    const body = z.object({ theme: z.string().max(60).nullable() }).parse(req.body);
+    await ctx.prisma.user.update({ where: { id: req.user!.sub }, data: { theme: body.theme } });
+    return { ok: true };
   });
 
   app.put("/api/auth/password", { preHandler: ctx.requireAuth }, async (req) => {
