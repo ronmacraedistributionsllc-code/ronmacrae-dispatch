@@ -35,7 +35,16 @@ export default defineConfig({
         background_color: "#0b1f17",
         display: "standalone",
         start_url: "/",
+        // PNG entries first and listed as "any" (not just the SVGs) — a
+        // Trusted Web Activity wrapper (Bubblewrap, for the Android/Play
+        // Store build) and Android's adaptive-icon system both require a
+        // raster icon; SVG-only has also been unreliable for the browser's
+        // own PWA install prompt on some platforms. The SVGs stay for any
+        // consumer that does support them.
         icons: [
+          { src: "/icons/icon-192.png", sizes: "192x192", type: "image/png", purpose: "any" },
+          { src: "/icons/icon-512.png", sizes: "512x512", type: "image/png", purpose: "any" },
+          { src: "/icons/icon-512-maskable.png", sizes: "512x512", type: "image/png", purpose: "maskable" },
           { src: "/icons/icon.svg", sizes: "any", type: "image/svg+xml", purpose: "any" },
           { src: "/icons/icon-maskable.svg", sizes: "any", type: "image/svg+xml", purpose: "maskable" },
         ],
