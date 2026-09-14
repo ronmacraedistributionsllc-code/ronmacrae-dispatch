@@ -3,7 +3,7 @@
     "relation": ["delegate_permission/common.handle_all_urls"],
     "target": {
       "namespace": "android_app",
-      "package_name": "com.ronmacraedistributions.dispatch",
+      "package_name": "com.login.dispatched",
       "sha256_cert_fingerprints": [
         "16:71:00:A7:3E:72:75:96:1F:78:CB:AA:4B:C8:D4:F1:9A:F8:54:60:08:E0:41:AE:B0:51:A5:D7:A5:2F:BF:D5"
       ]
