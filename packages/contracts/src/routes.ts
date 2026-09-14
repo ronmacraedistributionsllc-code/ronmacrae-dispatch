@@ -197,6 +197,13 @@ export const API = {
     /** Fleet messaging (spec: "logistics<->riders") — same GET/POST path,
      *  only for a rider actually attached to this company. */
     riderMessages: (riderId: string) => `/api/logistics-portal/riders/${riderId}/messages`,
+    /** Spec: "logistics-company dashboard" — recent/active deliveries for
+     *  one of this company's own attached riders. Deliberately narrow
+     *  (LogisticsFleetJobDto, not the full staff JobSummaryDto): this
+     *  company supplies the courier, it doesn't own the customer
+     *  relationship, so no customer name/phone/exact address travels here
+     *  — see logistics-portal.ts's own doc comment on the route. */
+    riderJobs: (riderId: string) => `/api/logistics-portal/riders/${riderId}/jobs`,
   },
 
   products: {

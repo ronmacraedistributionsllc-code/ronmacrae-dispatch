@@ -97,6 +97,11 @@ export function PublicOrder(): React.JSX.Element {
 
   const [pricing, setPricing] = useState<PublicOrderPricingDto | null>(null);
   const [quoting, setQuoting] = useState(false);
+  // Distinct from the plain "add items" placeholder below — a quote can
+  // fail for a real reason (an item's out of stock, or no longer exists)
+  // that the customer needs to actually see and act on, not a silently
+  // blank price the previous version left them with.
+  const [quoteError, setQuoteError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<PublicOrderResultDto | null>(null);
@@ -108,14 +113,28 @@ export function PublicOrder(): React.JSX.Element {
   const pickProduct = (rowId: number, productId: string) => {
     const product = products.find((p) => p.id === productId);
     if (!product) return setItem(rowId, { productId: null, productVariantId: null, name: "" });
-    const firstVariant = product.variants[0] ?? null;
+    // Prefer a variant that's actually in stock — falls back to the first
+    // one (still selectable, so its out-of-stock state is visible below)
+    // only when every variant is out.
+    const defaultVariant = product.variants.find((v) => v.inventoryQty == null || v.inventoryQty > 0) ?? product.variants[0] ?? null;
     setItem(rowId, {
       productId: product.id,
-      productVariantId: firstVariant?.id ?? null,
+      productVariantId: defaultVariant?.id ?? null,
       name: product.name,
-      size: firstVariant?.size ?? "",
-      color: firstVariant?.color ?? "",
+      size: defaultVariant?.size ?? "",
+      color: defaultVariant?.color ?? "",
     });
+  };
+
+  // A product with more than one catalog variant (size/colour) needs a real
+  // picker — previously this silently bound to variants[0] regardless of
+  // what the customer then typed into the free-text Size/Colour fields
+  // below, so an edit there changed the *label* without changing which
+  // variant (and therefore which price and stock) was actually ordered.
+  const pickVariant = (rowId: number, variantId: string) => {
+    const variant = products.flatMap((p) => p.variants).find((v) => v.id === variantId);
+    if (!variant) return;
+    setItem(rowId, { productVariantId: variant.id, size: variant.size ?? "", color: variant.color ?? "" });
   };
 
   // Live price preview — recomputed server-side, never trusted from the form itself.
@@ -123,6 +142,7 @@ export function PublicOrder(): React.JSX.Element {
     const itemInputs = items.map(toItemInput).filter((i): i is OrderItemInput => i != null);
     if (itemInputs.length === 0) {
       setPricing(null);
+      setQuoteError(null);
       return;
     }
     let cancelled = false;
@@ -132,8 +152,16 @@ export function PublicOrder(): React.JSX.Element {
         method: "POST",
         body: JSON.stringify({ merchantSlug: merchantSlug || null, point: destination?.point ?? null, items: itemInputs }),
       })
-        .then((p) => !cancelled && setPricing(p))
-        .catch(() => !cancelled && setPricing(null))
+        .then((p) => {
+          if (cancelled) return;
+          setPricing(p);
+          setQuoteError(null);
+        })
+        .catch((err) => {
+          if (cancelled) return;
+          setPricing(null);
+          setQuoteError(err instanceof ApiError ? err.message : "Could not price this order — please check your items.");
+        })
         .finally(() => !cancelled && setQuoting(false));
     }, 400);
     return () => {
@@ -142,7 +170,7 @@ export function PublicOrder(): React.JSX.Element {
     };
   }, [JSON.stringify(items.map((r) => [r.productVariantId, r.productId, r.name, r.quantity, r.unitPrice])), destination?.point.lat, destination?.point.lng, merchantSlug]);
 
-  const canSubmit = name.trim().length > 0 && phone.replace(/[^\d]/g, "").length >= 7 && destination != null && items.some((r) => toItemInput(r) != null) && !busy;
+  const canSubmit = name.trim().length > 0 && phone.replace(/[^\d]/g, "").length >= 7 && destination != null && items.some((r) => toItemInput(r) != null) && !busy && !quoteError;
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -314,24 +342,70 @@ export function PublicOrder(): React.JSX.Element {
                 ) : null}
                 {!row.productId ? (
                   <div>
-                    <label className="label" htmlFor={`po-item-name-${row.rowId}`}>Product</label>
+                    {/* Distinct from the catalog select above once a catalog
+                     *  exists — both were labelled plain "Product" before this,
+                     *  so whenever nothing had been picked yet (row.productId
+                     *  null, the initial state) two different form fields
+                     *  shared the exact same accessible name. */}
+                    <label className="label" htmlFor={`po-item-name-${row.rowId}`}>{products.length > 0 ? "Item name" : "Product"}</label>
                     <input id={`po-item-name-${row.rowId}`} className="input" value={row.name} onChange={(e) => setItem(row.rowId, { name: e.target.value })} placeholder="e.g. Black bomber jacket" />
                   </div>
                 ) : null}
-                <div className="grid grid-cols-3 gap-2">
-                  <div>
-                    <label className="label" htmlFor={`po-size-${row.rowId}`}>Size</label>
-                    <input id={`po-size-${row.rowId}`} className="input" value={row.size} onChange={(e) => setItem(row.rowId, { size: e.target.value })} />
-                  </div>
-                  <div>
-                    <label className="label" htmlFor={`po-color-${row.rowId}`}>Colour</label>
-                    <input id={`po-color-${row.rowId}`} className="input" value={row.color} onChange={(e) => setItem(row.rowId, { color: e.target.value })} />
-                  </div>
+                {(() => {
+                  const product = products.find((p) => p.id === row.productId);
+                  const variant = product?.variants.find((v) => v.id === row.productVariantId);
+                  // A catalog product with real variants (size/colour rows,
+                  // each its own price and stock) needs an actual picker —
+                  // typing into free-text Size/Colour never changed which
+                  // variant (and therefore which price/stock) was ordered.
+                  if (product && product.variants.length > 0) {
+                    return (
+                      <div>
+                        <label className="label" htmlFor={`po-variant-${row.rowId}`}>Size / colour</label>
+                        <select id={`po-variant-${row.rowId}`} className="input" value={row.productVariantId ?? ""} onChange={(e) => pickVariant(row.rowId, e.target.value)}>
+                          {product.variants.map((v) => {
+                            const label = [v.size, v.color].filter(Boolean).join(" / ") || "Standard";
+                            const outOfStock = v.inventoryQty != null && v.inventoryQty <= 0;
+                            return (
+                              <option key={v.id} value={v.id} disabled={outOfStock}>
+                                {label} — {formatMoney(v.price)}{outOfStock ? " (out of stock)" : v.inventoryQty != null && v.inventoryQty <= 5 ? ` (${v.inventoryQty} left)` : ""}
+                              </option>
+                            );
+                          })}
+                        </select>
+                        {variant?.inventoryQty != null && variant.inventoryQty <= 0 ? (
+                          <p className="mt-1 text-xs text-red-400">This option is out of stock — pick another, or remove this item.</p>
+                        ) : variant?.inventoryQty != null && variant.inventoryQty <= 5 ? (
+                          <p className="mt-1 text-xs text-amber-400">Only {variant.inventoryQty} left.</p>
+                        ) : null}
+                      </div>
+                    );
+                  }
+                  return null;
+                })()}
+                {(() => {
+                  const hasVariants = Boolean(products.find((p) => p.id === row.productId)?.variants.length);
+                  return (
+                <div className={`grid gap-2 ${hasVariants ? "grid-cols-1" : "grid-cols-3"}`}>
+                  {!hasVariants ? (
+                    <>
+                      <div>
+                        <label className="label" htmlFor={`po-size-${row.rowId}`}>Size</label>
+                        <input id={`po-size-${row.rowId}`} className="input" value={row.size} onChange={(e) => setItem(row.rowId, { size: e.target.value })} />
+                      </div>
+                      <div>
+                        <label className="label" htmlFor={`po-color-${row.rowId}`}>Colour</label>
+                        <input id={`po-color-${row.rowId}`} className="input" value={row.color} onChange={(e) => setItem(row.rowId, { color: e.target.value })} />
+                      </div>
+                    </>
+                  ) : null}
                   <div>
                     <label className="label" htmlFor={`po-qty-${row.rowId}`}>Quantity</label>
                     <input id={`po-qty-${row.rowId}`} className="input" type="number" min={1} max={999} value={row.quantity} onChange={(e) => setItem(row.rowId, { quantity: e.target.value })} />
                   </div>
                 </div>
+                  );
+                })()}
                 {!row.productId ? (
                   <div>
                     <label className="label" htmlFor={`po-price-${row.rowId}`}>Price each (optional — the store can confirm it)</label>
@@ -372,6 +446,7 @@ export function PublicOrder(): React.JSX.Element {
         <section className="card space-y-2">
           <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-400">Order summary</h2>
           {quoting ? <p className="text-sm text-zinc-500">Calculating…</p> : null}
+          {!quoting && quoteError ? <p className="text-sm text-red-400">{quoteError}</p> : null}
           {pricing ? (
             <dl className="space-y-1 text-sm">
               <div className="flex justify-between"><dt className="text-zinc-500">Subtotal</dt><dd className="text-zinc-200">{formatMoney(pricing.subtotal)}</dd></div>
@@ -381,9 +456,9 @@ export function PublicOrder(): React.JSX.Element {
               </div>
               <div className="flex justify-between border-t border-zinc-800 pt-1 font-semibold"><dt>Total</dt><dd>{formatMoney(pricing.total)}</dd></div>
             </dl>
-          ) : (
+          ) : !quoteError ? (
             <p className="text-sm text-zinc-500">Add items and confirm your address to see pricing.</p>
-          )}
+          ) : null}
           <label className="flex items-center gap-2 pt-2 text-sm text-zinc-300">
             <input type="checkbox" className="size-4 accent-emerald-500" checked={consent} onChange={(e) => setConsent(e.target.checked)} />
             I'm happy to receive delivery updates for this order

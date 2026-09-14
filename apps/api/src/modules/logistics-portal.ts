@@ -5,6 +5,7 @@ import type { AppCtx } from "../ctx.js";
 import { verifyPassword } from "../lib/password.js";
 import { normalizeEmail } from "../lib/email.js";
 import { ACTIVE_JOB_STATUSES } from "@ronmacrae/contracts";
+import type { LogisticsFleetJobDto } from "@ronmacrae/contracts";
 import { resolveStaffContext, toUserDto } from "./auth.js";
 import { listLogisticsRiderThread, listOwnerUserThread, sendLogisticsRiderMessage, sendOwnerUserMessage, SendPlatformMessageBody } from "./platform-messages.js";
 
@@ -165,5 +166,35 @@ export async function logisticsPortalRoutes(app: FastifyInstance, ctx: AppCtx): 
       }),
     );
     return { riders: dtos };
+  });
+
+  // Spec: "logistics-company dashboard" — what one of this company's own
+  // riders is actually delivering right now (plus a little recent history),
+  // not just their idle/available status. Deliberately narrow (see
+  // LogisticsFleetJobDto's own doc comment): this company supplies the
+  // courier, it doesn't own the dispatching business's customer
+  // relationship, so no customer name/phone/exact address ships here —
+  // only what a fleet manager actually needs.
+  app.get<{ Params: { riderId: string } }>("/api/logistics-portal/riders/:riderId/jobs", async (req) => {
+    const auth = await requireLogisticsAuth(ctx, req);
+    const rider = await ctx.prisma.rider.findFirst({ where: { id: req.params.riderId, attachedLogisticsCompanyId: auth.logisticsCompanyId } });
+    if (!rider) throw httpErrors.createError(404, "Courier not found");
+    const jobs = await ctx.prisma.job.findMany({
+      where: { riderId: rider.id },
+      include: { zone: { select: { name: true } } },
+      orderBy: { createdAt: "desc" },
+      take: 20,
+    });
+    const dtos: LogisticsFleetJobDto[] = jobs.map((j) => ({
+      id: j.id,
+      jobNumber: j.jobNumber,
+      status: j.status,
+      itemSummary: j.itemSummary,
+      zoneName: j.zone?.name ?? null,
+      scheduledAt: j.scheduledAt?.toISOString() ?? null,
+      completedAt: j.completedAt?.toISOString() ?? null,
+      createdAt: j.createdAt.toISOString(),
+    }));
+    return { jobs: dtos };
   });
 }

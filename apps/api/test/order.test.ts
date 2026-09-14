@@ -198,3 +198,84 @@ describe("public multi-item order — merchant path", () => {
     expect(after).toBe(before);
   });
 });
+
+describe("inventory availability (spec: 'inventory-availability statuses')", () => {
+  async function makeVariantProduct(auth: string, merchantId: string, inventoryQty: number | null) {
+    const res = await harness.app.inject({
+      method: "POST",
+      url: `/api/merchants/${merchantId}/products`,
+      headers: { authorization: `Bearer ${auth}` },
+      payload: { name: "Tracked Tee", price: 2000, variants: [{ size: "Medium", color: "Black", inventoryQty }] },
+    });
+    const product = (res.json() as { product: { id: string; variants: { id: string; inventoryQty: number | null }[] } }).product;
+    return { product, variant: product.variants[0]! };
+  }
+
+  it("a variant with inventoryQty: null (untracked) is orderable in any quantity — the default, unaffected by any of this", async () => {
+    const auth = await adminToken(harness);
+    const merchant = await makeMerchant(harness, auth);
+    const { variant } = await makeVariantProduct(auth, merchant.id, null);
+    const res = await harness.app.inject({
+      method: "POST",
+      url: `/api/order/${merchant.slug}`,
+      payload: { name: "Untracked Buyer", phone: `+18765${uniq().slice(-7)}`, addressText: "Somewhere", items: [{ productVariantId: variant.id, quantity: 50 }] },
+    });
+    expect(res.statusCode).toBe(200);
+  });
+
+  it("a variant tracked at 0 stock is refused with a clear, honest error — on both quote and the real order", async () => {
+    const auth = await adminToken(harness);
+    const merchant = await makeMerchant(harness, auth);
+    const { variant } = await makeVariantProduct(auth, merchant.id, 0);
+
+    const quote = await harness.app.inject({
+      method: "POST",
+      url: "/api/order/quote",
+      payload: { merchantSlug: merchant.slug, items: [{ productVariantId: variant.id, quantity: 1 }] },
+    });
+    expect(quote.statusCode).toBe(409);
+    expect((quote.json() as { error: { message: string } }).error.message).toMatch(/out of stock/i);
+
+    const order = await harness.app.inject({
+      method: "POST",
+      url: `/api/order/${merchant.slug}`,
+      payload: { name: "Out Of Stock Buyer", phone: `+18765${uniq().slice(-7)}`, addressText: "Somewhere", items: [{ productVariantId: variant.id, quantity: 1 }] },
+    });
+    expect(order.statusCode).toBe(409);
+    // Never a false success — no job was created for the refused order.
+    const jobs = await harness.prisma.job.count({ where: { merchantId: merchant.id } });
+    expect(jobs).toBe(0);
+  });
+
+  it("ordering more than the tracked quantity is refused; ordering exactly the available quantity succeeds", async () => {
+    const auth = await adminToken(harness);
+    const merchant = await makeMerchant(harness, auth);
+    const { variant } = await makeVariantProduct(auth, merchant.id, 3);
+
+    const tooMany = await harness.app.inject({
+      method: "POST",
+      url: `/api/order/${merchant.slug}`,
+      payload: { name: "Overbuyer", phone: `+18765${uniq().slice(-7)}`, addressText: "Somewhere", items: [{ productVariantId: variant.id, quantity: 4 }] },
+    });
+    expect(tooMany.statusCode).toBe(409);
+    expect((tooMany.json() as { error: { message: string } }).error.message).toMatch(/only 3 left/i);
+
+    const exact = await harness.app.inject({
+      method: "POST",
+      url: `/api/order/${merchant.slug}`,
+      payload: { name: "Exact Buyer", phone: `+18765${uniq().slice(-7)}`, addressText: "Somewhere", items: [{ productVariantId: variant.id, quantity: 3 }] },
+    });
+    expect(exact.statusCode).toBe(200);
+  });
+
+  it("the public catalog already exposes each variant's real inventoryQty, so the ordering UI can show stock before checkout", async () => {
+    const auth = await adminToken(harness);
+    const merchant = await makeMerchant(harness, auth);
+    await makeVariantProduct(auth, merchant.id, 2);
+
+    const res = await harness.app.inject({ method: "GET", url: `/api/merchants/public/${merchant.slug}/products` });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { products: { variants: { inventoryQty: number | null }[] }[] };
+    expect(body.products[0]!.variants[0]!.inventoryQty).toBe(2);
+  });
+});

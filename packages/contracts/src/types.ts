@@ -524,6 +524,24 @@ export interface JobSummaryDto {
   createdAt: string;
 }
 
+/** A logistics/bearer company's own view of one of its attached riders'
+ *  deliveries (spec: "logistics-company dashboard") — deliberately a much
+ *  narrower slice of a job than JobSummaryDto: the company supplies the
+ *  courier, it doesn't own the customer relationship the dispatching
+ *  business has, so no customer name/phone/exact address is included here
+ *  (matches the "no cross-company/store data leakage" rule) — just enough
+ *  to see what its own fleet is actually doing right now. */
+export interface LogisticsFleetJobDto {
+  id: string;
+  jobNumber: string | null;
+  status: JobStatus;
+  itemSummary: string | null;
+  zoneName: string | null;
+  scheduledAt: string | null;
+  completedAt: string | null;
+  createdAt: string;
+}
+
 /** Business-wide COD reconciliation rollup (spec: "financial dispute/
  *  archival workflow") — turns the per-job variance already shown on each
  *  COD row into an accountable total. Never filtered by archived status —

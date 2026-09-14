@@ -130,6 +130,49 @@ describe("logistics portal: its own auth face", () => {
     const res = await harness.app.inject({ method: "GET", url: "/api/logistics-portal/riders", headers: { authorization: `Bearer ${admin}` } });
     expect(res.statusCode).toBe(401);
   });
+
+  it("shows a company its own attached rider's real deliveries — deliberately without the dispatching business's customer name/phone/address", async () => {
+    const admin = await adminToken(harness);
+    const owner = await ownerToken(harness);
+    const company = await makeCompany(harness, admin);
+    const email = `fleet-jobs-${uniq()}@swift.example`;
+    await harness.app.inject({ method: "POST", url: `/api/logistics-companies/${company.id}/staff`, headers: { authorization: `Bearer ${admin}` }, payload: { email, password: "fleetpass1" } });
+    const login = await harness.app.inject({ method: "POST", url: "/api/logistics-portal/login", payload: { email, password: "fleetpass1" } });
+    const { token } = login.json() as { token: string };
+
+    const rider = await makeRider(harness, admin);
+    await harness.app.inject({ method: "PATCH", url: `/api/platform/riders/${rider.id}`, headers: { authorization: `Bearer ${owner}` }, payload: { attachment: "logistics", attachedLogisticsCompanyId: company.id } });
+
+    const customer = await harness.prisma.customer.create({ data: { businessId: harness.business.id, name: "Real Customer Name", phone: `+1876599${uniq().slice(-4)}` } });
+    const jobRes = await harness.app.inject({
+      method: "POST",
+      url: "/api/jobs",
+      headers: { authorization: `Bearer ${admin}` },
+      payload: { customerId: customer.id, pickupAddressText: "10 Duke Street", itemSummary: "Fleet Test Parcel", fare: 1500, fee: 200, paymentMethod: "cod", scheduledAt: new Date().toISOString() },
+    });
+    expect(jobRes.statusCode).toBe(200);
+    const job = (jobRes.json() as { job: { id: string; jobNumber: string } }).job;
+    const assign = await harness.app.inject({ method: "POST", url: `/api/jobs/${job.id}/assignments`, headers: { authorization: `Bearer ${admin}` }, payload: { riderId: rider.id } });
+    expect(assign.statusCode).toBe(200);
+
+    // A rider not attached to this company at all — its jobs list must 404, not leak.
+    const otherRider = await makeRider(harness, admin);
+    const otherJobsRes = await harness.app.inject({ method: "GET", url: `/api/logistics-portal/riders/${otherRider.id}/jobs`, headers: { authorization: `Bearer ${token}` } });
+    expect(otherJobsRes.statusCode).toBe(404);
+
+    const jobs = await harness.app.inject({ method: "GET", url: `/api/logistics-portal/riders/${rider.id}/jobs`, headers: { authorization: `Bearer ${token}` } });
+    expect(jobs.statusCode).toBe(200);
+    const body = jobs.json() as { jobs: { id: string; jobNumber: string | null; status: string; itemSummary: string | null }[] };
+    expect(body.jobs).toHaveLength(1);
+    expect(body.jobs[0]!.jobNumber).toBe(job.jobNumber);
+    expect(body.jobs[0]!.itemSummary).toBe("Fleet Test Parcel");
+    expect(body.jobs[0]!.status).toBe("assigned");
+    // Never the dispatching business's customer PII — this company only supplies the courier.
+    const raw = JSON.stringify(body);
+    expect(raw).not.toContain("Real Customer Name");
+    expect(raw).not.toContain(customer.phone);
+    expect(raw).not.toContain("10 Duke Street");
+  });
 });
 
 describe("unified login resolves a logistics-only account to the logistics workspace", () => {

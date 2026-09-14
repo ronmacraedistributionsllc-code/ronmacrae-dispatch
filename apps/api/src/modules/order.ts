@@ -160,6 +160,25 @@ async function resolveItems(
       if (!product || (merchantId && product.merchantId !== merchantId)) {
         throw httpErrors.createError(404, "One of the items in this order is no longer available");
       }
+      // Inventory availability (spec: "inventory-availability statuses") —
+      // only ever enforced when the merchant is actually tracking stock for
+      // this variant (`inventoryQty` non-null; see its own doc comment on
+      // the schema — null means "not tracked", unaffected by any of this).
+      // This is a point-in-time check, not a reservation: nothing here
+      // decrements stock on order creation or restores it on cancellation —
+      // that's a distinct, larger feature (real stock reservation across
+      // the order lifecycle) deliberately left for its own pass rather than
+      // guessed at here. What this closes is the concrete gap it replaces:
+      // previously a customer could order any quantity of a 0-stock variant
+      // and it went through silently, with no signal to anyone.
+      if (variant && variant.inventoryQty != null) {
+        if (variant.inventoryQty <= 0) {
+          throw httpErrors.createError(409, `${product.name}${variant.size || variant.color ? ` (${[variant.size, variant.color].filter(Boolean).join(" / ")})` : ""} is currently out of stock.`);
+        }
+        if (item.quantity > variant.inventoryQty) {
+          throw httpErrors.createError(409, `Only ${variant.inventoryQty} left of ${product.name}${variant.size || variant.color ? ` (${[variant.size, variant.color].filter(Boolean).join(" / ")})` : ""} — please reduce the quantity.`);
+        }
+      }
       const unitPriceMinor = variant?.priceOverride ?? product.price;
       resolved.push({
         productId: product.id,

@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { Navigate, useNavigate } from "react-router-dom";
 import { API } from "@ronmacrae/contracts";
-import type { PlatformMessagesDto } from "@ronmacrae/contracts";
+import type { LogisticsFleetJobDto, PlatformMessagesDto } from "@ronmacrae/contracts";
 import { setAccessToken } from "../lib/api.js";
 import { useAuth } from "../lib/auth.js";
 import { PlatformChat } from "../components/platform-chat.js";
@@ -51,6 +51,48 @@ interface FleetRider {
 
 const STATUS_LABEL: Record<string, string> = { offline: "Offline", available: "Available", on_job: "On a job", unavailable: "Unavailable" };
 const STATUS_DOT: Record<string, string> = { offline: "bg-zinc-600", available: "bg-emerald-500", on_job: "bg-sky-500", unavailable: "bg-amber-500" };
+const JOB_STATUS_LABEL: Record<string, string> = {
+  new: "New", assigned: "Assigned", accepted: "Accepted", picked_up: "Picked up", in_transit: "In transit",
+  delivering: "Delivering", delivered: "Delivered", no_answer: "No answer", location_changed: "Address changed",
+  failed: "Failed", returned: "Returned", cancelled: "Cancelled",
+};
+
+/** Spec: "logistics-company dashboard" — what this rider is actually
+ *  delivering, not just their idle/available status (see the API route's
+ *  own doc comment for exactly what's deliberately left out: no customer
+ *  name/phone/exact address, since this company doesn't own that
+ *  relationship). */
+function RiderJobsPanel({ token, riderId }: { token: string; riderId: string }): React.JSX.Element {
+  const [jobs, setJobs] = useState<LogisticsFleetJobDto[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    portalFetch<{ jobs: LogisticsFleetJobDto[] }>(API.logisticsPortal.riderJobs(riderId), { headers: { authorization: `Bearer ${token}` } })
+      .then((r) => !cancelled && setJobs(r.jobs))
+      .catch((err) => !cancelled && setError(err instanceof PortalError ? err.message : "Could not load deliveries"));
+    return () => {
+      cancelled = true;
+    };
+  }, [token, riderId]);
+
+  if (error) return <p className="text-xs text-red-400">{error}</p>;
+  if (jobs === null) return <p className="text-xs text-zinc-500">Loading deliveries…</p>;
+  if (jobs.length === 0) return <p className="text-xs text-zinc-500">No deliveries yet.</p>;
+  return (
+    <ul className="space-y-1.5 rounded-lg border border-zinc-800 p-2 text-xs">
+      {jobs.map((j) => (
+        <li key={j.id} className="flex items-center justify-between gap-2">
+          <span className="text-zinc-300">
+            {j.jobNumber ?? "—"} · {j.itemSummary ?? "—"}
+            {j.zoneName ? <span className="text-zinc-500"> · {j.zoneName}</span> : null}
+          </span>
+          <span className="rounded bg-zinc-800 px-1.5 py-0.5 font-medium text-zinc-400">{JOB_STATUS_LABEL[j.status] ?? j.status}</span>
+        </li>
+      ))}
+    </ul>
+  );
+}
 
 /**
  * A logistics/bearer company's own login — a read-only fleet dashboard
@@ -68,6 +110,7 @@ export function LogisticsPortal(): React.JSX.Element {
   const [switching, setSwitching] = useState(false);
   const [riders, setRiders] = useState<FleetRider[] | null>(null);
   const [chattingWith, setChattingWith] = useState<string | null>(null);
+  const [viewingJobsFor, setViewingJobsFor] = useState<string | null>(null);
   const [showOwnerChat, setShowOwnerChat] = useState(false);
   const navigate = useNavigate();
   const { refresh: refreshStaffSession } = useAuth();
@@ -173,11 +216,15 @@ export function LogisticsPortal(): React.JSX.Element {
                   <span className={`h-2 w-2 rounded-full ${STATUS_DOT[r.status] ?? "bg-zinc-600"}`} />
                   {STATUS_LABEL[r.status] ?? r.status}
                 </span>
+                <button type="button" className="btn !px-3 !py-1 text-xs" onClick={() => setViewingJobsFor(viewingJobsFor === r.id ? null : r.id)}>
+                  {viewingJobsFor === r.id ? "Hide deliveries" : "Deliveries"}
+                </button>
                 <button type="button" className="btn !px-3 !py-1 text-xs" onClick={() => setChattingWith(chattingWith === r.id ? null : r.id)}>
                   {chattingWith === r.id ? "Hide chat" : "Message"}
                 </button>
               </div>
             </div>
+            {viewingJobsFor === r.id && token ? <RiderJobsPanel token={token} riderId={r.id} /> : null}
             {chattingWith === r.id ? (
               <PlatformChat
                 queryKey={`fleet-${r.id}`}
