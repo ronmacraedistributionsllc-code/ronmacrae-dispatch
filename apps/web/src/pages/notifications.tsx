@@ -27,6 +27,23 @@ const STATUS_BADGE: Record<NotificationStatus, string> = {
   suppressed: "bg-zinc-800 text-zinc-500",
 };
 
+/** A template's key ("rider_assigned") can't itself be renamed — it's
+ *  stored on every historical OutboxMessage row and doubles as the
+ *  Setting("notificationTemplates") override lookup key, both real
+ *  compatibility risks the courier-branding rename deliberately didn't
+ *  touch (see the matching comment on `TemplateDef` in
+ *  packages/notifications/src/core.ts, this app's server-only twin of
+ *  this map — duplicated here in miniature rather than imported, since
+ *  apps/web has no dependency on that Twilio/email-carrying package).
+ *  Only the on-screen label needs to say "Courier" — everything else
+ *  keeps working off the unchanged key. */
+const TEMPLATE_LABELS: Record<string, string> = {
+  rider_assigned: "Courier assigned",
+};
+function templateLabel(name: string): string {
+  return TEMPLATE_LABELS[name] ?? name.replaceAll("_", " ");
+}
+
 export function Notifications(): React.JSX.Element {
   const { user } = useAuth();
   const qc = useQueryClient();
@@ -107,7 +124,7 @@ export function Notifications(): React.JSX.Element {
                   </td>
                   <td className="py-2 pr-4">{m.channel}</td>
                   <td className="py-2 pr-4">{m.to}</td>
-                  <td className="py-2 pr-4">{m.template}</td>
+                  <td className="py-2 pr-4">{templateLabel(m.template)}</td>
                   <td className="py-2 pr-4">{m.attempts}</td>
                   <td className="py-2 pr-4 text-zinc-400">
                     {new Date(m.createdAt).toLocaleString("en-GB", { hour: "2-digit", minute: "2-digit" })}
@@ -169,7 +186,7 @@ function TemplatesEditor({ canEdit }: { canEdit: boolean }): React.JSX.Element {
           return (
             <div key={t.name} className="rounded-lg border border-zinc-700 p-3">
               <div className="mb-1 flex items-center justify-between">
-                <span className="text-sm font-medium text-zinc-200">{t.name.replaceAll("_", " ")}</span>
+                <span className="text-sm font-medium text-zinc-200">{templateLabel(t.name)}</span>
                 {t.overridden ? <span className="rounded bg-sky-900/50 px-2 py-0.5 text-xs text-sky-300">customized</span> : null}
               </div>
               <textarea

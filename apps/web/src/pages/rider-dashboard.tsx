@@ -152,7 +152,7 @@ export function RiderDashboard(): React.JSX.Element {
   // missed offer or a withdrawn/expired one sitting stale until the next poll.
   useEffect(() => onReconnect(() => refreshOffersAndJobs()), [onReconnect]);
 
-  if (!rider) return <p className="text-sm text-zinc-400">Loading rider profile…</p>;
+  if (!rider) return <p className="text-sm text-zinc-400">Loading courier profile…</p>;
 
   const allJobs = jobs.data?.jobs ?? [];
   const activeJobs = allJobs.filter((job) => ACTIVE_JOB_STATUSES.includes(job.status));

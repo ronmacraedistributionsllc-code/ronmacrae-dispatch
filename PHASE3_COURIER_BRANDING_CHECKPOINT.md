@@ -22,12 +22,50 @@ file doesn't answer what you need; do not re-read the whole repo.
   **Production delivery is still unconfirmed** — no real inbox, Resend
   dashboard, or Render dashboard has been reachable from any session so
   far. Do not tell anyone this is fixed until a real send is confirmed.
-- **B — Rename "Rider" to "Courier" (user-facing text): DONE.** Verified:
-  typecheck, the full test suite, and a full e2e run (see below) all pass
-  with the renamed labels, including `e2e/specs/booking.spec.ts`'s
-  "Local delivery (our couriers)" option text. Internal identifiers
-  (`Rider` model, `RiderDto`, `/api/bearer/*`, `role: "rider"`) are
-  unchanged, as required.
+- **B — Rename "Rider" to "Courier" (user-facing text): DONE**, including
+  a real remaining gap closed in this pass: the user, correctly, said
+  this wasn't actually finished. A full re-sweep of every visible string
+  in `apps/web/src` (JSX text nodes, labels, placeholders, template
+  literals — not just an earlier "typecheck + tests pass" check, which
+  never would have caught wording that compiles fine) found:
+  - The admin-editable **notification-template bodies** — Settings →
+    Notifications → "Message templates" — still read `{{riderName}}`
+    verbatim in the raw, on-screen, editable textarea (6 of 14
+    templates), and the template list showed the raw key "rider
+    assigned" as its label. Fixed in
+    `packages/notifications/src/core.ts`: default bodies now say
+    `{{courierName}}`; a new `TEMPLATE_LABELS`/`templateLabel()` gives
+    `rider_assigned` the display label "Courier assigned" (mirrored in a
+    small local copy in `apps/web/src/pages/notifications.tsx`, since
+    that page has no dependency on this Twilio/email-carrying
+    server-only package). Deliberately did **not** rename the
+    `rider_assigned` template *key* itself, or the `riderName` params
+    key `apps/api/src/modules/notify.ts` also still sends — both are
+    real internal identifiers: the key is stored on every historical
+    `OutboxMessage` row and doubles as the `Setting
+    "notificationTemplates"` override lookup key, and an admin who had
+    already customized a template's body with `{{riderName}}` needs that
+    override to keep rendering correctly. `notify.ts` now sends both
+    `riderName` and `courierName` params with the same value for exactly
+    this reason — the spec's own "keep DB/API compatibility safe, do not
+    blindly rename internal identifiers" line, applied literally.
+  - Five other visible strings the earlier pass missed:
+    `reports.tsx` ("rider performance" in the page intro, the "By rider"
+    table heading, the courier-filter's "All riders" default option, and
+    two sentences about logistics/freelance-attached couriers),
+    `ops-board.tsx` ("No cash activity on file for this rider yet."),
+    `rider-dashboard.tsx` ("Loading rider profile…").
+  - Confirmed clean on this pass, not just assumed: every SMS/WhatsApp/
+    push notification body already said "courier"; "Bearer" is never
+    used for the person anywhere; internal identifiers (`Rider` model,
+    `RiderDto`, `/api/bearer/*`, `role: "rider"`, `riderId`, comments)
+    are correctly untouched throughout.
+  Verified: typecheck, the full test suite (API/web/contracts/
+  notifications), and a full e2e run all pass with the renamed wording
+  — including one real e2e test fix (`notifications.spec.ts` asserted
+  the old raw `"order_confirmed"` key text; the template column now
+  shows a friendly label there too, same treatment as the status column
+  right next to it, so the assertion moved to `"order confirmed"`).
 - **C — Shared signup with a Merchant Business option: DONE.** Extended
   in this pass to close all four gaps this checkpoint previously flagged:
   - **Distinct rejected state.** `Merchant`/`LogisticsCompany` both got a
@@ -190,6 +228,34 @@ file doesn't answer what you need; do not re-read the whole repo.
    validation that `EMAIL_PROVIDER=resend` has real credentials, and the
    active provider name surfaced on `/api/health`.
 
+## Fixes applied (Task B, concrete)
+
+1. `packages/notifications/src/core.ts` — 6 default template bodies
+   (`rider_assigned`, `heading_to_pickup`, `out_for_delivery`,
+   `near_destination`, `cod_reminder`, `location_changed`) now use
+   `{{courierName}}`; new `TEMPLATE_LABELS`/`templateLabel()` for the
+   one display label that needed an override (`rider_assigned` →
+   "Courier assigned"). The template `name` keys themselves are
+   unchanged (see the checkpoint's Task B entry above for why).
+2. `apps/api/src/modules/notify.ts` — new `courierNameParams()` helper;
+   every `enqueue()` call site that used to send only `riderName` now
+   sends both `riderName` and `courierName` with the same value.
+3. `apps/web/src/pages/notifications.tsx` — a small local
+   `TEMPLATE_LABELS`/`templateLabel()` (this page has no dependency on
+   the server-only `@ronmacrae/notifications` package), used for both
+   the templates editor's heading and the message-history table's
+   Template column.
+4. Five other visible strings: `apps/web/src/pages/reports.tsx` (the
+   page intro, the "By rider" heading, the "All riders" filter option,
+   two sentences about logistics/freelance-attached couriers),
+   `apps/web/src/pages/ops-board.tsx` (the empty-cash-profile message),
+   `apps/web/src/pages/rider-dashboard.tsx` (the loading message).
+5. `packages/notifications/test/index.test.ts` (+1 test: both the new
+   default wording and a legacy `{{riderName}}`-customized override
+   still render correctly), `e2e/specs/notifications.spec.ts` (one
+   assertion updated from the raw `"order_confirmed"` key to the now-
+   friendly `"order confirmed"` label it actually renders).
+
 ## Fixes applied (Task C, concrete)
 
 1. `apps/api/prisma/schema.prisma` — new `ApplicationStatus` enum
@@ -303,9 +369,9 @@ file doesn't answer what you need; do not re-read the whole repo.
 | `DEV_DB=1 npx vitest run --root apps/api` | **302/302 pass**, 42 files (up from 296/41 — `logistics-signup.test.ts` new (4), `merchant-portal.test.ts` +2, Task C) |
 | `npm run test:unit --workspace apps/web` | **15/15 pass**, 3 files |
 | `npm run test:unit --workspace packages/contracts` | **8/8 pass** |
-| `npm run test:unit --workspace packages/notifications` | **6/6 pass** |
+| `npm run test:unit --workspace packages/notifications` | **7/7 pass** (up from 6 — one new test proving both the new `{{courierName}}` default wording and a legacy `{{riderName}}`-customized override still render, Task B) |
 | `npm run build --workspace apps/api --workspace apps/web` | success |
-| `rm -f apps/api/data/e2e-test.db && npx playwright test --config=e2e/playwright.config.ts --workers=1` | **39/39 pass** — up from 36, `business-signup.spec.ts` new (3 tests, Task C) |
+| `rm -f apps/api/data/e2e-test.db && npx playwright test --config=e2e/playwright.config.ts --workers=1` | **39/39 pass** — same count as Task C's result; one existing assertion in `notifications.spec.ts` updated (it checked the raw `"order_confirmed"` key, now correctly a friendly label, Task B) |
 | `DEV_DB=1 node apps/api/scripts/prepare-db.mjs` | schema valid, pushes cleanly to sqlite; Task C's schema changes (new `ApplicationStatus` enum, new nullable columns + a default on `Merchant`/`LogisticsCompany`) are purely additive — safe for `prisma db push` against production Postgres with no data-loss warning. |
 
 **The previously "pre-existing, unrelated" `booking.spec.ts` failure is

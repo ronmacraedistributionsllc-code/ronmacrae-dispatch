@@ -223,6 +223,17 @@ export interface JobNotifyContext {
   dispatchPhone: string;
 }
 
+/** Both `riderName` and `courierName` carry the same value — the shipped
+ *  default template bodies (packages/notifications/src/core.ts) reference
+ *  `{{courierName}}` (Task B: courier-branded customer-facing wording),
+ *  but an admin's already-customized override might still use the old
+ *  `{{riderName}}` placeholder, so both keys are always supplied. See
+ *  `TemplateDef`'s doc comment in core.ts for the full rationale. */
+function courierNameParams(name: string | null, fallback: string): { riderName: string; courierName: string } {
+  const value = name ?? fallback;
+  return { riderName: value, courierName: value };
+}
+
 export class JobNotifier {
   constructor(private readonly notify: NotifyService) {}
 
@@ -233,7 +244,7 @@ export class JobNotifier {
     const channel = "whatsapp" as const;
     switch (evt.to) {
       case "assigned":
-        await this.notify.enqueue({ channel, to: job.customerPhone, template: "rider_assigned", params: { ...base, riderName: ctxJob.riderName ?? "a courier" }, jobId: job.id });
+        await this.notify.enqueue({ channel, to: job.customerPhone, template: "rider_assigned", params: { ...base, ...courierNameParams(ctxJob.riderName, "a courier") }, jobId: job.id });
         break;
       case "picked_up":
         await this.notify.enqueue({ channel, to: job.customerPhone, template: "picked_up", params: base, jobId: job.id });
@@ -247,7 +258,7 @@ export class JobNotifier {
           channel,
           to: job.customerPhone,
           template: "out_for_delivery",
-          params: { ...base, riderName: ctxJob.riderName ?? "", eta: job.routeEta ? new Date(job.routeEta).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" }) : "soon" },
+          params: { ...base, ...courierNameParams(ctxJob.riderName, ""), eta: job.routeEta ? new Date(job.routeEta).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" }) : "soon" },
           jobId: job.id,
         });
         break;
@@ -256,7 +267,7 @@ export class JobNotifier {
           channel,
           to: job.customerPhone,
           template: "near_destination",
-          params: { ...base, riderName: ctxJob.riderName ?? "your courier" },
+          params: { ...base, ...courierNameParams(ctxJob.riderName, "your courier") },
           jobId: job.id,
         });
         break;
@@ -276,7 +287,7 @@ export class JobNotifier {
         await this.notify.enqueue({ channel, to: job.customerPhone, template: "no_answer", params: base, jobId: job.id });
         break;
       case "location_changed":
-        await this.notify.enqueue({ channel, to: job.customerPhone, template: "location_changed", params: { ...base, riderName: ctxJob.riderName ?? "your courier" }, jobId: job.id });
+        await this.notify.enqueue({ channel, to: job.customerPhone, template: "location_changed", params: { ...base, ...courierNameParams(ctxJob.riderName, "your courier") }, jobId: job.id });
         break;
       case "returned":
         await this.notify.enqueue({ channel, to: job.customerPhone, template: "returned", params: base, jobId: job.id });
@@ -309,7 +320,7 @@ export class JobNotifier {
         business: ctxJob.business,
         dispatchPhone: ctxJob.dispatchPhone,
         trackingUrl: ctxJob.linkUrl ?? "",
-        riderName: ctxJob.riderName ?? "your courier",
+        ...courierNameParams(ctxJob.riderName, "your courier"),
       },
       jobId: job.id,
     });

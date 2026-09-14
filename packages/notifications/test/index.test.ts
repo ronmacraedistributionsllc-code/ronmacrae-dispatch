@@ -5,7 +5,7 @@ describe("templates", () => {
   it("renders params and leaves unknown placeholders", () => {
     const out = renderTemplate("out_for_delivery", {
       customerName: "Shelly",
-      riderName: "Kei",
+      courierName: "Kei",
       orderRef: "RM-123",
       eta: "3:40 PM",
       trackingUrl: "https://track.example/t/abc",
@@ -18,6 +18,20 @@ describe("templates", () => {
   it("throws on unknown template", () => {
     expect(() => renderTemplate("nope", {})).toThrow();
     expect(listTemplates().map((t) => t.name)).toContain("order_confirmed");
+  });
+
+  it("courier-branding rename: default bodies use {{courierName}}, but an admin's already-customized override using the old {{riderName}} placeholder still renders — apps/api always supplies both keys with the same value", () => {
+    const shipped = renderTemplate("rider_assigned", { customerName: "Shelly", courierName: "Kei", orderRef: "RM-1", trackingUrl: "https://t" });
+    expect(shipped).toContain("Kei");
+    expect(shipped).not.toContain("{{");
+
+    const legacyOverride = renderTemplate(
+      "rider_assigned",
+      { customerName: "Shelly", riderName: "Kei", orderRef: "RM-1", trackingUrl: "https://t" },
+      { rider_assigned: "Hi {{customerName}}, your driver {{riderName}} is on the way for {{orderRef}}." },
+    );
+    expect(legacyOverride).toContain("Kei");
+    expect(legacyOverride).not.toContain("{{");
   });
 });
 

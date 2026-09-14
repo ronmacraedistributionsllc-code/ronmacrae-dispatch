@@ -329,7 +329,7 @@ function RiderCashPanel({ riderId }: { riderId: string }): React.JSX.Element {
   });
   if (cash.isLoading) return <p className="text-xs text-zinc-500">Loading cash profile…</p>;
   const b = cash.data?.businesses[0];
-  if (!b) return <p className="text-xs text-zinc-500">No cash activity on file for this rider yet.</p>;
+  if (!b) return <p className="text-xs text-zinc-500">No cash activity on file for this courier yet.</p>;
 
   return (
     <dl className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-sm sm:grid-cols-5">

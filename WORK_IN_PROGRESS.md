@@ -4458,3 +4458,44 @@ disabled-access-after-approval, both previously-flagged gaps); web unit
 15/15; contracts 8/8; notifications 6/6; build clean; e2e **39/39**
 serial with a fresh db (up from 36 — `business-signup.spec.ts` new, 3
 tests). Full detail in `PHASE3_COURIER_BRANDING_CHECKPOINT.md`.
+
+## Task B — finishing the courier rename (real gap, user-flagged)
+
+The user correctly said this wasn't actually finished, despite this
+file's earlier "DONE" note. Re-swept every visible string in
+`apps/web/src` (not just typecheck+tests, which can't catch wording that
+compiles fine) and found two real gaps:
+
+- The admin-editable notification-template bodies (Settings →
+  Notifications → "Message templates") still showed `{{riderName}}`
+  verbatim in the raw, on-screen textarea for 6 of 14 templates, and the
+  template list's own label read the raw key "rider assigned". Fixed the
+  *shipped default* wording to `{{courierName}}` and added a friendly
+  display-label override — but deliberately did NOT rename the
+  `rider_assigned` template key itself or drop the `riderName` params
+  key `notify.ts` sends: that key is stored on every historical
+  `OutboxMessage` row and doubles as the admin's own
+  `Setting("notificationTemplates")` override lookup key, so an
+  already-customized template using the old placeholder needs to keep
+  working. `notify.ts` now sends both `riderName` and `courierName` with
+  the same value for exactly that reason.
+- Five smaller visible strings the earlier pass missed: two spots in
+  `reports.tsx` (the page intro sentence, "By rider" table heading, "All
+  riders" filter default, two sentences about attached couriers),
+  `ops-board.tsx`'s empty-cash-profile message, `rider-dashboard.tsx`'s
+  loading message.
+
+Confirmed clean, not just assumed: every SMS/WhatsApp/push notification
+body already said "courier"; "Bearer" is never used for the person
+anywhere; internal identifiers (the `Rider` model, `RiderDto`,
+`/api/bearer/*`, `role: "rider"`, `riderId`, code comments) are
+untouched, as the spec requires.
+
+**Verification**: typecheck clean; vitest 302/302 (api, unaffected);
+web unit 15/15; contracts 8/8; notifications **7/7** (up from 6 — a new
+test proving both the new default wording and a legacy customized
+override still render); build clean; e2e 39/39 (one existing assertion
+in `notifications.spec.ts` updated — it checked the old raw
+`"order_confirmed"` key text, which is now a friendly label, same
+treatment the status column next to it already had). Full detail in
+`PHASE3_COURIER_BRANDING_CHECKPOINT.md`.

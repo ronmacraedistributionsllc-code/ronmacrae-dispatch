@@ -32,7 +32,18 @@ export interface NotificationProvider {
   send(msg: OutboundMessage): Promise<SendResult>;
 }
 
-/** Static template registry. Text is rendered with {{param}} placeholders. */
+/** Static template registry. Text is rendered with {{param}} placeholders.
+ *
+ * Courier-branding rename (Task B): the customer-facing wording below uses
+ * `{{courierName}}`, not `{{riderName}}` — but `apps/api/src/modules/
+ * notify.ts`'s `params` objects still supply BOTH keys with the same value.
+ * That's deliberate, not an oversight: this map's `name` fields (and their
+ * `Setting "notificationTemplates"` override keys — see
+ * `getTemplateOverrides`) are internal identifiers, exactly the kind the
+ * rename spec says not to blindly change if it risks breaking existing
+ * data — an admin who had already customized a template's body with the
+ * old `{{riderName}}` placeholder keeps working unchanged. Only the
+ * *shipped default* wording moved to the new name. */
 export interface TemplateDef {
   name: string;
   /** WhatsApp-safe short text; links passed as params */
@@ -48,12 +59,12 @@ export const TEMPLATES: Record<string, TemplateDef> = {
   rider_assigned: {
     name: "rider_assigned",
     body:
-      "Hi {{customerName}}, {{riderName}} has been assigned to delivery {{orderRef}}. Track it: {{trackingUrl}}",
+      "Hi {{customerName}}, {{courierName}} has been assigned to delivery {{orderRef}}. Track it: {{trackingUrl}}",
   },
   heading_to_pickup: {
     name: "heading_to_pickup",
     body:
-      "Hi {{customerName}}, {{riderName}} is heading to collect order {{orderRef}} now. Track it: {{trackingUrl}}",
+      "Hi {{customerName}}, {{courierName}} is heading to collect order {{orderRef}} now. Track it: {{trackingUrl}}",
   },
   picked_up: {
     name: "picked_up",
@@ -62,12 +73,12 @@ export const TEMPLATES: Record<string, TemplateDef> = {
   out_for_delivery: {
     name: "out_for_delivery",
     body:
-      "Hi {{customerName}}, {{riderName}} is on the way with order {{orderRef}}. Estimated arrival {{eta}}. Track: {{trackingUrl}}",
+      "Hi {{customerName}}, {{courierName}} is on the way with order {{orderRef}}. Estimated arrival {{eta}}. Track: {{trackingUrl}}",
   },
   near_destination: {
     name: "near_destination",
     body:
-      "Hi {{customerName}}, {{riderName}} is close by with order {{orderRef}} — please have someone ready to receive it. Track: {{trackingUrl}}",
+      "Hi {{customerName}}, {{courierName}} is close by with order {{orderRef}} — please have someone ready to receive it. Track: {{trackingUrl}}",
   },
   delivered: {
     name: "delivered",
@@ -81,7 +92,7 @@ export const TEMPLATES: Record<string, TemplateDef> = {
   cod_reminder: {
     name: "cod_reminder",
     body:
-      "Friendly reminder: order {{orderRef}} is {{amount}} cash on delivery. Have it ready for {{riderName}}.",
+      "Friendly reminder: order {{orderRef}} is {{amount}} cash on delivery. Have it ready for {{courierName}}.",
   },
   no_answer: {
     name: "no_answer",
@@ -91,7 +102,7 @@ export const TEMPLATES: Record<string, TemplateDef> = {
   location_changed: {
     name: "location_changed",
     body:
-      "Hi {{customerName}}, we noted the new drop-off for delivery {{orderRef}}. {{riderName}} is heading there. Track: {{trackingUrl}}",
+      "Hi {{customerName}}, we noted the new drop-off for delivery {{orderRef}}. {{courierName}} is heading there. Track: {{trackingUrl}}",
   },
   returned: {
     name: "returned",
@@ -116,6 +127,21 @@ export const TEMPLATES: Record<string, TemplateDef> = {
     body: "Your delivery-tracking code is {{code}}. It expires in 10 minutes. Didn't request this? Ignore this message.",
   },
 };
+
+/** Human-readable display name for a template key, for the admin-facing
+ *  templates editor and its message-history table (`apps/web/src/pages/
+ *  notifications.tsx`) — deliberately NOT derived from the key itself
+ *  (`name.replaceAll("_", " ")`) for `rider_assigned`, whose key can't be
+ *  renamed (see `TemplateDef`'s own doc comment) but whose on-screen label
+ *  still should read "Courier assigned". Every other key's auto-derived
+ *  label already reads fine as-is, so only this one needs an override. */
+export const TEMPLATE_LABELS: Record<string, string> = {
+  rider_assigned: "Courier assigned",
+};
+
+export function templateLabel(name: string): string {
+  return TEMPLATE_LABELS[name] ?? name.replaceAll("_", " ");
+}
 
 /** Effective body for a template name: an admin-configured override (see the
  *  Setting key "notificationTemplates" in apps/api/src/modules/notify.ts)

@@ -76,7 +76,7 @@ export function Reports(): React.JSX.Element {
       <header className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="text-xl font-bold">Operating reports</h1>
-          <p className="text-sm text-zinc-400">Deliveries, COD reconciliation, and rider performance for a date range.</p>
+          <p className="text-sm text-zinc-400">Deliveries, COD reconciliation, and courier performance for a date range.</p>
         </div>
         <a className="btn" href={`${API.reports.csv}${query ? `?${query}` : ""}`} target="_blank" rel="noreferrer">
           Export CSV
@@ -96,7 +96,7 @@ export function Reports(): React.JSX.Element {
           <div>
             <label className="label" htmlFor="rp-rider">Courier</label>
             <select id="rp-rider" className="input" value={filters.riderId} onChange={(e) => set({ riderId: e.target.value })}>
-              <option value="">All riders</option>
+              <option value="">All couriers</option>
               {riders.data?.riders.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
             </select>
           </div>
@@ -168,7 +168,7 @@ export function Reports(): React.JSX.Element {
           </section>
 
           <section className="card overflow-x-auto">
-            <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-zinc-400">By rider</h2>
+            <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-zinc-400">By courier</h2>
             {report.data.byRider.length === 0 ? (
               <p className="text-sm text-zinc-500">No completed deliveries in this range.</p>
             ) : (
@@ -197,7 +197,7 @@ export function Reports(): React.JSX.Element {
             <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-zinc-400">By logistics company</h2>
             {report.data.byLogisticsCompany.length === 0 ? (
               <p className="text-sm text-zinc-500">
-                No completed deliveries by a logistics-company-attached rider in this range
+                No completed deliveries by a logistics-company-attached courier in this range
                 {report.data.summary.unattachedJobsCompleted > 0 ? ` (${report.data.summary.unattachedJobsCompleted} completed by freelance/merchant-attached couriers instead).` : "."}
               </p>
             ) : (
@@ -222,7 +222,7 @@ export function Reports(): React.JSX.Element {
                 </table>
                 {report.data.summary.unattachedJobsCompleted > 0 ? (
                   <p className="mt-2 text-xs text-zinc-500">
-                    Plus {report.data.summary.unattachedJobsCompleted} job{report.data.summary.unattachedJobsCompleted === 1 ? "" : "s"} completed by a freelance or merchant-attached rider (not counted toward any company above).
+                    Plus {report.data.summary.unattachedJobsCompleted} job{report.data.summary.unattachedJobsCompleted === 1 ? "" : "s"} completed by a freelance or merchant-attached courier (not counted toward any company above).
                   </p>
                 ) : null}
               </>

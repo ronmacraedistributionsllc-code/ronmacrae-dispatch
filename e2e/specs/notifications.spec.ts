@@ -38,7 +38,10 @@ test("a new order automatically queues a customer notification, shown with a fri
 
   const row = page.getByRole("row").filter({ hasText: customerPhone });
   await expect(row).toBeVisible();
-  await expect(row).toContainText("order_confirmed");
+  // The template column shows a friendly label ("order confirmed"), not the
+  // raw underscored key ("order_confirmed") — same "friendly, not raw"
+  // treatment as the status column just below.
+  await expect(row).toContainText("order confirmed");
   // Preview mode (memory provider): the friendly label is "Delivered", not the
   // raw enum value — and definitely not left showing "queued"/"sending".
   await expect(row.getByText(/^(Pending|Sent|Delivered)$/)).toBeVisible();
