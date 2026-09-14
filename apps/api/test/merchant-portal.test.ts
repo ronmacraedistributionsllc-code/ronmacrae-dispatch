@@ -342,6 +342,48 @@ describe("merchant portal: courier roster", () => {
     const rel = await harness.prisma.merchantRider.findUniqueOrThrow({ where: { merchantId_riderId: { merchantId: merchantA.id, riderId: rider.id } } });
     expect(rel.status).toBe("active");
   });
+
+  // Stage D (spec: "a courier can attach to multiple merchants only after
+  // Platform Admin approval or authorized business assignment"): a merchant
+  // may only search for and attach couriers who are already active members
+  // of its OWN business — never an arbitrary rider elsewhere on the
+  // platform. Uses a second Business row in the same harness, not a second
+  // harness (a second buildTestHarness call corrupts the shared
+  // DATABASE_URL — see this suite's own established convention).
+  it("search and add are scoped to the merchant's own business — a rider with no membership there is invisible and unattachable", async () => {
+    const admin = await adminToken(harness);
+    const merchant = await makeMerchant(harness, admin);
+    const token = await portalToken(harness, merchant.id);
+
+    const otherBusiness = await harness.prisma.business.create({ data: { name: `Unrelated Courier Co ${uniq()}`, slug: `unrelated-${uniq()}` } });
+    const outsideRider = await harness.prisma.rider.create({ data: { name: `Outside Rider ${uniq()}`, phone: `+1876576${uniq().slice(-4)}`, active: true, status: "available" } });
+    // The harness's own rider.create() hook auto-creates an active
+    // RiderMembership at harness.business.id for every rider — remove it
+    // so this rider genuinely has no relationship with the merchant's
+    // business yet, only with otherBusiness.
+    await harness.prisma.riderMembership.deleteMany({ where: { riderId: outsideRider.id, businessId: harness.business.id } });
+    await harness.prisma.riderMembership.create({ data: { riderId: outsideRider.id, businessId: otherBusiness.id, status: "active", approvedAt: new Date() } });
+
+    // Invisible to search, even by exact phone.
+    const search = await harness.app.inject({ method: "GET", url: `/api/merchant-portal/riders/search?q=${encodeURIComponent(outsideRider.phone)}`, headers: { authorization: `Bearer ${token}` } });
+    expect((search.json() as { riders: { id: string }[] }).riders.some((r) => r.id === outsideRider.id)).toBe(false);
+
+    // Cannot be attached by riderId, phone, or a matching login email either.
+    const byId = await harness.app.inject({ method: "POST", url: "/api/merchant-portal/riders", headers: { authorization: `Bearer ${token}` }, payload: { riderId: outsideRider.id } });
+    expect(byId.statusCode).toBe(404);
+    const byPhone = await harness.app.inject({ method: "POST", url: "/api/merchant-portal/riders", headers: { authorization: `Bearer ${token}` }, payload: { phone: outsideRider.phone } });
+    expect(byPhone.statusCode).toBe(404);
+    expect(await harness.prisma.merchantRider.findUnique({ where: { merchantId_riderId: { merchantId: merchant.id, riderId: outsideRider.id } } })).toBeNull();
+
+    // The same rider, once actively a member of the merchant's own
+    // business, becomes findable and attachable — proves this is a real
+    // scoping rule, not a rider that's broken some other way.
+    await harness.prisma.riderMembership.create({ data: { riderId: outsideRider.id, businessId: harness.business.id, status: "active", approvedAt: new Date() } });
+    const searchAfter = await harness.app.inject({ method: "GET", url: `/api/merchant-portal/riders/search?q=${encodeURIComponent(outsideRider.phone)}`, headers: { authorization: `Bearer ${token}` } });
+    expect((searchAfter.json() as { riders: { id: string }[] }).riders.some((r) => r.id === outsideRider.id)).toBe(true);
+    const addAfter = await harness.app.inject({ method: "POST", url: "/api/merchant-portal/riders", headers: { authorization: `Bearer ${token}` }, payload: { riderId: outsideRider.id } });
+    expect(addAfter.statusCode).toBe(200);
+  });
 });
 
 describe("merchant portal: book delivery", () => {

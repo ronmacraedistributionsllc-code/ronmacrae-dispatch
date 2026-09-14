@@ -593,12 +593,27 @@ export async function merchantPortalRoutes(app: FastifyInstance, ctx: AppCtx): P
     return { riders: rows.map((rel) => merchantRiderDto(rel.rider, rel.createdAt)) };
   });
 
+  // Stage D (spec: "a courier can attach to multiple merchants only after
+  // Platform Admin approval or authorized business assignment" — a
+  // merchant vouching for a courier who is already an active, approved
+  // member of that merchant's own business is exactly the "authorized
+  // business assignment" case, same "the vouching party is themselves
+  // already vetted" pattern used everywhere else in this app). Search (and
+  // add, below) are therefore scoped to couriers who are active
+  // RiderMembership members of THIS merchant's own business — never the
+  // whole platform. Before this fix, search returned every rider on the
+  // entire platform regardless of business, which let any merchant
+  // discover riders it has no relationship with at all.
   app.get("/api/merchant-portal/riders/search", async (req) => {
     const auth = await requireMerchantAuth(ctx, req);
+    const merchant = await ctx.prisma.merchant.findUniqueOrThrow({ where: { id: auth.merchantId }, select: { businessId: true } });
     const { q } = z.object({ q: z.string().max(120).optional() }).parse(req.query ?? {});
     const term = q?.trim();
     const riders = await ctx.prisma.rider.findMany({
-      where: term ? { OR: [{ name: { contains: term } }, { phone: { contains: term } }, { user: { email: { contains: term } } }] } : undefined,
+      where: {
+        memberships: { some: { businessId: merchant.businessId, status: "active" } },
+        ...(term ? { OR: [{ name: { contains: term } }, { phone: { contains: term } }, { user: { email: { contains: term } } }] } : {}),
+      },
       orderBy: { name: "asc" },
       take: 50,
       include: { merchantRiders: { where: { merchantId: auth.merchantId } } },
@@ -618,9 +633,17 @@ export async function merchantPortalRoutes(app: FastifyInstance, ctx: AppCtx): P
 
   app.post("/api/merchant-portal/riders", async (req) => {
     const auth = await requireMerchantAuth(ctx, req);
+    const merchant = await ctx.prisma.merchant.findUniqueOrThrow({ where: { id: auth.merchantId }, select: { businessId: true } });
     const body = AddRiderBody.parse(req.body);
     const rider = await resolveRiderReference(body);
     if (!rider) throw httpErrors.createError(404, "No courier found matching that phone, email, or ID.");
+    // Same business-membership check as search above — a merchant can only
+    // attach a courier who already actively works for its own business,
+    // never an arbitrary rider elsewhere on the platform. 404, not 403:
+    // a merchant must never learn whether a given phone/email/id belongs
+    // to a real rider at all outside its own business.
+    const membership = await ctx.prisma.riderMembership.findUnique({ where: { riderId_businessId: { riderId: rider.id, businessId: merchant.businessId } } });
+    if (!membership || membership.status !== "active") throw httpErrors.createError(404, "No courier found matching that phone, email, or ID.");
     const existing = await ctx.prisma.merchantRider.findUnique({ where: { merchantId_riderId: { merchantId: auth.merchantId, riderId: rider.id } } });
     if (existing?.status === "active") throw httpErrors.createError(409, "This courier is already attached to your store.");
     await ctx.prisma.merchantRider.upsert({

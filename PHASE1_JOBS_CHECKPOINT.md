@@ -2781,8 +2781,31 @@ a roster model existing.
 | 7 | Full e2e suite (35 specs), serial (`--workers=1`), fresh `e2e-test.db` | **PASS — 35/35**, up from 34/35 — a genuine fix to the long-standing `booking.spec.ts` flake, not a workaround |
 | 8 | `DEV_DB=1 node apps/api/scripts/prepare-db.mjs` | schema valid; new `Rating`/`MerchantRider` changes are purely additive — safe for `prisma db push` against production Postgres |
 
-**Not done**: Task D (courier business-access scoping) — not started.
-Task C's distinct-rejection-state, Bearer/Logistics-Company self-signup,
-admin-notification-on-new-application, and true e2e browser coverage.
-Task E's four specifically-named themes and the preview/screenshot
+**Not done**: Task C's distinct-rejection-state, Bearer/Logistics-Company
+self-signup, admin-notification-on-new-application, and true e2e browser
+coverage. Task E's four specifically-named themes and the preview/
+screenshot deliverable. Confirming real production email delivery.
+
+## Task D — courier business-access scoping
+
+Fixed a real, confirmed vulnerability: the merchant courier-roster
+search/add routes had no business scoping at all (any merchant could
+discover and attach any rider platform-wide). Built the spec's "show the
+courier their active business memberships clearly" via a new `GET
+/api/bearer/me`. Full narrative in `WORK_IN_PROGRESS.md`'s own Task D
+section and `PHASE3_COURIER_BRANDING_CHECKPOINT.md`.
+
+## Commands run and results (Task D)
+
+| # | Command | Result |
+| --- | --- | --- |
+| 1 | `npm run typecheck --workspace apps/api --workspace apps/web` | **PASS** — 0 errors |
+| 2 | `DEV_DB=1 npx vitest run --root apps/api` | **PASS — 293/293** across 40 files, up from 287/39 |
+| 3 | `npm run build --workspace apps/api --workspace apps/web` | **PASS** — clean |
+| 4 | Full e2e suite (35 specs), serial (`--workers=1`), fresh `e2e-test.db` | **PASS — 35/35** |
+| 5 | schema | No schema change this task |
+
+**Not done**: Task C's distinct-rejection-state, Bearer/Logistics-Company
+self-signup, admin-notification-on-new-application, true e2e browser
+coverage. Task E's four specifically-named themes and preview/screenshot
 deliverable. Confirming real production email delivery.

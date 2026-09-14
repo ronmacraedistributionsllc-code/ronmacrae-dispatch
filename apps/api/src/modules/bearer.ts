@@ -7,6 +7,8 @@ import type { DispatchContactDto } from "@ronmacrae/contracts";
 import { getBusinessSettings } from "./settings.js";
 import { jobToDto, listJobs, recordRiderStage, transitionJob, TransitionBody, type Actor, type Viewer } from "./jobs/index.js";
 import { listLogisticsRiderThread, sendLogisticsRiderMessage, SendPlatformMessageBody } from "./platform-messages.js";
+import { currentJobIdFor, riderToDto } from "./riders.js";
+import type { BearerMeDto } from "@ronmacrae/contracts";
 
 function actorFor(req: FastifyRequest): Actor {
   return { id: req.user!.sub, name: req.user!.name, role: req.user!.role, riderId: req.user!.riderId };
@@ -23,6 +25,42 @@ const RiderTransitionBody = TransitionBody.extend({
 
 /** Rider-scoped API surface. Every job query is constrained by token.riderId. */
 export async function bearerRoutes(app: FastifyInstance, ctx: AppCtx): Promise<void> {
+  // Stage D (spec: "show the courier their active business memberships
+  // clearly") — every real, currently-active relationship this courier
+  // has: which businesses they carry jobs for, which merchants' own
+  // rosters they're on, and their Platform-Admin-controlled offer-
+  // eligibility attachment (a separate concept — see BearerMeDto's own
+  // doc comment). Nothing here is derived from a client-supplied id;
+  // every row comes from this rider's own token.
+  app.get("/api/bearer/me", { preHandler: ctx.requireRider }, async (req) => {
+    const riderId = req.user!.riderId!;
+    const rider = await ctx.prisma.rider.findUniqueOrThrow({
+      where: { id: riderId },
+      include: {
+        homeZone: { select: { name: true } },
+        attachedMerchant: { select: { id: true, name: true } },
+        attachedLogisticsCompany: { select: { id: true, name: true } },
+      },
+    });
+    const [memberships, merchantRiders] = await Promise.all([
+      ctx.prisma.riderMembership.findMany({ where: { riderId, status: "active" }, include: { business: { select: { id: true, name: true } } } }),
+      ctx.prisma.merchantRider.findMany({ where: { riderId, status: "active" }, include: { merchant: { select: { id: true, name: true, businessId: true } } } }),
+    ]);
+    const dto: BearerMeDto = {
+      rider: riderToDto(rider, { currentJobId: await currentJobIdFor(ctx, riderId) }),
+      businesses: memberships.map((m) => ({ businessId: m.businessId, businessName: m.business.name })),
+      merchants: merchantRiders.map((m) => ({ merchantId: m.merchant.id, merchantName: m.merchant.name, businessId: m.merchant.businessId })),
+      attachment: {
+        type: rider.attachment,
+        merchantId: rider.attachedMerchantId,
+        merchantName: rider.attachedMerchant?.name ?? null,
+        logisticsCompanyId: rider.attachedLogisticsCompanyId,
+        logisticsCompanyName: rider.attachedLogisticsCompany?.name ?? null,
+      },
+    };
+    return dto;
+  });
+
   app.get("/api/bearer/jobs", { preHandler: ctx.requireRider }, async (req) => {
     const riderId = req.user!.riderId!;
     const jobs = await listJobs(ctx, { riderId, take: 100, sort: "scheduled" });

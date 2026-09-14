@@ -13,7 +13,7 @@ import { ContactDispatch } from "../components/contact-dispatch.js";
 import { DeliveryChat } from "../components/delivery-chat.js";
 import { ConversationTabs } from "../components/conversation-tabs.js";
 import { PlatformChat } from "../components/platform-chat.js";
-import type { ConversationsDto, DeliveryMessagesDto, PlatformMessagesDto, RiderCashProfileDto } from "@ronmacrae/contracts";
+import type { BearerMeDto, ConversationsDto, DeliveryMessagesDto, PlatformMessagesDto, RiderCashProfileDto } from "@ronmacrae/contracts";
 
 const RIDER_QUICK_REPLIES = ["Heading to you", "I've arrived", "I cannot reach you", "Please contact dispatch"];
 
@@ -219,6 +219,7 @@ export function RiderDashboard(): React.JSX.Element {
         <RouteQueue jobs={activeJobs} onReorder={(ids) => reorder.mutate(ids)} reordering={reorder.isPending} />
       </section>
     ) : null}
+    <MyBusinesses />
     <CashSummary />
     <LocationSharing riderId={rider.id} />
     <LogisticsFleetChat />
@@ -249,6 +250,47 @@ export function RiderDashboard(): React.JSX.Element {
  * number here is a real sum of actual jobs, computed fresh on each load —
  * never a running total a "hand in" elsewhere could disturb.
  */
+/** Stage D (spec: "show the courier their active business memberships
+ *  clearly") — every real, currently-active relationship this courier
+ *  has, from their own token, never a client-supplied id. Collapsed by
+ *  default (matches CashSummary/LogisticsFleetChat's own convention) so
+ *  it doesn't compete with the actionable "available jobs" section above. */
+function MyBusinesses(): React.JSX.Element | null {
+  const me = useQuery({ queryKey: ["bearer-me"], queryFn: () => apiFetch<BearerMeDto>(API.bearer.me) });
+  if (me.isLoading || !me.data) return null;
+  const { businesses, merchants, attachment } = me.data;
+  if (businesses.length === 0 && merchants.length === 0) return null;
+
+  return (
+    <details className="card space-y-2">
+      <summary className="cursor-pointer text-sm font-semibold uppercase tracking-wide text-zinc-400">My businesses</summary>
+      <div className="mt-2 space-y-3 text-sm">
+        {businesses.length > 0 ? (
+          <div>
+            <p className="text-xs uppercase tracking-wide text-zinc-500">Carrying jobs for</p>
+            <ul className="mt-1 space-y-0.5 text-zinc-200">
+              {businesses.map((b) => <li key={b.businessId}>{b.businessName}</li>)}
+            </ul>
+          </div>
+        ) : null}
+        {merchants.length > 0 ? (
+          <div>
+            <p className="text-xs uppercase tracking-wide text-zinc-500">On the courier roster for</p>
+            <ul className="mt-1 space-y-0.5 text-zinc-200">
+              {merchants.map((m) => <li key={m.merchantId}>{m.merchantName}</li>)}
+            </ul>
+          </div>
+        ) : null}
+        {attachment.type !== "freelance" ? (
+          <p className="text-xs text-zinc-500">
+            Platform Admin has attached you to {attachment.type === "merchant" ? attachment.merchantName : attachment.logisticsCompanyName} for new-job eligibility.
+          </p>
+        ) : null}
+      </div>
+    </details>
+  );
+}
+
 function CashSummary(): React.JSX.Element | null {
   const cash = useQuery({
     queryKey: ["bearer-cash"],

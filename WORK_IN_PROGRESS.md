@@ -4303,3 +4303,44 @@ orders), but nothing restricts what a *courier* sees — their job list,
 orders, cash, messages, tracking, and routes are filtered exactly as
 before this phase. This is the spec's explicit security requirement and
 remains open; treat it as the next task.
+
+## Task D — courier business-access scoping (DONE)
+
+Investigated first, per this repo's own standing rule, rather than
+assuming the gap flagged above was where the problem actually was. A
+courier's own job routes (`/api/bearer/jobs*`) turned out to already be
+correctly scoped by `riderId` — the real, confirmed vulnerability was on
+the *merchant* side: `GET /api/merchant-portal/riders/search` and `POST
+/api/merchant-portal/riders` (Luna's roster feature) had no business
+scoping at all — any merchant-portal login could search and attach *any*
+rider on the entire platform, not just riders who work for its own
+business. Fixed by requiring an active `RiderMembership` at the
+merchant's own business before a rider is searchable or attachable (404,
+not 403 — a merchant never learns whether an id/phone/email belongs to a
+real rider outside its business).
+
+Also built the spec's explicit "show the courier their active business
+memberships clearly": a new `GET /api/bearer/me` (a route path that
+existed in the contracts but was never implemented) returns the
+courier's active `RiderMembership` businesses, active `MerchantRider`
+roster attachments, and the separate Platform-Admin offer-eligibility
+attachment — all from the courier's own token. Surfaced as a collapsed
+"My businesses" section on the rider dashboard.
+
+Added 6 tests: cross-courier job access refused via direct API calls
+(accept/transition/stage — "manual URL/API attempts" per the spec), a
+courier's own job list never including another courier's job, `/api/
+bearer/me` never leaking a pending/removed/other-business relationship,
+and the merchant search/add scoping fix (with a positive case proving
+it's a real rule, not a broken lookup).
+
+Deliberately not touched: Platform Admin's separate, single-merchant
+`Rider.attachment` mechanism (Stage 36, drives *offer eligibility*, a
+different concern from the roster/visibility scoping this task covers) —
+a freelance rider on a merchant's roster still gets broadcast offers from
+every merchant, unrestricted. If that's wrong, it's a business-rule
+question for `offers.ts`, not an access-control bug.
+
+**Verification**: typecheck clean (api+web); vitest **293/293** across
+40 files (up from 287/39 — 6 net new); build clean; e2e **35/35** serial
+with a fresh db. Full detail in `PHASE3_COURIER_BRANDING_CHECKPOINT.md`.

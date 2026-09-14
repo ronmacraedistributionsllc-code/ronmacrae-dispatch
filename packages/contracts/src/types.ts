@@ -85,6 +85,30 @@ export interface RiderDto {
   createdAt: string;
 }
 
+/** Stage D (spec: "show the courier their active business memberships
+ *  clearly"). Every list here reflects the courier's REAL, currently
+ *  active relationships — never a historical or removed one, so this
+ *  doubles as the honest answer to "what am I actually authorized to see
+ *  and work for right now." `attachment` is the separate, Platform-Admin-
+ *  controlled eligibility gate from `Rider.attachment` (drives which NEW
+ *  jobs get offered, see offers.ts's own doc comment) — included here so
+ *  a courier can see it, not because it's the same thing as the roster
+ *  lists below. */
+export interface BearerMeDto {
+  rider: RiderDto;
+  /** Every business this courier actively carries jobs for (RiderMembership, status:"active"). */
+  businesses: { businessId: string; businessName: string }[];
+  /** Every merchant whose own roster this courier is currently on (MerchantRider, status:"active"), across any business. */
+  merchants: { merchantId: string; merchantName: string; businessId: string }[];
+  attachment: {
+    type: "freelance" | "merchant" | "logistics";
+    merchantId: string | null;
+    merchantName: string | null;
+    logisticsCompanyId: string | null;
+    logisticsCompanyName: string | null;
+  };
+}
+
 /** One rider row on the dispatcher operations board (spec 5C) — everything a
  *  dispatcher needs to judge a rider's current load and reachability without
  *  opening several screens. Respects the same staff-only access as the
