@@ -68,12 +68,20 @@ export function MerchantPortal(): React.JSX.Element {
   const [token, setToken] = useState<string | null>(() => sessionStorage.getItem(STORAGE_KEY));
   const [error, setError] = useState<string | null>(null);
   const [merchantName, setMerchantName] = useState<string | null>(null);
+  const [rating, setRating] = useState<{ average: number | null; count: number } | null>(null);
   const [hasStaffAccess, setHasStaffAccess] = useState(false);
   const [switching, setSwitching] = useState(false);
   const [orders, setOrders] = useState<PortalOrder[] | null>(null);
   const [tab, setTab] = useState<"orders" | "catalog" | "couriers" | "messages">("orders");
+  const [booking, setBooking] = useState(false);
   const navigate = useNavigate();
   const { refresh: refreshStaffSession } = useAuth();
+
+  const reloadOrders = useCallback((tok: string) => {
+    portalFetch<{ orders: PortalOrder[] }>(API.merchantPortal.orders, { headers: { authorization: `Bearer ${tok}` } })
+      .then((r) => setOrders(r.orders))
+      .catch((err) => setError(err instanceof PortalError ? err.message : "Could not load your orders"));
+  }, []);
 
   function signOut() {
     sessionStorage.removeItem(STORAGE_KEY);
@@ -85,10 +93,11 @@ export function MerchantPortal(): React.JSX.Element {
   const loadDashboard = useCallback(async (tok: string) => {
     try {
       const [me, ordersRes] = await Promise.all([
-        portalFetch<{ merchant: { name: string }; hasStaffAccess: boolean }>(API.merchantPortal.me, { headers: { authorization: `Bearer ${tok}` } }),
+        portalFetch<{ merchant: { name: string }; rating: { average: number | null; count: number }; hasStaffAccess: boolean }>(API.merchantPortal.me, { headers: { authorization: `Bearer ${tok}` } }),
         portalFetch<{ orders: PortalOrder[] }>(API.merchantPortal.orders, { headers: { authorization: `Bearer ${tok}` } }),
       ]);
       setMerchantName(me.merchant.name);
+      setRating(me.rating);
       setHasStaffAccess(me.hasStaffAccess);
       setOrders(ordersRes.orders);
     } catch (err) {
@@ -133,9 +142,14 @@ export function MerchantPortal(): React.JSX.Element {
       <header className="flex items-center justify-between gap-3">
         <div>
           <h1 className="text-xl font-bold">{merchantName ?? "Your store"}</h1>
-          <p className="text-sm text-zinc-400">Orders placed through your store link.</p>
+          <p className="text-sm text-zinc-400">
+            {rating && rating.count > 0
+              ? `★ ${rating.average?.toFixed(1)} · ${rating.count} rating${rating.count === 1 ? "" : "s"}`
+              : "Orders placed through your store link."}
+          </p>
         </div>
         <div className="flex gap-2">
+          <button className="btn-accent !px-3 !py-1 text-xs" onClick={() => setBooking((v) => !v)}>{booking ? "Cancel" : "+ Book Delivery"}</button>
           {hasStaffAccess ? (
             <button className="btn !px-3 !py-1 text-xs" disabled={switching} onClick={() => void switchToStaff()}>
               {switching ? "Switching…" : "Switch to staff dashboard"}
@@ -156,8 +170,11 @@ export function MerchantPortal(): React.JSX.Element {
 
       {tab === "orders" ? (
         <>
+          {booking && token ? (
+            <BookDeliveryForm token={token} onDone={() => { setBooking(false); reloadOrders(token); }} />
+          ) : null}
           {orders === null ? <p className="text-sm text-zinc-400">Loading…</p> : null}
-          {orders && orders.length === 0 ? <div className="card text-sm text-zinc-400">No orders yet.</div> : null}
+          {orders && orders.length === 0 ? <div className="card text-sm text-zinc-400">No orders yet — book one above.</div> : null}
           <div className="space-y-3">
             {orders?.map((o) => (
               <section key={o.id} className="card space-y-2">
@@ -178,6 +195,9 @@ export function MerchantPortal(): React.JSX.Element {
                   <span className="text-zinc-400">{o.paymentMethodLabel}{o.riderName ? ` · courier: ${o.riderName}` : ""}</span>
                   <span className="font-semibold">{formatMoney(o.total)}</span>
                 </div>
+                {(o.status === "new" || o.status === "assigned") && token ? (
+                  <AssignCourier token={token} order={o} onAssigned={() => reloadOrders(token)} />
+                ) : null}
                 {o.status === "delivered" ? <RateOrder jobId={o.id} token={token} /> : null}
               </section>
             ))}
@@ -260,6 +280,167 @@ function Catalog({ token }: { token: string }): React.JSX.Element {
           </div>
         ))}
       </div>
+    </div>
+  );
+}
+
+interface BookItem {
+  name: string;
+  quantity: number;
+  unitPrice: string;
+  saveToCatalog: boolean;
+}
+
+/** A merchant books a delivery on behalf of a customer (spec: merchant
+ *  book-delivery). Pickup is the merchant's own saved address (server-side);
+ *  free-text items can optionally be saved into this merchant's catalog. */
+function BookDeliveryForm({ token, onDone }: { token: string; onDone: () => void }): React.JSX.Element {
+  const [customerName, setCustomerName] = useState("");
+  const [customerPhone, setCustomerPhone] = useState("");
+  const [customerEmail, setCustomerEmail] = useState("");
+  const [addressText, setAddressText] = useState("");
+  const [instructions, setInstructions] = useState("");
+  const [paymentMethod, setPaymentMethod] = useState("cod");
+  const [items, setItems] = useState<BookItem[]>([{ name: "", quantity: 1, unitPrice: "", saveToCatalog: false }]);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  function updateItem(i: number, patch: Partial<BookItem>) {
+    setItems((prev) => prev.map((it, idx) => (idx === i ? { ...it, ...patch } : it)));
+  }
+
+  async function submit(e: FormEvent) {
+    e.preventDefault();
+    setError(null);
+    setBusy(true);
+    try {
+      await portalFetch(API.merchantPortal.createOrder, {
+        method: "POST",
+        headers: { authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          customerName,
+          customerPhone,
+          customerEmail: customerEmail || undefined,
+          addressText,
+          instructions: instructions || undefined,
+          paymentMethod,
+          items: items
+            .filter((it) => it.name.trim().length > 0)
+            .map((it) => ({ name: it.name.trim(), quantity: it.quantity, unitPrice: it.unitPrice ? Number(it.unitPrice) : undefined, saveToCatalog: it.saveToCatalog })),
+        }),
+      });
+      onDone();
+    } catch (err) {
+      setError(err instanceof PortalError ? err.message : "Could not book this delivery");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const canSubmit = customerName.trim().length > 0 && customerPhone.replace(/[^\d]/g, "").length >= 7 && addressText.trim().length >= 3 && items.some((it) => it.name.trim().length > 0);
+
+  return (
+    <form className="card space-y-3" onSubmit={(e) => void submit(e)}>
+      <h2 className="font-semibold">Book a delivery</h2>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <div>
+          <label className="label" htmlFor="b-cname">Customer name</label>
+          <input id="b-cname" className="input" required value={customerName} onChange={(e) => setCustomerName(e.target.value)} />
+        </div>
+        <div>
+          <label className="label" htmlFor="b-cphone">Customer phone</label>
+          <input id="b-cphone" className="input" required value={customerPhone} onChange={(e) => setCustomerPhone(e.target.value)} placeholder="876 555 1234" />
+        </div>
+        <div className="sm:col-span-2">
+          <label className="label" htmlFor="b-cemail">Customer email (optional)</label>
+          <input id="b-cemail" type="email" className="input" value={customerEmail} onChange={(e) => setCustomerEmail(e.target.value)} />
+        </div>
+        <div className="sm:col-span-2">
+          <label className="label" htmlFor="b-addr">Drop-off address</label>
+          <input id="b-addr" className="input" required value={addressText} onChange={(e) => setAddressText(e.target.value)} />
+        </div>
+      </div>
+
+      <div className="space-y-2">
+        <p className="text-sm text-zinc-400">Items</p>
+        {items.map((it, i) => (
+          <div key={i} className="grid gap-2 sm:grid-cols-[1fr_4rem_6rem_auto]">
+            <input className="input" placeholder="Item / product" value={it.name} onChange={(e) => updateItem(i, { name: e.target.value })} />
+            <input className="input" type="number" min={1} value={it.quantity} onChange={(e) => updateItem(i, { quantity: Number(e.target.value) || 1 })} />
+            <input className="input" type="number" min={0} step="0.01" placeholder="Price" value={it.unitPrice} onChange={(e) => updateItem(i, { unitPrice: e.target.value })} />
+            <button type="button" className="btn !px-2 !py-1 text-xs !border-red-800 !text-red-300" onClick={() => setItems((prev) => prev.filter((_, idx) => idx !== i))}>✕</button>
+          </div>
+        ))}
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <button type="button" className="btn !px-3 !py-1 text-xs" onClick={() => setItems((prev) => [...prev, { name: "", quantity: 1, unitPrice: "", saveToCatalog: false }])}>+ Add item</button>
+          <label className="flex items-center gap-2 text-xs text-zinc-400">
+            <input type="checkbox" checked={items.some((it) => it.saveToCatalog)} onChange={(e) => setItems((prev) => prev.map((it) => ({ ...it, saveToCatalog: e.target.checked })))} />
+            Add these items to my catalog
+          </label>
+        </div>
+      </div>
+
+      <div className="grid gap-3 sm:grid-cols-2">
+        <div>
+          <label className="label" htmlFor="b-pay">Payment method</label>
+          <select id="b-pay" className="input" value={paymentMethod} onChange={(e) => setPaymentMethod(e.target.value)}>
+            <option value="cod">Cash on delivery</option>
+            <option value="online">Online</option>
+            <option value="card">Card</option>
+            <option value="transfer">Transfer</option>
+            <option value="paid_at_store">Paid at store</option>
+          </select>
+        </div>
+        <div>
+          <label className="label" htmlFor="b-instr">Instructions (optional)</label>
+          <input id="b-instr" className="input" value={instructions} onChange={(e) => setInstructions(e.target.value)} />
+        </div>
+      </div>
+
+      {error ? <p className="text-sm text-red-400">{error}</p> : null}
+      <button className="btn-accent" disabled={busy || !canSubmit}>{busy ? "Booking…" : "Book delivery"}</button>
+    </form>
+  );
+}
+
+/** Assign one of this merchant's own couriers to one of its own orders
+ *  (spec: merchant delivery assignment) — the roster is this merchant's
+ *  MerchantRider list, never another merchant's. */
+function AssignCourier({ token, order, onAssigned }: { token: string; order: PortalOrder; onAssigned: () => void }): React.JSX.Element {
+  const [riders, setRiders] = useState<MerchantRider[] | null>(null);
+  const [selected, setSelected] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    portalFetch<{ riders: MerchantRider[] }>(API.merchantPortal.riders, { headers: { authorization: `Bearer ${token}` } })
+      .then((r) => setRiders(r.riders))
+      .catch(() => setRiders([]));
+  }, [token]);
+
+  async function assign() {
+    setBusy(true);
+    setError(null);
+    try {
+      await portalFetch(API.merchantPortal.assignRider(order.id), { method: "POST", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ riderId: selected }) });
+      onAssigned();
+    } catch (err) {
+      setError(err instanceof PortalError ? err.message : "Could not assign courier");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="flex flex-wrap items-center gap-2 rounded-lg border border-zinc-800 p-2">
+      <select className="input !w-auto !py-1 text-xs" value={selected} disabled={busy} onChange={(e) => setSelected(e.target.value)}>
+        <option value="" disabled>Assign courier…</option>
+        {(riders ?? []).map((r) => (
+          <option key={r.id} value={r.id}>{r.name} ({r.vehicle})</option>
+        ))}
+      </select>
+      <button className="btn !px-3 !py-1 text-xs" disabled={busy || !selected} onClick={() => void assign()}>Assign</button>
+      {error ? <span className="text-xs text-red-400">{error}</span> : null}
     </div>
   );
 }

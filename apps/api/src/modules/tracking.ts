@@ -123,6 +123,7 @@ export async function trackingRoutes(app: FastifyInstance, ctx: AppCtx): Promise
     }
 
     const history = await customerStatusHistory(ctx, job.id);
+    const merchant = job.merchantId ? await ctx.prisma.merchant.findUnique({ where: { id: job.merchantId }, select: { id: true, name: true } }) : null;
     const out: TrackingPublicDto = {
       token: link.token,
       expired,
@@ -156,6 +157,7 @@ export async function trackingRoutes(app: FastifyInstance, ctx: AppCtx): Promise
             }
           : null
         : null,
+      merchant: merchant ? { id: merchant.id, name: merchant.name } : null,
       location: {
         point: locationPoint,
         trackingState,
@@ -172,7 +174,7 @@ export async function trackingRoutes(app: FastifyInstance, ctx: AppCtx): Promise
   // after a completed delivery") — the tracking token itself is the
   // authorization, same as the GET above; no separate customer login
   // needed. One rating per job from this side, enforced by the schema's
-  // own @@unique([jobId, raterType]), not just this check.
+  // own @@unique([jobId, raterType, target]), not just this check.
   app.post<{ Params: { token: string } }>("/api/tracking/:token/rate", { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } }, async (req) => {
     const body = z.object({ score: z.number().int().min(1).max(5), comment: z.string().max(500).optional().or(z.literal("")).nullable() }).parse(req.body);
     const link = await ctx.prisma.trackingLink.findUnique({ where: { token: req.params.token } });
@@ -182,10 +184,30 @@ export async function trackingRoutes(app: FastifyInstance, ctx: AppCtx): Promise
     if (job.status !== "delivered" || !job.riderId) {
       throw httpErrors.createError(400, "This order hasn't been delivered yet — nothing to rate.");
     }
-    const existing = await ctx.prisma.rating.findUnique({ where: { jobId_raterType: { jobId: job.id, raterType: "customer" } } });
+    const existing = await ctx.prisma.rating.findUnique({ where: { jobId_raterType_target: { jobId: job.id, raterType: "customer", target: "rider" } } });
     if (existing) throw httpErrors.createError(409, "You've already rated this delivery.");
     const rating = await ctx.prisma.rating.create({
-      data: { jobId: job.id, riderId: job.riderId, raterType: "customer", score: body.score, comment: body.comment || null },
+      data: { jobId: job.id, riderId: job.riderId, merchantId: null, raterType: "customer", target: "rider", score: body.score, comment: body.comment || null },
+    });
+    return { ok: true, rating: { id: rating.id, score: rating.score } };
+  });
+
+  // Customer rates the merchant (spec: "Customer can separately rate the
+  // merchant... These are TWO separate ratings"). Same tracking-token
+  // authorization as the courier rating above; only a job that actually has
+  // a merchant can be merchant-rated, and only after completion.
+  app.post<{ Params: { token: string } }>("/api/tracking/:token/rate-merchant", { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } }, async (req) => {
+    const body = z.object({ score: z.number().int().min(1).max(5), comment: z.string().max(500).optional().or(z.literal("")).nullable() }).parse(req.body);
+    const link = await ctx.prisma.trackingLink.findUnique({ where: { token: req.params.token } });
+    if (!link || link.revoked) throw httpErrors.createError(410, "This tracking link is no longer valid");
+    const job = await ctx.prisma.job.findUnique({ where: { id: link.jobId, deletedAt: null } });
+    if (!job) throw httpErrors.createError(410, "This tracking link is no longer valid");
+    if (job.status !== "delivered") throw httpErrors.createError(400, "This order hasn't been delivered yet — nothing to rate.");
+    if (!job.merchantId) throw httpErrors.createError(400, "This order isn't linked to a merchant to rate.");
+    const existing = await ctx.prisma.rating.findUnique({ where: { jobId_raterType_target: { jobId: job.id, raterType: "customer", target: "merchant" } } });
+    if (existing) throw httpErrors.createError(409, "You've already rated this merchant.");
+    const rating = await ctx.prisma.rating.create({
+      data: { jobId: job.id, riderId: null, merchantId: job.merchantId, raterType: "customer", target: "merchant", score: body.score, comment: body.comment || null },
     });
     return { ok: true, rating: { id: rating.id, score: rating.score } };
   });

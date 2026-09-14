@@ -343,6 +343,7 @@ model Merchant {
   staff    MerchantStaff[]
   attachedRiders Rider[]
   merchantRiders MerchantRider[]
+  ratings   Rating[]
 
   @@unique([businessId, slug])
 }
@@ -574,31 +575,46 @@ enum RaterType {
   merchant
 }
 
-/** A rider rating after a completed delivery (spec: "Authorized customer
- *  and merchant may rate after a completed delivery... Prevent duplicate
- *  ratings, self-ratings, abusive content, and cross-business leaks").
- *  One rating per job per rater type — `@@unique([jobId, raterType])` is
- *  the actual duplicate-prevention mechanism, not just a UI nicety.
- *  Deliberately no rater identity stored beyond `raterType` (which side
- *  rated, not which specific customer/merchant-staff person) — a rating
- *  is about the rider's delivery on that job, and the job itself already
- *  records who the customer/merchant were; a moderator (platform admin)
- *  can always trace it back via `jobId`. */
-model Rating {
-  id        String    @id @default(cuid())
-  jobId     String
-  job       Job       @relation(fields: [jobId], references: [id], onDelete: Cascade)
-  riderId   String
-  rider     Rider     @relation(fields: [riderId], references: [id], onDelete: Cascade)
-  raterType RaterType
-  score     Int
-  comment   String?
-  hidden    Boolean   @default(false)
-  hiddenAt  DateTime?
-  createdAt DateTime  @default(now())
+/** What a Rating is *about*. A customer rates both the courier and the
+ *  merchant as two separate ratings (spec: "These are TWO separate
+ *  ratings"); a merchant only ever rates the courier. `target` keeps the
+ *  duplicate-prevention unique constraint non-null so it can't be weakened
+ *  by a nullable subject column. */
+enum RatingTarget {
+  rider
+  merchant
+}
 
-  @@unique([jobId, raterType])
+/** A delivery rating (spec: "Authorized customer and merchant may rate
+ *  after a completed delivery... Prevent duplicate ratings..."). One rating
+ *  per job per rater type per target — `@@unique([jobId, raterType, target])`
+ *  is the actual duplicate-prevention mechanism, not just a UI nicety.
+ *  A courier rating sets `riderId`; a merchant rating sets `merchantId` —
+ *  exactly one is ever non-null, enforced by the application (not a DB
+ *  constraint, since a CHECK with an OR would be provider-specific).
+ *  Deliberately no rater identity stored beyond `raterType` (which side
+ *  rated, not which specific customer/merchant-staff person) — the job
+ *  itself already records who the customer/merchant were; a moderator
+ *  (platform admin) can always trace it back via `jobId`. */
+model Rating {
+  id         String       @id @default(cuid())
+  jobId      String
+  job        Job          @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  riderId    String?
+  rider      Rider?       @relation(fields: [riderId], references: [id], onDelete: Cascade)
+  merchantId String?
+  merchant   Merchant?    @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+  raterType  RaterType
+  target     RatingTarget @default(rider)
+  score      Int
+  comment    String?
+  hidden     Boolean      @default(false)
+  hiddenAt   DateTime?
+  createdAt  DateTime     @default(now())
+
+  @@unique([jobId, raterType, target])
   @@index([riderId, hidden])
+  @@index([merchantId, hidden])
 }
 
 model Product {

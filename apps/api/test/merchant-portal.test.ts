@@ -343,3 +343,100 @@ describe("merchant portal: courier roster", () => {
     expect(rel.status).toBe("active");
   });
 });
+
+describe("merchant portal: book delivery", () => {
+  async function portalToken(h: TestHarness, merchantId: string): Promise<string> {
+    const user = await h.prisma.user.create({ data: { name: `Owner ${uniq()}`, email: `owner-${uniq()}@vbr.example`, passwordHash: "unused-in-tests", emailVerifiedAt: new Date() } });
+    await h.prisma.merchantStaff.create({ data: { userId: user.id, merchantId, active: true } });
+    return h.jwt.issueMerchantPortal(user.id, merchantId);
+  }
+
+  async function makeRider(h: TestHarness, auth: string) {
+    const res = await h.app.inject({
+      method: "POST",
+      url: "/api/riders",
+      headers: { authorization: `Bearer ${auth}` },
+      payload: { name: `Rider ${uniq()}`, phone: `+1876555${uniq().slice(-4)}` },
+    });
+    return (res.json() as { rider: { id: string } }).rider;
+  }
+
+  it("books a delivery, saves a free-text item to its catalog (deduped), and assigns its own courier", async () => {
+    const admin = await adminToken(harness);
+    const merchant = await makeMerchant(harness, admin);
+    const token = await portalToken(harness, merchant.id);
+    const rider = await makeRider(harness, admin);
+
+    // Attach the courier to this merchant (roster).
+    const attach = await harness.app.inject({ method: "POST", url: "/api/merchant-portal/riders", headers: { authorization: `Bearer ${token}` }, payload: { riderId: rider.id } });
+    expect(attach.statusCode).toBe(200);
+
+    // Book a delivery with a free-text item marked saveToCatalog.
+    const book = await harness.app.inject({
+      method: "POST",
+      url: "/api/merchant-portal/orders",
+      headers: { authorization: `Bearer ${token}` },
+      payload: {
+        customerName: "Test Customer",
+        customerPhone: "+18765550001",
+        addressText: "9 Hope Road, Kingston",
+        items: [{ name: "Hydraulic Salon Chair", quantity: 1, unitPrice: 4500, saveToCatalog: true }],
+      },
+    });
+    expect(book.statusCode).toBe(200);
+    const { jobId } = book.json() as { jobId: string };
+
+    // Item now exists in this merchant's catalog.
+    const catalog = await harness.app.inject({ method: "GET", url: "/api/merchant-portal/products", headers: { authorization: `Bearer ${token}` } });
+    const names = (catalog.json() as { products: { name: string }[] }).products.map((p) => p.name);
+    expect(names.filter((n) => n === "Hydraulic Salon Chair")).toHaveLength(1);
+
+    // Booking the SAME item again does not duplicate the catalog entry.
+    await harness.app.inject({
+      method: "POST",
+      url: "/api/merchant-portal/orders",
+      headers: { authorization: `Bearer ${token}` },
+      payload: { customerName: "Test Customer 2", customerPhone: "+18765550002", addressText: "10 Hope Road, Kingston", items: [{ name: "Hydraulic Salon Chair", quantity: 1, unitPrice: 4500, saveToCatalog: true }] },
+    });
+    const catalog2 = await harness.app.inject({ method: "GET", url: "/api/merchant-portal/products", headers: { authorization: `Bearer ${token}` } });
+    const names2 = (catalog2.json() as { products: { name: string }[] }).products.map((p) => p.name);
+    expect(names2.filter((n) => n === "Hydraulic Salon Chair")).toHaveLength(1);
+
+    // Order is listed for this merchant, and is unassigned.
+    const orders = await harness.app.inject({ method: "GET", url: "/api/merchant-portal/orders", headers: { authorization: `Bearer ${token}` } });
+    expect((orders.json() as { orders: { id: string }[] }).orders.some((o) => o.id === jobId)).toBe(true);
+
+    // Assign its own courier.
+    const assign = await harness.app.inject({ method: "POST", url: `/api/merchant-portal/orders/${jobId}/assign`, headers: { authorization: `Bearer ${token}` }, payload: { riderId: rider.id } });
+    expect(assign.statusCode).toBe(200);
+    const job = await harness.prisma.job.findUniqueOrThrow({ where: { id: jobId } });
+    expect(job.riderId).toBe(rider.id);
+    expect(job.status).toBe("assigned");
+  });
+
+  it("cannot assign a courier outside its roster, nor touch another merchant's order", async () => {
+    const admin = await adminToken(harness);
+    const merchantA = await makeMerchant(harness, admin);
+    const merchantB = await makeMerchant(harness, admin);
+    const tokenA = await portalToken(harness, merchantA.id);
+    const tokenB = await portalToken(harness, merchantB.id);
+    const rider = await makeRider(harness, admin);
+
+    // Book under A (no courier attached yet).
+    const book = await harness.app.inject({
+      method: "POST",
+      url: "/api/merchant-portal/orders",
+      headers: { authorization: `Bearer ${tokenA}` },
+      payload: { customerName: "Test Customer", customerPhone: "+18765550003", addressText: "11 Hope Road, Kingston", items: [{ name: "Widget", quantity: 1 }] },
+    });
+    const { jobId } = book.json() as { jobId: string };
+
+    // A cannot assign a courier not in its roster (rider never attached to A).
+    const noRoster = await harness.app.inject({ method: "POST", url: `/api/merchant-portal/orders/${jobId}/assign`, headers: { authorization: `Bearer ${tokenA}` }, payload: { riderId: rider.id } });
+    expect(noRoster.statusCode).toBe(404);
+
+    // B cannot assign a courier to A's order (order not found for B).
+    const crossAssign = await harness.app.inject({ method: "POST", url: `/api/merchant-portal/orders/${jobId}/assign`, headers: { authorization: `Bearer ${tokenB}` }, payload: { riderId: rider.id } });
+    expect(crossAssign.statusCode).toBe(404);
+  });
+});

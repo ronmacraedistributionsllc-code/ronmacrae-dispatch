@@ -138,6 +138,10 @@ export const API = {
     login: "/api/merchant-portal/login",
     me: "/api/merchant-portal/me",
     orders: "/api/merchant-portal/orders",
+    /** book a delivery on behalf of a customer (POST), scoped to this merchant */
+    createOrder: "/api/merchant-portal/orders",
+    /** assign one of this merchant's own couriers to one of its own orders */
+    assignRider: (jobId: string) => `/api/merchant-portal/orders/${jobId}/assign`,
     products: "/api/merchant-portal/products",
     createProduct: "/api/merchant-portal/products",
     updateProduct: (id: string) => `/api/merchant-portal/products/${id}`,
@@ -235,6 +239,8 @@ export const API = {
     addressChange: (token: string) => `/api/tracking/${token}/address-change`,
     /** public, tracking-token-gated — rate the rider after "delivered" */
     rate: (token: string) => `/api/tracking/${token}/rate`,
+    /** public, tracking-token-gated — rate the merchant after "delivered" */
+    rateMerchant: (token: string) => `/api/tracking/${token}/rate-merchant`,
   },
 
   /** Cross-business customer package dashboard (spec 4) — public, no login;

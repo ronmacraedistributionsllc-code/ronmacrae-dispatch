@@ -104,7 +104,12 @@ export function Track(): React.JSX.Element {
             ) : null}
           </section>
 
-          {data.job.status === "delivered" ? <RateDelivery token={token} /> : null}
+          {data.job.status === "delivered" ? (
+            <>
+              {data.rider ? <RateDelivery token={token} subject="courier" /> : null}
+              {data.merchant ? <RateDelivery token={token} subject="merchant" subjectName={data.merchant.name} /> : null}
+            </>
+          ) : null}
 
           <section className="card">
             <div className="flex items-center justify-between">
@@ -182,10 +187,11 @@ export function Track(): React.JSX.Element {
 
 /** Spec: "Authorized customer... may rate after a completed delivery" —
  *  the tracking token itself is the authorization, same as the rest of
- *  this page. Local-only "already rated" state (there's no GET-status
- *  endpoint) — a stale reload just re-shows the form, and a genuine
- *  re-submit is caught server-side (409) and shown the same way. */
-function RateDelivery({ token }: { token: string }): React.JSX.Element {
+ *  this page. `subject` selects courier vs merchant (two separate ratings,
+ *  two separate endpoints); local-only "already rated" state (there's no
+ *  GET-status endpoint) — a stale reload just re-shows the form, and a
+ *  genuine re-submit is caught server-side (409) and shown the same way. */
+function RateDelivery({ token, subject, subjectName }: { token: string; subject: "courier" | "merchant"; subjectName?: string }): React.JSX.Element {
   const [score, setScore] = React.useState(0);
   const [comment, setComment] = React.useState("");
   const [busy, setBusy] = React.useState(false);
@@ -196,7 +202,8 @@ function RateDelivery({ token }: { token: string }): React.JSX.Element {
     setBusy(true);
     setError(null);
     try {
-      await apiFetch(API.tracking.rate(token), { method: "POST", body: JSON.stringify({ score, comment: comment || undefined }) });
+      const path = subject === "courier" ? API.tracking.rate(token) : API.tracking.rateMerchant(token);
+      await apiFetch(path, { method: "POST", body: JSON.stringify({ score, comment: comment || undefined }) });
       setDone(true);
     } catch (err) {
       if (err instanceof ApiError && err.status === 409) {
@@ -219,7 +226,9 @@ function RateDelivery({ token }: { token: string }): React.JSX.Element {
 
   return (
     <section className="card space-y-2">
-      <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-400">Rate your delivery</h2>
+      <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-400">
+        {subject === "courier" ? "Rate your courier" : `Rate the merchant${subjectName ? ` — ${subjectName}` : ""}`}
+      </h2>
       <div className="flex gap-1 text-2xl">
         {[1, 2, 3, 4, 5].map((n) => (
           <button key={n} type="button" aria-label={`${n} star${n === 1 ? "" : "s"}`} className={n <= score ? "text-amber-400" : "text-zinc-700"} onClick={() => setScore(n)}>

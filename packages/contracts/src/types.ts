@@ -704,6 +704,10 @@ export interface TrackingPublicDto {
     plate: string | null;
     phone: string | null;
   } | null;
+  /** The merchant/store this order came through, if any — shown so a
+   *  customer can also rate the merchant (spec: separate courier + merchant
+   *  ratings) after completion. Null for a direct/in-house order. */
+  merchant: { id: string; name: string } | null;
   location: {
     point: GeoPoint | null;
     trackingState: TrackingState;
