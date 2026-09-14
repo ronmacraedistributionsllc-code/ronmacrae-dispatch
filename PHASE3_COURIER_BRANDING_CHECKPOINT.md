@@ -1,6 +1,6 @@
 # Phase 3 — Courier Branding & Access Checkpoint
 
-**Status: IN PROGRESS (A, B, D, E done; C partial).**
+**Status: A, B, C, D, E all done.**
 This file supersedes `PHASE1_JOBS_CHECKPOINT.md` and
 `PHASE2_JOBS_SCREEN_CHECKPOINT.md` for `/continue-build` purposes (both
 describe the project's earliest, single-business state and are badly out
@@ -28,33 +28,60 @@ file doesn't answer what you need; do not re-read the whole repo.
   "Local delivery (our couriers)" option text. Internal identifiers
   (`Rider` model, `RiderDto`, `/api/bearer/*`, `role: "rider"`) are
   unchanged, as required.
-- **C — Shared signup with a Merchant Business option: PARTIAL.**
-  Built: `/join/merchant` (a real signup form: owner name, business name,
-  email, phone, pickup address, password), linked from the shared
-  `/login` page alongside "Sign up as courier" and "Sign up as customer".
-  Creates the merchant as `active: false` (pending) on the existing
-  shared `User`/`MerchantStaff` account system — no duplicate account or
-  login system. Email-verifies via the same `sendEmailCode()` Task A
-  fixed. A business admin (or platform owner) approves by toggling
-  `active: true` — the same mechanism Platform Admin already used to
-  disable/reactivate a merchant (Stage 34), now doing double duty as
-  "approve a new application." Integration-tested in
-  `merchant-portal.test.ts` (signup → verify → login-blocked-while-
-  pending → approve → login-succeeds).
-  **Real gaps, not yet done:**
-  - No distinct "rejected" state — reject and disable both set the same
-    `active: false`, so Platform Admin can't currently tell a brand-new
-    pending application apart from a merchant it disabled last year, and
-    there's no rejection reason field.
-  - No self-signup option for a **Bearer/Logistics Company** — the login
-    page offers Customer/Courier/Merchant only, not the fourth type the
-    spec asked for. Logistics companies are still admin-created only
-    (Stage 36's existing flow).
-  - No notification to Platform Admin when a new application arrives
-    (unlike the existing dispatch/merchant order-notification emails).
-  - The only test coverage is a `vitest` API integration test, not a
-    real end-to-end browser test — and it doesn't cover an explicit
-    rejection path, since there isn't one to test.
+- **C — Shared signup with a Merchant Business option: DONE.** Extended
+  in this pass to close all four gaps this checkpoint previously flagged:
+  - **Distinct rejected state.** `Merchant`/`LogisticsCompany` both got a
+    new `applicationStatus` (`pending`/`approved`/`rejected`) plus
+    `rejectionReason`/`reviewedAt`/`reviewedById`, separate from `active`
+    — defaulted to `approved` so every existing record and every
+    staff-created one (never a self-signup) needs no backfill and no
+    review step. New owner-only `POST /api/platform/merchants/:id/review`
+    and the logistics-company equivalent take `{decision:
+    "approve"|"reject", reason?}` (reason required to reject); the plain
+    active-toggle `PATCH` routes now refuse a still-`pending` record
+    (400, "approve or reject it first") so an owner can't silently
+    activate an application without ever deciding it — though a
+    *business admin* activating one through the existing staff-level
+    `PATCH /api/merchants/:id` (their own pre-existing approval path,
+    Stage checkpoint's earlier note) still can, and that route now syncs
+    `applicationStatus` to `approved` itself so Platform Admin's console
+    badge never gets stuck showing "Pending review" for a merchant
+    that's actually active.
+  - **Bearer/Logistics Company self-signup.** New `/join/logistics` page
+    and `POST /api/logistics-signup` (+`/verify`, `/resend`) — an exact
+    mirror of merchant-signup's shape and flow (shared `User`/
+    `LogisticsCompanyStaff` account, pending until reviewed, same
+    email-verification gate). The shared `/login` page now lists all
+    four account types the spec named.
+  - **Platform Admin notification.** New `platform-notify.ts` — same
+    "never blocks the caller, best-effort, audited" contract as
+    `dispatch-notify.ts`/`merchant-notify.ts`: emails every active
+    `platformRole: "owner"` account with an address set, fired
+    fire-and-forget right after a merchant/logistics-company signup
+    succeeds. A fresh install with no owner account yet is a silent
+    no-op, not an error.
+  - **Real end-to-end browser coverage.** New
+    `e2e/specs/business-signup.spec.ts` drives the actual UI — the
+    shared login page's four signup links, a full merchant lifecycle
+    (pending → Platform Admin approves → the applicant logs in through
+    the *same shared login page*, in a separate browser context → owner
+    disables it → that login is refused again), and a logistics-company
+    rejection (with the reason staying visible in the console). The
+    verification-code step itself is still never driven through the
+    browser — same rationale as `my-packages.spec.ts`: the code is
+    genuinely never exposed to any browser/API surface, so applications
+    are created via a direct API call instead, and review deliberately
+    doesn't require the email to be verified first.
+  - **New seeded account**: `owner@ronmacrae.example` / `owner1234` — a
+    dedicated platform-owner login for Platform Admin, with deliberately
+    **no** business `StaffMembership`. Previously nothing seeded
+    `platformRole: "owner"` at all, so Platform Admin had zero e2e
+    coverage and a fresh clone couldn't reach that console without
+    manually running `grant-platform-owner.ts`. Kept strictly separate
+    from the `admin@ronmacrae.example` business account on purpose — see
+    the comment on `seedPlatformOwner()` in `seed.ts` for why a *shared*
+    account is the trap, not a shortcut (this is the same confusion
+    documented under Task E below, now prevented at the source).
 - **D — Courier business-access scoping: DONE.** Investigated first
   (per this repo's own standing rule): a courier's job list/detail/
   transition routes (`/api/bearer/jobs*`) were already correctly scoped
@@ -163,6 +190,54 @@ file doesn't answer what you need; do not re-read the whole repo.
    validation that `EMAIL_PROVIDER=resend` has real credentials, and the
    active provider name surfaced on `/api/health`.
 
+## Fixes applied (Task C, concrete)
+
+1. `apps/api/prisma/schema.prisma` — new `ApplicationStatus` enum
+   (`pending`/`approved`/`rejected`); `Merchant`/`LogisticsCompany` both
+   get `applicationStatus` (default `approved`), `rejectionReason`,
+   `reviewedAt`, `reviewedById` (+ `User` reverse relations). Additive
+   only — safe `prisma db push` against production Postgres.
+2. `apps/api/src/modules/platform-notify.ts` (new) —
+   `notifyOwnersOfApplication()`.
+3. `apps/api/src/modules/merchants.ts` — signup sets
+   `applicationStatus: "pending"` and fires the notify (fire-and-forget);
+   the staff `PATCH /api/merchants/:id` route syncs `applicationStatus`
+   to `approved` when it activates a still-pending one.
+4. `apps/api/src/modules/logistics-companies.ts` — new
+   `POST /api/logistics-signup` (+`/verify`, `/resend`), mirroring
+   merchants.ts's signup exactly; its own staff `PATCH` route gets the
+   same implicit-approval sync as merchants.ts.
+5. `apps/api/src/modules/platform-admin.ts` — new
+   `POST /api/platform/merchants/:id/review` and the logistics-company
+   equivalent (`{decision: "approve"|"reject", reason?}`, reason
+   required to reject, 409 if already reviewed); both list routes now
+   return `applicationStatus`/`rejectionReason`/`reviewedAt`/
+   `reviewedByName`; both plain active-toggle `PATCH` routes now refuse
+   a still-`pending` record (400).
+6. `apps/api/src/modules/auth.ts` — the two new public signup routes
+   added to the global auth allowlist.
+7. `apps/api/src/seed.ts` — new `seedPlatformOwner()`, seeds
+   `owner@ronmacrae.example` / `owner1234` with no business
+   `StaffMembership` (see its own doc comment for why that separation
+   matters).
+8. `packages/contracts/src/routes.ts` — `logisticsSignup` block,
+   `platform.reviewMerchant`/`reviewLogisticsCompany`.
+9. `apps/web/src/pages/join-logistics.tsx` (new) — mirrors
+   `join-merchant.tsx`. `apps/web/src/pages/login.tsx` — the fourth
+   signup link. `apps/web/src/app.tsx` — the `/join/logistics` route.
+10. `apps/web/src/pages/platform-admin.tsx` — new shared `ApplicationRow`/
+    `ApplicationBadge` components; `MerchantsTab`/`LogisticsTab` show a
+    "Pending review" badge with Approve/Reject controls (reject opens an
+    inline reason field) for a pending application, and the existing
+    StatusPill + Disable/Reactivate for an already-reviewed one; a
+    rejected row shows its reason and who reviewed it.
+11. `apps/api/test/logistics-signup.test.ts` (new, 4 tests),
+    `apps/api/test/merchant-portal.test.ts` (+2 tests: rejection with
+    reason, disabled-access-after-approval — both previously-flagged
+    gaps), `e2e/specs/business-signup.spec.ts` (new, 3 tests, real
+    browser coverage — previously none existed for this flow or for
+    Platform Admin at all).
+
 ## Fixes applied (Task D, concrete)
 
 1. `apps/api/src/modules/merchant-portal.ts` — `GET
@@ -225,13 +300,13 @@ file doesn't answer what you need; do not re-read the whole repo.
 | Command (working dir: repo root unless noted) | Result |
 | --- | --- |
 | `npm run typecheck --workspace apps/api --workspace apps/web` | 0 errors |
-| `DEV_DB=1 npx vitest run --root apps/api` | **296/296 pass**, 41 files (up from 293/40 — `auth-theme.test.ts` new, Task E) |
-| `npm run test:unit --workspace apps/web` | **15/15 pass**, 3 files (up from 10 — `theme.test.tsx` extended, Task E) |
+| `DEV_DB=1 npx vitest run --root apps/api` | **302/302 pass**, 42 files (up from 296/41 — `logistics-signup.test.ts` new (4), `merchant-portal.test.ts` +2, Task C) |
+| `npm run test:unit --workspace apps/web` | **15/15 pass**, 3 files |
 | `npm run test:unit --workspace packages/contracts` | **8/8 pass** |
 | `npm run test:unit --workspace packages/notifications` | **6/6 pass** |
 | `npm run build --workspace apps/api --workspace apps/web` | success |
-| `rm -f apps/api/data/e2e-test.db && npx playwright test --config=e2e/playwright.config.ts --workers=1` | **36/36 pass** — up from 35, `smoke.spec.ts`'s new login-redirect test (Task E) |
-| `DEV_DB=1 node apps/api/scripts/prepare-db.mjs` | schema valid, pushes cleanly to sqlite; the `Rating`/`MerchantRider` schema changes (Luna) are purely additive (new enum value, new nullable columns, new model, new indexes) — safe for `prisma db push` against production Postgres with no data-loss warning. Task D added no schema change. |
+| `rm -f apps/api/data/e2e-test.db && npx playwright test --config=e2e/playwright.config.ts --workers=1` | **39/39 pass** — up from 36, `business-signup.spec.ts` new (3 tests, Task C) |
+| `DEV_DB=1 node apps/api/scripts/prepare-db.mjs` | schema valid, pushes cleanly to sqlite; Task C's schema changes (new `ApplicationStatus` enum, new nullable columns + a default on `Merchant`/`LogisticsCompany`) are purely additive — safe for `prisma db push` against production Postgres with no data-loss warning. |
 
 **The previously "pre-existing, unrelated" `booking.spec.ts` failure is
 now genuinely fixed**, not just newly passing by chance: Luna's `62e632c`
@@ -276,6 +351,14 @@ db/realtime-hub contention this session, not real regressions.
   different concerns in this app. If that turns out to be wrong, it's a
   business-rule change to `offers.ts`'s `eligibleRiders()`, not an
   access-control bug.
+- Task C's new seeded `owner@ronmacrae.example` / `owner1234` only
+  exists because `seed.ts` was run — it is **not** created by
+  `bootstrap-prod.ts` and will not appear on the live Render deployment
+  automatically. The production account owner still needs
+  `grant-platform-owner.ts` (`GRANT_OWNER_EMAIL=<their email>`) run
+  against production once, same as before this stage — this is a new
+  convenience for local dev/e2e only, not a change to how production
+  gets its first platform owner.
 
 ## Re-verify
 

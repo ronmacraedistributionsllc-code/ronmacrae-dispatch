@@ -9,6 +9,7 @@ import { hashPassword } from "../lib/password.js";
 import { sendEmailCode, consumeEmailCode } from "./customer-account.js";
 import { DEFAULT_PUBLIC_BUSINESS_SLUG } from "./order.js";
 import { normalizeEmail } from "../lib/email.js";
+import { notifyOwnersOfApplication } from "./platform-notify.js";
 
 /**
  * Store/merchant clients of the courier business (spec section 3: "MULTI-
@@ -215,6 +216,7 @@ export async function merchantRoutes(app: FastifyInstance, ctx: AppCtx): Promise
         email,
         pickupAddressText: body.pickupAddressText || null,
         active: false,
+        applicationStatus: "pending",
         staff: { create: { userId: user.id, active: true } },
       },
     });
@@ -227,6 +229,11 @@ export async function merchantRoutes(app: FastifyInstance, ctx: AppCtx): Promise
       throw err;
     }
     await ctx.audit.record({ id: null, role: "anonymous" }, "merchant.signup", "merchant", merchant.id, { email });
+    // Best-effort — never blocks the applicant's own response, see
+    // platform-notify.ts's doc comment.
+    void notifyOwnersOfApplication(ctx, "merchant", { id: merchant.id, name: merchant.name, applicantEmail: email }).catch((err) =>
+      ctx.log.error({ err: String(err), merchantId: merchant.id }, "platform-owner application notification failed"),
+    );
     return { status: "pending", merchantId: merchant.id, email };
   });
 
@@ -294,6 +301,13 @@ export async function merchantRoutes(app: FastifyInstance, ctx: AppCtx): Promise
         if (clash) throw httpErrors.createError(409, `A merchant with the link "/order/${slug}" already exists`);
       }
     }
+    // A business admin activating a still-pending self-signup application
+    // through this staff route (spec: a business admin can also approve,
+    // not only Platform Admin — Stage checkpoint's own note) is a real
+    // approval, same as the platform-admin /review endpoint — keep
+    // applicationStatus in sync so Platform Admin's console never shows a
+    // merchant that's actually active as "Pending review" forever.
+    const implicitlyApproved = existing.applicationStatus === "pending" && body.active === true;
     const merchant = await ctx.prisma.merchant.update({
       where: { id: req.params.id },
       data: {
@@ -307,6 +321,7 @@ export async function merchantRoutes(app: FastifyInstance, ctx: AppCtx): Promise
         pickupPoint: body.pickupPoint === undefined ? undefined : (pointToJson(body.pickupPoint ?? null) ?? undefined),
         businessHours: body.businessHours === undefined ? undefined : body.businessHours || null,
         active: body.active,
+        ...(implicitlyApproved ? { applicationStatus: "approved" as const, reviewedAt: new Date(), reviewedById: req.user!.sub } : {}),
       },
     });
     await ctx.audit.record({ id: req.user!.sub, role: req.user!.role }, "merchant.update", "merchant", merchant.id);

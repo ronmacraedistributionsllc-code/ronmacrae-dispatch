@@ -74,6 +74,31 @@ async function seedStaff(prisma: PrismaClient, businessId: string, users: SeedUs
   }
 }
 
+/**
+ * The platform-owner console account (platform-admin.ts's `requireOwner`)
+ * — deliberately seeded with NO business `StaffMembership` at all, never
+ * as a second role on one of the `seedStaff` accounts above. Those two
+ * are mutually exclusive in practice: `resolveStaffContext()` (auth.ts)
+ * returns `businessId: null` for ANY `platformRole: "owner"` session
+ * regardless of that user's own StaffMembership rows, so an account with
+ * both looks — to anyone testing it — like it mysteriously lost access
+ * to every business-scoped screen (Jobs included) the moment ownership
+ * was granted. That exact confusion cost real debugging time once
+ * already (see PHASE3_COURIER_BRANDING_CHECKPOINT.md's Task E notes) —
+ * keeping this a separate, single-purpose account is what prevents it
+ * from happening again, and is also what makes the Platform Admin
+ * console reachable at all in a fresh e2e run (nothing else grants
+ * `platformRole: "owner"` outside of `grant-platform-owner.ts`, a
+ * manual production-only script, or this seed). */
+async function seedPlatformOwner(prisma: PrismaClient, email: string, name: string, password: string): Promise<void> {
+  await prisma.user.upsert({
+    where: { email },
+    create: { email, name, role: "admin", platformRole: "owner", active: true, passwordHash: hashPassword(password) },
+    update: { name, platformRole: "owner", active: true },
+  });
+  console.log(`  platform owner ${name} <${email}>`);
+}
+
 async function seedRider(prisma: PrismaClient, businessId: string): Promise<string> {
   const user = await prisma.user.upsert({
     where: { phone: "+8765550001" },
@@ -153,6 +178,7 @@ async function main(): Promise<void> {
     { email: "accountant@ronmacrae.example", name: "Anita Accounts", role: "accountant", password: "account1234" },
     { email: "viewer@ronmacrae.example", name: "Vera Viewer", role: "viewer", password: "viewer1234" },
   ]);
+  await seedPlatformOwner(prisma, "owner@ronmacrae.example", "Olivia Owner", "owner1234");
   await seedRider(prisma, businessId);
 
   const zoneIds = await seedZones(prisma, businessId);

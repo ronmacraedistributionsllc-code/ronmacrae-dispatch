@@ -18,6 +18,11 @@ async function adminToken(h: TestHarness, businessId = h.business.id) {
   return h.tokenFor({ id: user.id, name: user.name, role: "admin", businessId });
 }
 
+async function ownerToken(h: TestHarness) {
+  const user = await h.prisma.user.create({ data: { name: `Owner ${uniq()}`, passwordHash: "unused-in-tests", role: "admin", platformRole: "owner" } });
+  return h.tokenFor({ id: user.id, name: user.name, role: "admin", platformRole: "owner" });
+}
+
 async function makeMerchant(h: TestHarness, auth: string) {
   const res = await h.app.inject({
     method: "POST",
@@ -54,6 +59,11 @@ afterAll(async () => {
 describe("merchant portal", () => {
   it("supports public merchant signup, email verification, approval, and portal login", async () => {
     const publicBusiness = await harness.prisma.business.create({ data: { name: "Public Dispatch", slug: "ronmacrae" } });
+    // A platform-owner account with an email set — notifyOwnersOfApplication
+    // (fired at signup time) only has somewhere to send to when one exists;
+    // ownerToken() deliberately omits email so other tests here don't pick
+    // up a stray notification.
+    await harness.prisma.user.create({ data: { name: "Notified Owner", email: `notify-owner-${uniq()}@example.com`, passwordHash: "unused-in-tests", role: "admin", platformRole: "owner", active: true } });
     const email = `new-owner-${uniq()}@vbr.example`;
     const signup = await harness.app.inject({
       method: "POST",
@@ -80,6 +90,70 @@ describe("merchant portal", () => {
     expect(staffApprove.statusCode).toBe(200);
     const login = await harness.app.inject({ method: "POST", url: "/api/merchant-portal/login", payload: { email, password: "securepass1" } });
     expect(login.statusCode).toBe(200);
+
+    // Platform Admin was notified of the application (spec: "notify the
+    // platform admin") — best-effort, but the memory provider lets us
+    // confirm it was actually attempted.
+    const notifyEmail = (harness.ctx.email as unknown as { sent: { subject: string; text: string }[] }).sent.find((m) => m.subject.includes("merchant application"));
+    expect(notifyEmail).toBeTruthy();
+    expect(notifyEmail?.text).toContain(email);
+  });
+
+  it("Platform Admin can reject a pending merchant application with a reason — distinct from a plain disable — and login stays refused", async () => {
+    await harness.prisma.business.upsert({ where: { slug: "ronmacrae" }, create: { name: "Public Dispatch", slug: "ronmacrae" }, update: {} });
+    const email = `rejected-owner-${uniq()}@vbr.example`;
+    const signup = await harness.app.inject({
+      method: "POST",
+      url: "/api/merchant-signup",
+      payload: { ownerName: "Rejected Owner", businessName: `Sketchy Store ${uniq()}`, email, phone: `+187655${uniq().slice(-5)}`, pickupAddressText: "Kingston", password: "securepass1" },
+    });
+    const { merchantId } = signup.json() as { merchantId: string };
+    const sent = (harness.ctx.email as unknown as { sent: { to: string; text: string }[] }).sent.find((m) => m.to === email);
+    const code = sent?.text.match(/code is (\d+)/)?.[1];
+    await harness.app.inject({ method: "POST", url: "/api/merchant-signup/verify", payload: { email, code } });
+
+    const owner = await ownerToken(harness);
+
+    const missingReason = await harness.app.inject({ method: "POST", url: `/api/platform/merchants/${merchantId}/review`, headers: { authorization: `Bearer ${owner}` }, payload: { decision: "reject" } });
+    expect(missingReason.statusCode).toBe(400);
+
+    const reject = await harness.app.inject({
+      method: "POST",
+      url: `/api/platform/merchants/${merchantId}/review`,
+      headers: { authorization: `Bearer ${owner}` },
+      payload: { decision: "reject", reason: "Duplicate of an existing store" },
+    });
+    expect(reject.statusCode).toBe(200);
+    expect((reject.json() as { applicationStatus: string }).applicationStatus).toBe("rejected");
+
+    const row = await harness.prisma.merchant.findUniqueOrThrow({ where: { id: merchantId } });
+    expect(row.applicationStatus).toBe("rejected");
+    expect(row.rejectionReason).toBe("Duplicate of an existing store");
+    expect(row.active).toBe(false);
+
+    const login = await harness.app.inject({ method: "POST", url: "/api/merchant-portal/login", payload: { email, password: "securepass1" } });
+    expect(login.statusCode).toBe(403);
+
+    const reReview = await harness.app.inject({ method: "POST", url: `/api/platform/merchants/${merchantId}/review`, headers: { authorization: `Bearer ${owner}` }, payload: { decision: "approve" } });
+    expect(reReview.statusCode).toBe(409);
+  });
+
+  it("disabled access after approval is refused the same way as a never-approved application", async () => {
+    const admin = await adminToken(harness);
+    const merchant = await makeMerchant(harness, admin);
+    const email = `disabled-owner-${uniq()}@vbr.example`;
+    const password = "securepass1";
+    const grant = await harness.app.inject({ method: "POST", url: `/api/merchants/${merchant.id}/staff`, headers: { authorization: `Bearer ${admin}` }, payload: { email, password } });
+    expect(grant.statusCode).toBe(200);
+
+    const loginWorks = await harness.app.inject({ method: "POST", url: "/api/merchant-portal/login", payload: { email, password } });
+    expect(loginWorks.statusCode).toBe(200);
+
+    const disable = await harness.app.inject({ method: "PATCH", url: `/api/merchants/${merchant.id}`, headers: { authorization: `Bearer ${admin}` }, payload: { active: false } });
+    expect(disable.statusCode).toBe(200);
+
+    const loginAfterDisable = await harness.app.inject({ method: "POST", url: "/api/merchant-portal/login", payload: { email, password } });
+    expect(loginAfterDisable.statusCode).toBe(403);
   });
 
   it("logs in with granted credentials, and sees only its own merchant's orders", async () => {

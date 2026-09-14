@@ -83,6 +83,14 @@ export const API = {
     resend: "/api/merchant-signup/resend",
   },
 
+  /** Public Bearer/Logistics Company self-signup — the shared-signup
+   *  page's fourth account type. Same shape as merchantSignup above. */
+  logisticsSignup: {
+    signup: "/api/logistics-signup",
+    verify: "/api/logistics-signup/verify",
+    resend: "/api/logistics-signup/resend",
+  },
+
   /** dispatcher operations board — spec 5C */
   opsBoard: "/api/ops-board",
 
@@ -393,8 +401,12 @@ export const API = {
     updateBusiness: (id: string) => `/api/platform/businesses/${id}`,
     merchants: "/api/platform/merchants",
     updateMerchant: (id: string) => `/api/platform/merchants/${id}`,
+    /** approve/reject a *pending* application only — see updateMerchant
+     *  (disable/reactivate) for an already-reviewed merchant. */
+    reviewMerchant: (id: string) => `/api/platform/merchants/${id}/review`,
     logisticsCompanies: "/api/platform/logistics-companies",
     updateLogisticsCompany: (id: string) => `/api/platform/logistics-companies/${id}`,
+    reviewLogisticsCompany: (id: string) => `/api/platform/logistics-companies/${id}/review`,
     riders: "/api/platform/riders",
     rider: (id: string) => `/api/platform/riders/${id}`,
     updateRider: (id: string) => `/api/platform/riders/${id}`,

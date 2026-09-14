@@ -174,6 +174,8 @@ model User {
   invitesSent Invite[]
   riderMembershipApprovals RiderMembership[] @relation("riderMembershipApprover")
   merchantRiderCreations   MerchantRider[]    @relation("merchantRiderCreator")
+  merchantApplicationReviews   Merchant[]         @relation("merchantApplicationReviewer")
+  logisticsApplicationReviews  LogisticsCompany[] @relation("logisticsApplicationReviewer")
   sessions  Session[]
   audits    AuditLog[]
   payouts   Payout[]           @relation("payoutApprover")
@@ -342,6 +344,25 @@ model Merchant {
   /** Freeform text (e.g. "Mon-Sat 9am-6pm") — not parsed/enforced anywhere yet. */
   businessHours String?
   active     Boolean  @default(true)
+  /** Distinct from `active` (spec: "Platform Admin can approve/reject/
+   *  disable/reactivate... merchant applications" — four separate verbs,
+   *  not one boolean). `pending` + `active:false` is a fresh self-signup
+   *  awaiting review; `rejected` + `active:false` is a reviewed-and-
+   *  declined application (never shown as "just another disabled
+   *  merchant" — see `rejectionReason`); `approved` covers both an
+   *  approved-then-active merchant and an approved-then-later-disabled
+   *  one, same as before this field existed. Defaults `approved` so every
+   *  merchant created directly by staff (`POST /api/merchants`, never a
+   *  self-signup application) needs no review step, and every merchant
+   *  that existed before this field needs no backfill. */
+  applicationStatus ApplicationStatus @default(approved)
+  /** Set only on a `rejected` decision — shown to nobody but Platform
+   *  Admin; the applicant is never told why over email (spec: keep it
+   *  reviewable, not automatically re-sent to the applicant). */
+  rejectionReason   String?
+  reviewedAt        DateTime?
+  reviewedById      String?
+  reviewedBy        User?             @relation("merchantApplicationReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
@@ -433,6 +454,16 @@ model LogisticsCompany {
   phone      String?
   email      String?
   active     Boolean  @default(true)
+  /** Same application-review lifecycle as `Merchant.applicationStatus` —
+   *  see its doc comment. Defaults `approved` for the same reason: a
+   *  staff-created company (`POST /api/logistics-companies`) never went
+   *  through a review step, and neither did any company that existed
+   *  before this field. */
+  applicationStatus ApplicationStatus @default(approved)
+  rejectionReason   String?
+  reviewedAt        DateTime?
+  reviewedById      String?
+  reviewedBy        User?             @relation("logisticsApplicationReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
@@ -441,6 +472,16 @@ model LogisticsCompany {
   messages PlatformMessage[]
 
   @@unique([businessId, slug])
+}
+
+/** Shared application-review lifecycle for a merchant or logistics-company
+ *  self-signup (spec: "Platform Admin can approve/reject/disable/
+ *  reactivate/inspect merchant applications") — see the doc comment on
+ *  `Merchant.applicationStatus` for the full rationale. */
+enum ApplicationStatus {
+  pending
+  approved
+  rejected
 }
 
 model LogisticsCompanyStaff {

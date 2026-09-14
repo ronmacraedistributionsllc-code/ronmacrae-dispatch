@@ -4,6 +4,10 @@ import { httpErrors } from "@fastify/sensible";
 import type { AppCtx } from "../ctx.js";
 import type { LogisticsCompanyDto } from "@ronmacrae/contracts";
 import { hashPassword } from "../lib/password.js";
+import { sendEmailCode, consumeEmailCode } from "./customer-account.js";
+import { DEFAULT_PUBLIC_BUSINESS_SLUG } from "./order.js";
+import { normalizeEmail } from "../lib/email.js";
+import { notifyOwnersOfApplication } from "./platform-notify.js";
 
 /**
  * Fleet-supplier clients of the courier business (spec: "Bearer/Logistics
@@ -32,6 +36,17 @@ const LogisticsStaffBody = z.object({
    *  account yet — reusing an existing one never touches its password. */
   password: z.string().min(8).max(128).optional(),
 });
+
+const LogisticsSignupBody = z.object({
+  ownerName: z.string().min(1).max(120),
+  businessName: z.string().min(1).max(120),
+  email: z.string().email().max(160),
+  phone: z.string().max(30).optional().or(z.literal("")),
+  password: z.string().min(8).max(128),
+});
+
+const LogisticsVerifyBody = z.object({ email: z.string().email().max(160), code: z.string().min(4).max(10) });
+const LOGISTICS_EMAIL_VERIFY_PURPOSE = "verify_logistics_email";
 
 function slugify(name: string): string {
   return (
@@ -74,6 +89,68 @@ function toDto(c: LogisticsCompanyRow): LogisticsCompanyDto {
 export async function logisticsCompanyRoutes(app: FastifyInstance, ctx: AppCtx): Promise<void> {
   const staff = ctx.requireStaff("admin", "dispatcher");
   const owner = ctx.requireStaff("admin");
+
+  // Public self-signup — the spec's fourth account type ("Bearer/Logistics
+  // Company"), a shared-signup option that previously had none (only
+  // Customer/Courier/Merchant did). Deliberately mirrors merchant-signup's
+  // shape exactly: same shared User/staff-membership account system (no
+  // duplicate login), same pending-until-approved application, same
+  // email-verification-before-review gate, same platform-owner notification.
+  app.post("/api/logistics-signup", { config: { rateLimit: { max: 5, timeWindow: "1 minute" } } }, async (req) => {
+    const body = LogisticsSignupBody.parse(req.body);
+    const email = normalizeEmail(body.email);
+    if (!email) throw httpErrors.createError(400, "Enter a valid email address.");
+    const business = await ctx.prisma.business.findUnique({ where: { slug: DEFAULT_PUBLIC_BUSINESS_SLUG } });
+    if (!business) throw httpErrors.createError(503, "Logistics company sign-up is not available right now");
+    const existingUser = await ctx.prisma.user.findUnique({ where: { email } });
+    if (existingUser) throw httpErrors.createError(409, "This email is already associated with an account");
+    const slug = slugify(body.businessName);
+    const clash = await ctx.prisma.logisticsCompany.findUnique({ where: { businessId_slug: { businessId: business.id, slug } } });
+    if (clash) throw httpErrors.createError(409, "A logistics company with that name already exists");
+    const user = await ctx.prisma.user.create({
+      data: { name: body.ownerName, email, phone: body.phone || null, passwordHash: hashPassword(body.password), role: "viewer" },
+    });
+    const company = await ctx.prisma.logisticsCompany.create({
+      data: {
+        businessId: business.id,
+        name: body.businessName,
+        slug,
+        phone: body.phone || null,
+        email,
+        active: false,
+        applicationStatus: "pending",
+        staff: { create: { userId: user.id, active: true } },
+      },
+    });
+    try {
+      await sendEmailCode(ctx, email, LOGISTICS_EMAIL_VERIFY_PURPOSE, "Verify your logistics company account", (code) => `Your Ronmacrae logistics company verification code is ${code}. It expires in 10 minutes.`);
+    } catch (err) {
+      // The account/application is retained so a provider retry can complete
+      // onboarding; the API truthfully reports that verification was not sent.
+      ctx.log.error({ email, logisticsCompanyId: company.id, error: err instanceof Error ? err.message : String(err) }, "logistics company verification email failed");
+      throw err;
+    }
+    await ctx.audit.record({ id: null, role: "anonymous" }, "logistics_company.signup", "logistics_company", company.id, { email });
+    void notifyOwnersOfApplication(ctx, "logistics_company", { id: company.id, name: company.name, applicantEmail: email }).catch((err) =>
+      ctx.log.error({ err: String(err), logisticsCompanyId: company.id }, "platform-owner application notification failed"),
+    );
+    return { status: "pending", logisticsCompanyId: company.id, email };
+  });
+
+  app.post("/api/logistics-signup/verify", { config: { rateLimit: { max: 20, timeWindow: "1 minute" } } }, async (req) => {
+    const body = LogisticsVerifyBody.parse(req.body);
+    const email = normalizeEmail(body.email);
+    if (!email) throw httpErrors.createError(400, "Enter a valid email address.");
+    await consumeEmailCode(ctx, email, LOGISTICS_EMAIL_VERIFY_PURPOSE, body.code);
+    await ctx.prisma.user.updateMany({ where: { email }, data: { emailVerifiedAt: new Date() } });
+    return { ok: true, status: "pending", message: "Email verified. Your logistics company is waiting for approval." };
+  });
+
+  app.post("/api/logistics-signup/resend", { config: { rateLimit: { max: 5, timeWindow: "1 minute" } } }, async (req) => {
+    const body = z.object({ email: z.string().email().max(160) }).parse(req.body);
+    await sendEmailCode(ctx, body.email, LOGISTICS_EMAIL_VERIFY_PURPOSE, "Verify your logistics company account", (code) => `Your Ronmacrae logistics company verification code is ${code}. It expires in 10 minutes.`);
+    return { ok: true };
+  });
 
   app.get("/api/logistics-companies", { preHandler: staff }, async (req) => {
     const rows = await ctx.prisma.logisticsCompany.findMany({
@@ -126,6 +203,9 @@ export async function logisticsCompanyRoutes(app: FastifyInstance, ctx: AppCtx):
         if (clash) throw httpErrors.createError(409, `A logistics company with the slug "${slug}" already exists`);
       }
     }
+    // Same implicit-approval sync as merchants.ts's equivalent route — see
+    // its comment for the full rationale.
+    const implicitlyApproved = existing.applicationStatus === "pending" && body.active === true;
     const company = await ctx.prisma.logisticsCompany.update({
       where: { id: req.params.id },
       data: {
@@ -134,6 +214,7 @@ export async function logisticsCompanyRoutes(app: FastifyInstance, ctx: AppCtx):
         phone: body.phone === undefined ? undefined : body.phone || null,
         email: body.email === undefined ? undefined : body.email || null,
         active: body.active,
+        ...(implicitlyApproved ? { applicationStatus: "approved" as const, reviewedAt: new Date(), reviewedById: req.user!.sub } : {}),
       },
     });
     await ctx.audit.record({ id: req.user!.sub, role: req.user!.role }, "logistics_company.update", "logistics_company", company.id);

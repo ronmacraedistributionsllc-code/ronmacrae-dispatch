@@ -4404,3 +4404,57 @@ test-isolation fix: a `describe` block's `beforeEach` localStorage reset
 wasn't shared with sibling blocks, hoisted to file level); build clean;
 e2e **36/36** serial with a fresh db (up from 35 — the login-redirect
 test). Full detail in `PHASE3_COURIER_BRANDING_CHECKPOINT.md`.
+
+## Task C — shared signup with a merchant/logistics application review lifecycle (DONE)
+
+Closed all four gaps this file and the PHASE3 checkpoint had previously
+flagged as open for Task C:
+
+- **Distinct rejected state.** `Merchant`/`LogisticsCompany` both got a
+  new `applicationStatus` (`pending`/`approved`/`rejected`), separate
+  from `active`, plus `rejectionReason`/`reviewedAt`/`reviewedById`.
+  Defaulted to `approved` so nothing existing needs a backfill and no
+  staff-created merchant/company ever needs a review step. New owner-only
+  `POST /api/platform/merchants/:id/review` (and the logistics-company
+  equivalent) take an explicit approve/reject decision, reason required
+  to reject; the plain active-toggle route now refuses a still-pending
+  record instead of silently activating it without a real decision.
+- **Bearer/Logistics Company self-signup.** New `/join/logistics` +
+  `POST /api/logistics-signup` (`/verify`, `/resend`) — the shared
+  login page now offers the fourth account type the spec named.
+- **Platform Admin notification.** New `platform-notify.ts`, same
+  never-blocks/best-effort/audited contract as the existing dispatch and
+  merchant order-notification emails — every active platform-owner
+  account with an email gets notified when an application arrives.
+- **Real end-to-end browser coverage.** New `business-signup.spec.ts`
+  drives the actual UI for a full merchant lifecycle (signup → Platform
+  Admin approves → the applicant logs in through the same shared login
+  page in a separate browser context → owner disables it → login refused
+  again) and a logistics-company rejection with a visible reason. The
+  verification code itself is still never driven through a browser —
+  same rationale as the existing `my-packages.spec.ts`: it's genuinely
+  never exposed to any browser/API surface, so applications are created
+  via a direct API call and reviewed without requiring email verification
+  first (the review endpoint only cares that the application is still
+  pending).
+
+Also added a dedicated seeded platform-owner account,
+`owner@ronmacrae.example` / `owner1234`, with deliberately **no**
+business `StaffMembership` — previously nothing in `seed.ts` granted
+`platformRole: "owner"` at all, so Platform Admin had zero e2e coverage
+and no fresh checkout could reach that console without manually running
+`grant-platform-owner.ts` first. Keeping this account single-purpose is
+what prevents the exact "Jobs screen stuck loading, 403" confusion
+documented under Task E above from recurring for a future session. This
+is a dev/e2e-only convenience — production still gets its platform owner
+via `grant-platform-owner.ts`, run manually once against the real
+database (see `PHASE3_COURIER_BRANDING_CHECKPOINT.md`'s "Out of scope"
+notes).
+
+**Verification**: typecheck clean (api+web); vitest **302/302** across
+42 files (up from 296/41 — `logistics-signup.test.ts` new, 4 tests;
+`merchant-portal.test.ts` +2: rejection-with-reason and
+disabled-access-after-approval, both previously-flagged gaps); web unit
+15/15; contracts 8/8; notifications 6/6; build clean; e2e **39/39**
+serial with a fresh db (up from 36 — `business-signup.spec.ts` new, 3
+tests). Full detail in `PHASE3_COURIER_BRANDING_CHECKPOINT.md`.

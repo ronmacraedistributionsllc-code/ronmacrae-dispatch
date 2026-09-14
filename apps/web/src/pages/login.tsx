@@ -140,6 +140,7 @@ export function Login(): React.JSX.Element {
         <div className="mt-4 space-y-2 text-center text-sm text-zinc-400">
           <p><a className="text-brand-accent underline" href="/join/merchant">Sign up as merchant</a> <span className="text-zinc-600">for stores and business owners</span></p>
           <p><a className="text-brand-accent underline" href="/join/rider">Sign up as courier</a> <span className="text-zinc-600">for delivery personnel</span></p>
+          <p><a className="text-brand-accent underline" href="/join/logistics">Sign up as Bearer/Logistics Company</a> <span className="text-zinc-600">for fleet operators supplying couriers</span></p>
           <p><a className="text-brand-accent underline" href="/book">Sign up as customer</a> <span className="text-zinc-600">when placing an order</span></p>
         </div>
         <div className="mt-6 flex items-center justify-center gap-2 border-t border-zinc-800 pt-4 text-xs text-zinc-500">

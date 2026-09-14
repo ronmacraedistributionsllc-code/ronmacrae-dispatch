@@ -456,6 +456,10 @@ export function registerAuthHook(app: FastifyInstance, ctx: AppCtx): void {
     if (url === "/api/rider-signup" && method === "POST") return true;
     if ((url === "/api/rider-signup/verify" || url === "/api/rider-signup/resend") && method === "POST") return true;
     if ((url === "/api/merchant-signup" || url === "/api/merchant-signup/verify" || url === "/api/merchant-signup/resend") && method === "POST") return true;
+    // Public Bearer/Logistics Company application — the spec's fourth
+    // shared-signup account type, same "no login, this IS how you get one"
+    // rule as rider-signup/merchant-signup above.
+    if ((url === "/api/logistics-signup" || url === "/api/logistics-signup/verify" || url === "/api/logistics-signup/resend") && method === "POST") return true;
     // Merchant portal — login is public by nature; every other route under
     // this prefix is gated by its own merchant_portal Bearer token inside
     // the handler (requireMerchantAuth in merchant-portal.ts), same

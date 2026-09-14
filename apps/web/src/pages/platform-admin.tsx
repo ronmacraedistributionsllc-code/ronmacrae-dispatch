@@ -14,8 +14,13 @@ import { PlatformChat } from "../components/platform-chat.js";
  */
 
 interface BusinessRow { id: string; name: string; slug: string | null; active: boolean; merchantCount: number; staffCount: number; riderCount: number; jobCount: number; createdAt: string }
-interface MerchantRow { id: string; name: string; slug: string; active: boolean; business: { id: string; name: string }; jobCount: number; productCount: number; staffCount: number; createdAt: string }
-interface LogisticsCompanyRow { id: string; name: string; slug: string; active: boolean; business: { id: string; name: string }; riderCount: number; staffCount: number; createdAt: string }
+/** Distinct from `active` — a fresh self-signup sits `pending` (spec:
+ *  approve/reject/disable/reactivate are four separate verbs). Every
+ *  merchant/company created directly by staff, and everything that
+ *  existed before this field, is `approved`. */
+type ApplicationStatus = "pending" | "approved" | "rejected";
+interface MerchantRow { id: string; name: string; slug: string; email: string | null; active: boolean; applicationStatus: ApplicationStatus; rejectionReason: string | null; reviewedAt: string | null; reviewedByName: string | null; business: { id: string; name: string }; jobCount: number; productCount: number; staffCount: number; createdAt: string }
+interface LogisticsCompanyRow { id: string; name: string; slug: string; email: string | null; active: boolean; applicationStatus: ApplicationStatus; rejectionReason: string | null; reviewedAt: string | null; reviewedByName: string | null; business: { id: string; name: string }; riderCount: number; staffCount: number; createdAt: string }
 type RiderAttachment = "freelance" | "merchant" | "logistics";
 interface RiderRow {
   id: string;
@@ -123,13 +128,116 @@ function BusinessesTab(): React.JSX.Element {
   );
 }
 
+/** Distinct from StatusPill's active/disabled — surfaces the pending/
+ *  rejected states an application-review flow needs (spec: approve/
+ *  reject/disable/reactivate are four separate verbs, not one boolean).
+ *  Nothing shown for "approved" — StatusPill already covers active vs.
+ *  disabled for a merchant/company that's been through review. */
+function ApplicationBadge({ status }: { status: ApplicationStatus }): React.JSX.Element | null {
+  if (status === "pending") return <span className="rounded bg-amber-900/50 px-2 py-0.5 text-xs font-medium text-amber-300">Pending review</span>;
+  if (status === "rejected") return <span className="rounded bg-red-900/50 px-2 py-0.5 text-xs font-medium text-red-300">Rejected</span>;
+  return null;
+}
+
+/** One row shared by the Merchants and Logistics tabs below — a pending
+ *  application gets Approve/Reject (reject requires a reason, kept for
+ *  Platform Admin's own later reference — never emailed to the
+ *  applicant); an already-reviewed one gets the existing disable/
+ *  reactivate toggle, same as before this field existed. */
+function ApplicationRow({
+  name,
+  email,
+  businessName,
+  statLine,
+  active,
+  applicationStatus,
+  rejectionReason,
+  reviewedByName,
+  onApprove,
+  onReject,
+  onToggleActive,
+  reviewPending,
+  togglePending,
+}: {
+  name: string;
+  email: string | null;
+  businessName: string;
+  statLine: string;
+  active: boolean;
+  applicationStatus: ApplicationStatus;
+  rejectionReason: string | null;
+  reviewedByName: string | null;
+  onApprove: () => void;
+  onReject: (reason: string) => void;
+  onToggleActive: () => void;
+  reviewPending: boolean;
+  togglePending: boolean;
+}): React.JSX.Element {
+  const [rejecting, setRejecting] = useState(false);
+  const [reason, setReason] = useState("");
+  return (
+    <div className="card space-y-2">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <p className="font-medium">{name} <span className="text-xs text-zinc-500">· {businessName}</span></p>
+          {email ? <p className="text-xs text-zinc-500">{email}</p> : null}
+          <p className="text-xs text-zinc-500">{statLine}</p>
+          {applicationStatus === "rejected" && rejectionReason ? (
+            <p className="mt-1 text-xs text-red-400">Rejected{reviewedByName ? ` by ${reviewedByName}` : ""}: {rejectionReason}</p>
+          ) : null}
+        </div>
+        <div className="flex items-center gap-2">
+          <ApplicationBadge status={applicationStatus} />
+          {applicationStatus === "pending" ? (
+            <>
+              <button className="btn-accent !px-3 !py-1 text-xs" disabled={reviewPending} onClick={onApprove}>Approve</button>
+              <button className="btn !px-3 !py-1 text-xs text-red-400" disabled={reviewPending} onClick={() => setRejecting((v) => !v)}>Reject</button>
+            </>
+          ) : (
+            <>
+              <StatusPill active={active} />
+              <button className="btn !px-3 !py-1 text-xs" disabled={togglePending} onClick={onToggleActive}>
+                {active ? "Disable" : "Reactivate"}
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+      {rejecting ? (
+        <div className="flex flex-wrap items-center gap-2 border-t border-zinc-800 pt-2">
+          <input
+            className="input flex-1 !py-1 text-xs"
+            placeholder="Reason for rejecting (kept for your own records, never emailed to the applicant)"
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+          />
+          <button
+            className="btn !px-3 !py-1 text-xs text-red-400"
+            disabled={reviewPending || !reason.trim()}
+            onClick={() => { onReject(reason.trim()); setRejecting(false); setReason(""); }}
+          >
+            Confirm reject
+          </button>
+          <button className="btn !px-3 !py-1 text-xs" onClick={() => { setRejecting(false); setReason(""); }}>Cancel</button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function MerchantsTab(): React.JSX.Element {
   const [q, setQ] = useState("");
   const qc = useQueryClient();
   const list = useQuery({ queryKey: ["platform", "merchants", q], queryFn: () => apiFetch<{ merchants: MerchantRow[] }>(`${API.platform.merchants}?q=${encodeURIComponent(q)}`) });
+  const invalidate = () => void qc.invalidateQueries({ queryKey: ["platform", "merchants"] });
   const toggle = useMutation({
     mutationFn: ({ id, active }: { id: string; active: boolean }) => apiFetch(API.platform.updateMerchant(id), { method: "PATCH", body: JSON.stringify({ active }) }),
-    onSuccess: () => void qc.invalidateQueries({ queryKey: ["platform", "merchants"] }),
+    onSuccess: invalidate,
+  });
+  const review = useMutation({
+    mutationFn: ({ id, decision, reason }: { id: string; decision: "approve" | "reject"; reason?: string }) =>
+      apiFetch(API.platform.reviewMerchant(id), { method: "POST", body: JSON.stringify({ decision, reason }) }),
+    onSuccess: invalidate,
   });
   return (
     <div className="space-y-3">
@@ -137,18 +245,22 @@ function MerchantsTab(): React.JSX.Element {
       {list.isLoading ? <p className="text-sm text-zinc-400">Loading…</p> : null}
       <div className="space-y-2">
         {list.data?.merchants.map((m) => (
-          <div key={m.id} className="card flex flex-wrap items-center justify-between gap-2">
-            <div>
-              <p className="font-medium">{m.name} <span className="text-xs text-zinc-500">· {m.business.name}</span></p>
-              <p className="text-xs text-zinc-500">{m.jobCount} orders · {m.productCount} products · {m.staffCount} portal logins</p>
-            </div>
-            <div className="flex items-center gap-2">
-              <StatusPill active={m.active} />
-              <button className="btn !px-3 !py-1 text-xs" disabled={toggle.isPending} onClick={() => void toggle.mutate({ id: m.id, active: !m.active })}>
-                {m.active ? "Disable" : "Reactivate"}
-              </button>
-            </div>
-          </div>
+          <ApplicationRow
+            key={m.id}
+            name={m.name}
+            email={m.email}
+            businessName={m.business.name}
+            statLine={`${m.jobCount} orders · ${m.productCount} products · ${m.staffCount} portal logins`}
+            active={m.active}
+            applicationStatus={m.applicationStatus}
+            rejectionReason={m.rejectionReason}
+            reviewedByName={m.reviewedByName}
+            onApprove={() => void review.mutate({ id: m.id, decision: "approve" })}
+            onReject={(reason) => void review.mutate({ id: m.id, decision: "reject", reason })}
+            onToggleActive={() => void toggle.mutate({ id: m.id, active: !m.active })}
+            reviewPending={review.isPending}
+            togglePending={toggle.isPending}
+          />
         ))}
       </div>
     </div>
@@ -159,9 +271,15 @@ function LogisticsTab(): React.JSX.Element {
   const [q, setQ] = useState("");
   const qc = useQueryClient();
   const list = useQuery({ queryKey: ["platform", "logistics-companies", q], queryFn: () => apiFetch<{ logisticsCompanies: LogisticsCompanyRow[] }>(`${API.platform.logisticsCompanies}?q=${encodeURIComponent(q)}`) });
+  const invalidate = () => void qc.invalidateQueries({ queryKey: ["platform", "logistics-companies"] });
   const toggle = useMutation({
     mutationFn: ({ id, active }: { id: string; active: boolean }) => apiFetch(API.platform.updateLogisticsCompany(id), { method: "PATCH", body: JSON.stringify({ active }) }),
-    onSuccess: () => void qc.invalidateQueries({ queryKey: ["platform", "logistics-companies"] }),
+    onSuccess: invalidate,
+  });
+  const review = useMutation({
+    mutationFn: ({ id, decision, reason }: { id: string; decision: "approve" | "reject"; reason?: string }) =>
+      apiFetch(API.platform.reviewLogisticsCompany(id), { method: "POST", body: JSON.stringify({ decision, reason }) }),
+    onSuccess: invalidate,
   });
   return (
     <div className="space-y-3">
@@ -169,18 +287,22 @@ function LogisticsTab(): React.JSX.Element {
       {list.isLoading ? <p className="text-sm text-zinc-400">Loading…</p> : null}
       <div className="space-y-2">
         {list.data?.logisticsCompanies.map((c) => (
-          <div key={c.id} className="card flex flex-wrap items-center justify-between gap-2">
-            <div>
-              <p className="font-medium">{c.name} <span className="text-xs text-zinc-500">· {c.business.name}</span></p>
-              <p className="text-xs text-zinc-500">{c.riderCount} attached couriers · {c.staffCount} portal logins</p>
-            </div>
-            <div className="flex items-center gap-2">
-              <StatusPill active={c.active} />
-              <button className="btn !px-3 !py-1 text-xs" disabled={toggle.isPending} onClick={() => void toggle.mutate({ id: c.id, active: !c.active })}>
-                {c.active ? "Disable" : "Reactivate"}
-              </button>
-            </div>
-          </div>
+          <ApplicationRow
+            key={c.id}
+            name={c.name}
+            email={c.email}
+            businessName={c.business.name}
+            statLine={`${c.riderCount} attached couriers · ${c.staffCount} portal logins`}
+            active={c.active}
+            applicationStatus={c.applicationStatus}
+            rejectionReason={c.rejectionReason}
+            reviewedByName={c.reviewedByName}
+            onApprove={() => void review.mutate({ id: c.id, decision: "approve" })}
+            onReject={(reason) => void review.mutate({ id: c.id, decision: "reject", reason })}
+            onToggleActive={() => void toggle.mutate({ id: c.id, active: !c.active })}
+            reviewPending={review.isPending}
+            togglePending={toggle.isPending}
+          />
         ))}
       </div>
     </div>

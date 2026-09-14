@@ -28,6 +28,14 @@ function requireQuery(raw: unknown) {
   return z.object({ q: z.string().max(120).optional() }).parse(raw ?? {});
 }
 
+const ReviewBody = z.object({
+  decision: z.enum(["approve", "reject"]),
+  /** Required for a rejection (spec: distinct rejected state, with a
+   *  reason Platform Admin can see later) — never shown to the applicant
+   *  over email, only in this console. */
+  reason: z.string().max(500).optional(),
+});
+
 export async function platformAdminRoutes(app: FastifyInstance, ctx: AppCtx): Promise<void> {
   const owner = ctx.requireOwner;
 
@@ -72,14 +80,19 @@ export async function platformAdminRoutes(app: FastifyInstance, ctx: AppCtx): Pr
     const rows = await ctx.prisma.merchant.findMany({
       where: q ? { name: { contains: q } } : undefined,
       orderBy: { createdAt: "desc" },
-      include: { business: businessName, _count: { select: { jobs: true, products: true, staff: true } } },
+      include: { business: businessName, reviewedBy: { select: { name: true } }, _count: { select: { jobs: true, products: true, staff: true } } },
     });
     return {
       merchants: rows.map((m) => ({
         id: m.id,
         name: m.name,
         slug: m.slug,
+        email: m.email,
         active: m.active,
+        applicationStatus: m.applicationStatus,
+        rejectionReason: m.rejectionReason,
+        reviewedAt: m.reviewedAt?.toISOString() ?? null,
+        reviewedByName: m.reviewedBy?.name ?? null,
         business: m.business,
         jobCount: m._count.jobs,
         productCount: m._count.products,
@@ -89,8 +102,41 @@ export async function platformAdminRoutes(app: FastifyInstance, ctx: AppCtx): Pr
     };
   });
 
+  // Approve or reject a *pending* self-signup application — distinct from
+  // the plain active-toggle below, which is disable/reactivate for a
+  // merchant that's already been through this step (spec: four separate
+  // verbs — approve/reject/disable/reactivate — not one boolean).
+  app.post<{ Params: { id: string } }>("/api/platform/merchants/:id/review", { preHandler: owner }, async (req) => {
+    const body = ReviewBody.parse(req.body);
+    const existing = await ctx.prisma.merchant.findUnique({ where: { id: req.params.id } });
+    if (!existing) throw httpErrors.createError(404, "Merchant not found");
+    if (existing.applicationStatus !== "pending") {
+      throw httpErrors.createError(409, "This application has already been reviewed — use disable/reactivate instead.");
+    }
+    if (body.decision === "reject" && !body.reason?.trim()) {
+      throw httpErrors.createError(400, "A rejection reason is required.");
+    }
+    const merchant = await ctx.prisma.merchant.update({
+      where: { id: existing.id },
+      data: {
+        applicationStatus: body.decision === "approve" ? "approved" : "rejected",
+        active: body.decision === "approve",
+        rejectionReason: body.decision === "reject" ? body.reason!.trim() : null,
+        reviewedAt: new Date(),
+        reviewedById: req.user!.sub,
+      },
+    });
+    await ctx.audit.record({ id: req.user!.sub, role: "platform_owner" }, `platform.merchant.${body.decision}`, "merchant", merchant.id, { reason: body.reason ?? null });
+    return { ok: true, applicationStatus: merchant.applicationStatus, active: merchant.active };
+  });
+
   app.patch<{ Params: { id: string } }>("/api/platform/merchants/:id", { preHandler: owner }, async (req) => {
     const body = z.object({ active: z.boolean() }).parse(req.body);
+    const existing = await ctx.prisma.merchant.findUnique({ where: { id: req.params.id } });
+    if (!existing) throw httpErrors.createError(404, "Merchant not found");
+    if (existing.applicationStatus === "pending") {
+      throw httpErrors.createError(400, "This application hasn't been reviewed yet — approve or reject it first.");
+    }
     const merchant = await ctx.prisma.merchant.update({ where: { id: req.params.id }, data: { active: body.active } });
     await ctx.audit.record({ id: req.user!.sub, role: "platform_owner" }, body.active ? "platform.merchant.reactivate" : "platform.merchant.disable", "merchant", merchant.id);
     return { ok: true, active: merchant.active };
@@ -104,14 +150,19 @@ export async function platformAdminRoutes(app: FastifyInstance, ctx: AppCtx): Pr
     const rows = await ctx.prisma.logisticsCompany.findMany({
       where: q ? { name: { contains: q } } : undefined,
       orderBy: { createdAt: "desc" },
-      include: { business: businessName, _count: { select: { riders: true, staff: true } } },
+      include: { business: businessName, reviewedBy: { select: { name: true } }, _count: { select: { riders: true, staff: true } } },
     });
     return {
       logisticsCompanies: rows.map((c) => ({
         id: c.id,
         name: c.name,
         slug: c.slug,
+        email: c.email,
         active: c.active,
+        applicationStatus: c.applicationStatus,
+        rejectionReason: c.rejectionReason,
+        reviewedAt: c.reviewedAt?.toISOString() ?? null,
+        reviewedByName: c.reviewedBy?.name ?? null,
         business: c.business,
         riderCount: c._count.riders,
         staffCount: c._count.staff,
@@ -120,8 +171,39 @@ export async function platformAdminRoutes(app: FastifyInstance, ctx: AppCtx): Pr
     };
   });
 
+  // Approve or reject a *pending* self-signup application — see the
+  // matching merchant endpoint above for the full rationale.
+  app.post<{ Params: { id: string } }>("/api/platform/logistics-companies/:id/review", { preHandler: owner }, async (req) => {
+    const body = ReviewBody.parse(req.body);
+    const existing = await ctx.prisma.logisticsCompany.findUnique({ where: { id: req.params.id } });
+    if (!existing) throw httpErrors.createError(404, "Logistics company not found");
+    if (existing.applicationStatus !== "pending") {
+      throw httpErrors.createError(409, "This application has already been reviewed — use disable/reactivate instead.");
+    }
+    if (body.decision === "reject" && !body.reason?.trim()) {
+      throw httpErrors.createError(400, "A rejection reason is required.");
+    }
+    const company = await ctx.prisma.logisticsCompany.update({
+      where: { id: existing.id },
+      data: {
+        applicationStatus: body.decision === "approve" ? "approved" : "rejected",
+        active: body.decision === "approve",
+        rejectionReason: body.decision === "reject" ? body.reason!.trim() : null,
+        reviewedAt: new Date(),
+        reviewedById: req.user!.sub,
+      },
+    });
+    await ctx.audit.record({ id: req.user!.sub, role: "platform_owner" }, `platform.logistics_company.${body.decision}`, "logistics_company", company.id, { reason: body.reason ?? null });
+    return { ok: true, applicationStatus: company.applicationStatus, active: company.active };
+  });
+
   app.patch<{ Params: { id: string } }>("/api/platform/logistics-companies/:id", { preHandler: owner }, async (req) => {
     const body = z.object({ active: z.boolean() }).parse(req.body);
+    const existing = await ctx.prisma.logisticsCompany.findUnique({ where: { id: req.params.id } });
+    if (!existing) throw httpErrors.createError(404, "Logistics company not found");
+    if (existing.applicationStatus === "pending") {
+      throw httpErrors.createError(400, "This application hasn't been reviewed yet — approve or reject it first.");
+    }
     const company = await ctx.prisma.logisticsCompany.update({ where: { id: req.params.id }, data: { active: body.active } });
     await ctx.audit.record({ id: req.user!.sub, role: "platform_owner" }, body.active ? "platform.logistics_company.reactivate" : "platform.logistics_company.disable", "logistics_company", company.id);
     return { ok: true, active: company.active };
