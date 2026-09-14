@@ -1,0 +1,22 @@
+# Real secrets — never commit. See keystore-credentials.txt's own header
+# comment for what's at stake if this leaks or is lost.
+android-keystore
+keystore-credentials.txt
+*.jks
+*.keystore
+
+# Tooling used only to generate this project (generate-project.mjs),
+# not part of the Android build itself.
+node_modules/
+package-lock.json
+
+# Standard Android/Gradle build output.
+.gradle/
+app/build/
+build/
+local.properties
+*.iml
+.idea/
+captures/
+.externalNativeBuild/
+.cxx/
