@@ -37,10 +37,10 @@ Signing key-recovery process.
   (opens full-screen, no browser address bar) instead of falling back to
   an ordinary Custom Tab. It currently lists the **upload key's**
   fingerprint (see the Play App Signing note below).
-- Package name: `com.ronmacraedistributions.dispatch`. App name:
-  "Ronmacrae Dispatch". This is easy to change — nothing has been
-  submitted to Play Console yet — but once you do submit, the package
-  name is permanent for that listing.
+- Package name: `com.login.dispatched` — this is fixed to match the
+  Play Console app listing that was already created under this exact
+  id; changing it now would mean a different, disconnected listing. App
+  name: "Ronmacrae Dispatch".
 
 ## Before you submit — the one thing that needs your Play Console access
 
@@ -77,6 +77,54 @@ After your first upload to Play Console:
   first, which is the sensible way to try it before a public release).
 - After the first upload, come back and finish the assetlinks.json step
   above.
+
+## Automated uploads (Play Developer API)
+
+`upload-release.mjs` uploads a built `.aab` straight to a Play Console
+track via Google's API — no browser, no login prompt, safe to run
+unattended. It needs a **service account key**, and creating one is the
+one part of this whole setup that genuinely requires your own Google
+account — nothing else can do it for you or work around it.
+
+**One-time setup (you do this, in Play Console + Google Cloud Console):**
+
+1. Play Console → this app → **Setup → API access**.
+2. If no Cloud project is linked yet, follow the prompt to link or
+   create one (Play Console guides this — it's a couple of clicks, no
+   separate Cloud Console visit needed for this step).
+3. Click **Create new service account** — this opens Google Cloud
+   Console's IAM page, pre-linked to the right project.
+4. In Cloud Console: **Create Service Account** → give it any name
+   (e.g. "play-console-uploader") → Create and Continue → Continue →
+   Done (no project-level role needed here; permissions are granted
+   back in Play Console in the next step).
+5. Open the new service account → **Keys** tab → **Add Key** → **Create
+   new key** → type **JSON** → Create. A `.json` file downloads —
+   **this file is a real credential**, equivalent in sensitivity to the
+   keystore password: whoever holds it can publish releases to this
+   app. Treat it the same way (password manager or encrypted storage,
+   never committed, never shared).
+6. Back in Play Console → **API access** → find the service account in
+   the list → **Grant Access**. Give it at least **Release manager**
+   permission for this app (Play Console's own preset for exactly this
+   job — upload and release builds, nothing account-level).
+
+Once you have that JSON file, either hand it to me or run the upload
+yourself:
+
+```bash
+# from the android/ directory
+export GOOGLE_APPLICATION_CREDENTIALS=/path/to/the-downloaded-key.json
+node upload-release.mjs --track internal
+# --track accepts internal | alpha | beta | production (default: internal)
+# --aab defaults to app/build/outputs/bundle/release/app-release.aab
+```
+
+It opens an edit, uploads the bundle, assigns it to the chosen track,
+and commits the edit — equivalent to the manual "Create new release"
+flow in the Play Console UI, but scriptable. The key path only ever
+comes from `GOOGLE_APPLICATION_CREDENTIALS` — the script never has a
+hardcoded path and never prints the key's contents.
 
 ## Rebuilding after a web app change
 

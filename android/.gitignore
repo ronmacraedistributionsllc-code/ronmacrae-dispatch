@@ -5,6 +5,15 @@ keystore-credentials.txt
 *.jks
 *.keystore
 
+# Play Developer API service-account key (upload-release.mjs) — whoever
+# holds this file can publish releases to the real Play Console listing.
+# Never committed; path is passed in via GOOGLE_APPLICATION_CREDENTIALS,
+# not a fixed name, but these cover the conventional ones people save it
+# as if they don't set that env var explicitly.
+service-account*.json
+play-*.json
+*-service-account.json
+
 # Tooling used only to generate this project (generate-project.mjs),
 # not part of the Android build itself.
 node_modules/
