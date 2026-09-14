@@ -415,6 +415,16 @@ export const API = {
     removeRiderFromMerchant: (riderId: string, merchantId: string) => `/api/platform/riders/${riderId}/merchants/${merchantId}`,
     staff: "/api/platform/staff",
     updateUser: (id: string) => `/api/platform/users/${id}`,
+    /** Master admin global delete (soft: deletedAt + active:false, own
+     *  audit action, own login-time message) — see the route's own doc
+     *  comment in platform-admin.ts for why one endpoint covers every
+     *  account type named in the spec. */
+    deleteUser: (id: string) => `/api/platform/users/${id}`,
+    /** "Login As" — see platform-admin.ts's own doc comment for the full
+     *  security rationale (never exposes/changes the target's password,
+     *  access-only token, audited both ways). */
+    impersonateUser: (id: string) => `/api/platform/users/${id}/impersonate`,
+    endImpersonation: "/api/platform/impersonation/end",
     audit: "/api/platform/audit",
     moderateRating: (id: string) => `/api/platform/ratings/${id}`,
   },

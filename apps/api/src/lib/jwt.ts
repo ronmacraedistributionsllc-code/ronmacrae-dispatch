@@ -18,6 +18,21 @@ export interface AccessTokenPayload {
   /** Platform-wide authority — see the Business/StaffMembership model doc.
    *  Independent of, and does not imply, membership in any business. */
   platformRole?: PlatformRole;
+  /** Set only on a token issued by POST /api/platform/users/:id/impersonate
+   *  — the id of the platform-owner who is looking through this account,
+   *  never the account's own id. Every other claim on this token (sub,
+   *  role, businessId, riderId...) is the TARGET's own, resolved exactly
+   *  as a normal login would — an impersonation token authorizes exactly
+   *  what the target account itself could do, nothing more, and every
+   *  route's own scoping/ownership checks apply unchanged. This field's
+   *  only job is the audit trail and the frontend's "impersonation
+   *  active" banner; it grants no capability by itself. Deliberately
+   *  issued with no refresh token/session — it can only ever be the
+   *  short access-token TTL, and a refresh (if the frontend's normal
+   *  401-retry fires) falls back to the *admin's own* still-valid
+   *  refresh cookie, silently ending the impersonation rather than
+   *  extending it. */
+  impersonatedBy?: string;
   type: "access";
 }
 
@@ -70,13 +85,14 @@ export class JwtIssuer {
     this.secret = new TextEncoder().encode(sessionSecret);
   }
 
-  async issueAccess(user: { id: string; name: string; role: Role; riderId?: string; businessId?: string; platformRole?: PlatformRole }): Promise<string> {
+  async issueAccess(user: { id: string; name: string; role: Role; riderId?: string; businessId?: string; platformRole?: PlatformRole; impersonatedBy?: string }): Promise<string> {
     const payload = {
       name: user.name,
       role: user.role,
       ...(user.riderId ? { riderId: user.riderId } : {}),
       ...(user.businessId ? { businessId: user.businessId } : {}),
       ...(user.platformRole ? { platformRole: user.platformRole } : {}),
+      ...(user.impersonatedBy ? { impersonatedBy: user.impersonatedBy } : {}),
       type: "access" as const,
     };
     return new SignJWT(payload as JWTPayload)

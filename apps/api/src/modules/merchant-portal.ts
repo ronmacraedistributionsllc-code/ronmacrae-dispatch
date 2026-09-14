@@ -180,6 +180,12 @@ export async function merchantPortalRoutes(app: FastifyInstance, ctx: AppCtx): P
     if (!email) throw genericError();
     const user = await ctx.prisma.user.findUnique({ where: { email } });
     if (!user || !verifyPassword(body.password, user.passwordHash)) throw genericError();
+    // A platform-level delete/disable (platform-admin.ts) must actually
+    // block every login "face" this same shared User can reach, not just
+    // the unified staff route — this route used to check neither at all,
+    // so a globally-deleted or -disabled admin who also happened to hold
+    // merchant-staff access could still sign in here.
+    if (user.deletedAt || !user.active) throw genericError();
     // Email verification is no longer a login gate — only admin approval
     // (merchant.active, checked below) is. A never-delivered verification
     // email (a real production failure mode — see sendEmailCode's doc

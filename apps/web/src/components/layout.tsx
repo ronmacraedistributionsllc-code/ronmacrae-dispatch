@@ -54,8 +54,36 @@ const CONNECTION_DOT: Record<ConnectionStatus, string> = {
   offline: "bg-red-600",
 };
 
+/** Spec: "a highly visible banner... ADMIN IMPERSONATION ACTIVE" — sticky
+ *  at the very top, impossible to miss or scroll past, on every screen
+ *  for as long as an impersonation session is active (see lib/auth.tsx's
+ *  startImpersonation/exitImpersonation). */
+function ImpersonationBanner({ adminName, targetName }: { adminName: string; targetName: string }): React.JSX.Element {
+  const { exitImpersonation } = useAuth();
+  const navigate = useNavigate();
+  const [exiting, setExiting] = useState(false);
+  return (
+    <div className="sticky top-0 z-40 flex flex-wrap items-center justify-between gap-2 bg-amber-600 px-4 py-2 text-sm font-medium text-amber-950">
+      <span>
+        🎭 ADMIN IMPERSONATION ACTIVE — {adminName} viewing as <strong>{targetName}</strong>
+      </span>
+      <button
+        className="rounded bg-amber-950 px-3 py-1 text-xs font-semibold text-amber-50 hover:bg-amber-900"
+        disabled={exiting}
+        onClick={async () => {
+          setExiting(true);
+          await exitImpersonation();
+          navigate("/platform-admin");
+        }}
+      >
+        {exiting ? "Exiting…" : "Exit impersonation"}
+      </button>
+    </div>
+  );
+}
+
 export function Layout({ children }: { children: React.ReactNode }): React.JSX.Element {
-  const { user, rider, logout, otherWorkspaces, businessId, effectiveRole } = useAuth();
+  const { user, rider, logout, otherWorkspaces, businessId, effectiveRole, impersonatedBy } = useAuth();
   const navigate = useNavigate();
   const { unreadCount, markRead, status } = useRealtime();
 
@@ -99,7 +127,9 @@ export function Layout({ children }: { children: React.ReactNode }): React.JSX.E
   const needsMoreButton = overflowMobileTabs.length > 0;
 
   return (
-    <div className="flex h-full min-h-dvh flex-col md:flex-row">
+    <div className="flex h-full min-h-dvh flex-col">
+      {impersonatedBy ? <ImpersonationBanner adminName={impersonatedBy.name} targetName={user?.name ?? "this account"} /> : null}
+      <div className="flex min-h-0 flex-1 flex-col md:flex-row">
       <AlertsToaster />
       <aside className="flex shrink-0 flex-col gap-1 border-b border-zinc-800 bg-zinc-900/60 p-4 md:w-56 md:border-b-0 md:border-r">
         <div className="mb-4 flex items-center justify-between gap-2">
@@ -220,6 +250,7 @@ export function Layout({ children }: { children: React.ReactNode }): React.JSX.E
           onSignOut={() => void logout()}
         />
       ) : null}
+      </div>
     </div>
   );
 }

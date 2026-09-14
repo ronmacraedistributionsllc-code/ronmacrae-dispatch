@@ -63,6 +63,10 @@ export async function logisticsPortalRoutes(app: FastifyInstance, ctx: AppCtx): 
     if (!email) throw genericError();
     const user = await ctx.prisma.user.findUnique({ where: { email } });
     if (!user || !verifyPassword(body.password, user.passwordHash)) throw genericError();
+    // See merchant-portal.ts's matching login route for the full
+    // rationale — a platform-level delete/disable must block every login
+    // face this shared User can reach, not just the unified staff route.
+    if (user.deletedAt || !user.active) throw genericError();
     const membership = await ctx.prisma.logisticsCompanyStaff.findFirst({
       where: { userId: user.id, active: true },
       include: { logisticsCompany: { select: { id: true, name: true, active: true } } },

@@ -155,6 +155,19 @@ model User {
   totpSecret   String?
   totpEnabled  Boolean  @default(false)
   active       Boolean  @default(true)
+  /** Distinct from `active` (spec: PENDING/ACTIVE/SUSPENDED/REJECTED/
+   *  DELETED are separate states, and "master admin global delete must be
+   *  audited" as its own action, not just another disable). Set only by
+   *  DELETE /api/platform/users/:id (platform-owner only) — a genuine,
+   *  deliberate account-removal decision, always paired with active:false
+   *  and its own "platform.user.delete" audit action. Soft: the row and
+   *  every historical relation it's referenced from (jobs, ratings,
+   *  audit log, settlements...) stay exactly as they are — a courier or
+   *  merchant staff member being deleted must never make past order
+   *  history disappear or dangle. Login checks this first, with its own
+   *  distinct "Account deleted" message, never the generic "disabled"
+   *  one a merely-suspended account gets. */
+  deletedAt    DateTime?
   lastLoginAt  DateTime?
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt

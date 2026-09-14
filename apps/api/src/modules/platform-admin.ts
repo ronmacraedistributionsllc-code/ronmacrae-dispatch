@@ -3,6 +3,7 @@ import { z } from "zod";
 import { httpErrors } from "@fastify/sensible";
 import type { AppCtx } from "../ctx.js";
 import { buildRiderCashProfile } from "./cash-profile.js";
+import { resolveStaffContext, toUserDto } from "./auth.js";
 
 /**
  * The platform-owner console (spec: "Build or complete the real Platform
@@ -224,17 +225,25 @@ export async function platformAdminRoutes(app: FastifyInstance, ctx: AppCtx): Pr
         attachedMerchant: businessName,
         attachedLogisticsCompany: businessName,
         merchantRiders: { where: { status: "active" }, include: { merchant: businessName } },
-        user: { select: { email: true } },
+        user: { select: { email: true, active: true, deletedAt: true } },
       },
     });
     return {
       riders: rows.map((r) => ({
         id: r.id,
+        userId: r.userId,
         name: r.name,
         phone: r.phone,
         email: r.user?.email ?? null,
         vehicle: r.vehicle,
         active: r.active,
+        // A courier's own platform-account state (User.active/deletedAt)
+        // is distinct from Rider.active/platformStatus above — a rider
+        // can be deleted at the account level (can never log in again)
+        // while the Rider profile row itself, and every job it's
+        // attached to, stays fully intact for history.
+        accountDeleted: r.user?.deletedAt != null,
+        accountActive: r.user?.active ?? null,
         platformStatus: r.platformStatus,
         status: r.status,
         attachment: r.attachment,
@@ -415,6 +424,7 @@ export async function platformAdminRoutes(app: FastifyInstance, ctx: AppCtx): Pr
         email: u.email,
         phone: u.phone,
         active: u.active,
+        deletedAt: u.deletedAt?.toISOString() ?? null,
         platformRole: u.platformRole,
         businesses: u.staffMemberships.map((m) => ({ id: m.businessId, name: m.business.name, role: m.role, active: m.active })),
         merchants: u.merchantStaffMemberships.map((m) => ({ id: m.merchantId, name: m.merchant.name, active: m.active })),
@@ -428,9 +438,84 @@ export async function platformAdminRoutes(app: FastifyInstance, ctx: AppCtx): Pr
     if (req.params.id === req.user!.sub && !body.active) {
       throw httpErrors.createError(400, "You can't disable your own account.");
     }
+    const existing = await ctx.prisma.user.findUnique({ where: { id: req.params.id } });
+    if (!existing) throw httpErrors.createError(404, "User not found");
+    if (existing.deletedAt) throw httpErrors.createError(409, "This account has been deleted — it can no longer be disabled or reactivated.");
     const user = await ctx.prisma.user.update({ where: { id: req.params.id }, data: { active: body.active } });
     await ctx.audit.record({ id: req.user!.sub, role: "platform_owner" }, body.active ? "platform.user.reactivate" : "platform.user.disable", "user", user.id);
     return { ok: true, active: user.active };
+  });
+
+  // Master admin global delete (spec: "MASTER ADMIN MUST BE ABLE TO DELETE
+  // ANY ACCOUNT FROM THE PLATFORM... customer, merchant, merchant staff,
+  // courier, logistics company, logistics manager, dispatcher, any other
+  // account type" — every one of those is a User row, whether their
+  // access comes through a StaffMembership, MerchantStaff,
+  // LogisticsCompanyStaff, or a Rider profile, so one route covers all of
+  // them). Soft: deletedAt + active:false, distinct from a plain disable
+  // (own audit action, own login-time message) — every historical
+  // relation this user is referenced from (jobs, ratings, audit log,
+  // settlements, memberships...) is completely untouched. A deleted user
+  // can never log in again through any of this app's login "faces" — see
+  // the deletedAt checks in auth.ts, merchant-portal.ts, and
+  // logistics-portal.ts's own login routes.
+  app.delete<{ Params: { id: string } }>("/api/platform/users/:id", { preHandler: owner }, async (req) => {
+    if (req.params.id === req.user!.sub) {
+      throw httpErrors.createError(400, "You can't delete your own account.");
+    }
+    const existing = await ctx.prisma.user.findUnique({ where: { id: req.params.id } });
+    if (!existing) throw httpErrors.createError(404, "User not found");
+    if (existing.deletedAt) throw httpErrors.createError(409, "This account has already been deleted.");
+    const user = await ctx.prisma.user.update({ where: { id: req.params.id }, data: { deletedAt: new Date(), active: false } });
+    await ctx.audit.record({ id: req.user!.sub, role: "platform_owner" }, "platform.user.delete", "user", user.id, { name: existing.name, email: existing.email, phone: existing.phone });
+    return { ok: true, deletedAt: user.deletedAt };
+  });
+
+  // Admin impersonation (spec: "Login As" / "Enter Account", without
+  // knowing or changing the target's password). Resolves the target's
+  // OWN staff context exactly as a normal login would — the issued token
+  // authorizes exactly what the target account itself could do, nothing
+  // more; every route's own scoping/ownership checks apply completely
+  // unchanged. impersonatedBy (jwt.ts) is purely an audit/UI marker, not
+  // a capability grant. Deliberately access-only, no refresh token/
+  // session row: it can only ever last the short access-token TTL, and
+  // if it expires mid-use, the frontend's normal 401-retry falls back to
+  // the ADMIN's own still-valid refresh cookie — silently ENDING the
+  // impersonation rather than extending it, which is the safe direction
+  // for that fallback to fail in.
+  app.post<{ Params: { id: string } }>("/api/platform/users/:id/impersonate", { preHandler: owner }, async (req) => {
+    if (req.params.id === req.user!.sub) {
+      throw httpErrors.createError(400, "You're already signed in as yourself.");
+    }
+    const target = await ctx.prisma.user.findUnique({ where: { id: req.params.id }, include: { rider: { select: { id: true } } } });
+    if (!target) throw httpErrors.createError(404, "User not found");
+    if (target.deletedAt) throw httpErrors.createError(409, "This account has been deleted.");
+    if (!target.active) throw httpErrors.createError(409, "This account is disabled — reactivate it first.");
+    const staffContext = await resolveStaffContext(ctx, target);
+    const accessToken = await ctx.jwt.issueAccess({
+      id: target.id,
+      name: target.name,
+      role: staffContext?.role ?? target.role,
+      riderId: target.rider?.id,
+      businessId: staffContext?.businessId ?? undefined,
+      platformRole: staffContext?.platformRole ?? undefined,
+      impersonatedBy: req.user!.sub,
+    });
+    await ctx.audit.record({ id: req.user!.sub, role: "platform_owner" }, "platform.impersonation.start", "user", target.id, { targetName: target.name, targetEmail: target.email });
+    return { accessToken, user: toUserDto(target) };
+  });
+
+  // Purely an audit-trail completion — the frontend just discards its
+  // local copy of the impersonation token to actually "exit"; this call
+  // is what makes "impersonation started / impersonation ended" (spec)
+  // both real, paired audit events instead of only ever recording the
+  // start. Requires an actual impersonation token (impersonatedBy set),
+  // not a ordinary owner session — there's nothing to "end" otherwise.
+  app.post("/api/platform/impersonation/end", { preHandler: ctx.requireAuth }, async (req) => {
+    const adminId = req.user!.impersonatedBy;
+    if (!adminId) throw httpErrors.createError(400, "Not currently impersonating anyone.");
+    await ctx.audit.record({ id: adminId, role: "platform_owner" }, "platform.impersonation.end", "user", req.user!.sub, { targetName: req.user!.name });
+    return { ok: true };
   });
 
   // ---------------------------------------------------------------------

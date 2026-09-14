@@ -172,6 +172,10 @@ export async function authRoutes(app: FastifyInstance, ctx: AppCtx): Promise<voi
     if (!user || !verifyPassword(body.password, user.passwordHash)) {
       throw httpErrors.createError(401, "Invalid credentials");
     }
+    // Checked before the plain "disabled" case — a distinct, honest status
+    // (spec: PENDING/ACTIVE/SUSPENDED/REJECTED/DELETED are separate
+    // states), never the generic message a merely-suspended account gets.
+    if (user.deletedAt) throw httpErrors.createError(403, "Account deleted");
     if (!user.active) throw httpErrors.createError(403, "Account disabled");
     // Email verification is no longer a login gate for anyone, riders
     // included (a never-delivered verification email — a real production
@@ -338,6 +342,15 @@ export async function authRoutes(app: FastifyInstance, ctx: AppCtx): Promise<voi
     // a "Switch workspace" control can show up anywhere in the app, not
     // only right after signing in.
     const otherWorkspaces = [...(await merchantWorkspacesFor(ctx, user.id)), ...(await logisticsWorkspacesFor(ctx, user.id))];
+    // Admin impersonation (spec: a highly visible, unmissable banner
+    // while active) — null on every ordinary session; only set on a
+    // token POST /api/platform/users/:id/impersonate issued, where it's
+    // the admin's own id (never this user's). Looked up here (not just
+    // passed straight from the token) so the banner can show a real name,
+    // not a bare id.
+    const impersonatedBy = req.user!.impersonatedBy
+      ? await ctx.prisma.user.findUnique({ where: { id: req.user!.impersonatedBy }, select: { id: true, name: true } })
+      : null;
     // Both reflect THIS session's own token (req.user, already decoded),
     // not a fresh recomputation — a rider who also holds real
     // StaffMembership rows (see resolveStaffContext's own doc comment)
@@ -348,7 +361,7 @@ export async function authRoutes(app: FastifyInstance, ctx: AppCtx): Promise<voi
     // chosen — `effectiveRole` is the actually-granted role for THIS
     // session, the same one requireStaff() itself checks server-side, and
     // is what role-gated nav (layout.tsx) needs to ask instead.
-    return { user: toUserDto(user), rider, otherWorkspaces, businessId: req.user!.businessId ?? null, effectiveRole: req.user!.role };
+    return { user: toUserDto(user), rider, otherWorkspaces, businessId: req.user!.businessId ?? null, effectiveRole: req.user!.role, impersonatedBy };
   });
 
   // Stage E (spec: theme switcher, "persist per user") — any signed-in

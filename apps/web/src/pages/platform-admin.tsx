@@ -1,8 +1,10 @@
 import React, { useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { API } from "@ronmacrae/contracts";
 import type { PlatformMessagesDto, PlatformMessageThreadDto } from "@ronmacrae/contracts";
 import { ApiError, apiFetch } from "../lib/api.js";
+import { useAuth } from "../lib/auth.js";
 import { PlatformChat } from "../components/platform-chat.js";
 
 /**
@@ -24,11 +26,14 @@ interface LogisticsCompanyRow { id: string; name: string; slug: string; email: s
 type RiderAttachment = "freelance" | "merchant" | "logistics";
 interface RiderRow {
   id: string;
+  userId: string | null;
   name: string;
   phone: string;
   email: string | null;
   vehicle: string;
   active: boolean;
+  accountDeleted: boolean;
+  accountActive: boolean | null;
   platformStatus: "pending" | "approved" | "suspended";
   status: string;
   attachment: RiderAttachment;
@@ -44,7 +49,7 @@ interface RiderDetail extends RiderRow {
   loginActive: boolean | null;
   jobsByStatus: Record<string, number>;
   cashByBusiness: { businessId: string; businessName: string }[];
-}interface StaffRow { id: string; name: string; email: string | null; phone: string | null; active: boolean; platformRole: string | null; businesses: { id: string; name: string; role: string; active: boolean }[]; merchants: { id: string; name: string; active: boolean }[]; createdAt: string }
+}interface StaffRow { id: string; name: string; email: string | null; phone: string | null; active: boolean; deletedAt: string | null; platformRole: string | null; businesses: { id: string; name: string; role: string; active: boolean }[]; merchants: { id: string; name: string; active: boolean }[]; createdAt: string }
 interface AuditRow { id: string; userName: string | null; userEmail: string | null; role: string | null; action: string; entityType: string; entityId: string | null; createdAt: string }
 
 type Tab = "businesses" | "merchants" | "logistics" | "riders" | "staff" | "messages" | "audit";
@@ -93,6 +98,78 @@ function StatusPill({ active, activeLabel = "Active", inactiveLabel = "Disabled"
     <span className={`rounded px-2 py-0.5 text-xs font-medium ${active ? "bg-emerald-900/50 text-emerald-300" : "bg-zinc-800 text-zinc-500"}`}>
       {active ? activeLabel : inactiveLabel}
     </span>
+  );
+}
+
+/** Master admin global delete + "Login As" (spec parts 7/9) — shared by
+ *  StaffTab and RidersTab (a courier's own platform account is a User
+ *  row exactly like anyone else's; one component, one confirmation
+ *  pattern, one impersonate flow, for every account type this console
+ *  lists). Delete is soft (server-side) and, per spec, requires an
+ *  explicit typed-in confirmation — a name match, not just a click,
+ *  since this is exactly the kind of hard-to-walk-back action that
+ *  deserves more friction than a plain confirm(). */
+function AccountActions({ userId, name, onDeleted }: { userId: string; name: string; onDeleted: () => void }): React.JSX.Element {
+  const { startImpersonation } = useAuth();
+  const navigate = useNavigate();
+  const [confirming, setConfirming] = useState(false);
+  const [confirmText, setConfirmText] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function loginAs() {
+    setBusy(true);
+    try {
+      await startImpersonation(userId);
+      navigate("/");
+    } catch (err) {
+      window.alert(err instanceof ApiError ? err.message : "Could not start impersonation");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function confirmDelete() {
+    setBusy(true);
+    try {
+      await apiFetch(API.platform.deleteUser(userId), { method: "DELETE" });
+      onDeleted();
+    } catch (err) {
+      window.alert(err instanceof ApiError ? err.message : "Could not delete this account");
+    } finally {
+      setBusy(false);
+      setConfirming(false);
+      setConfirmText("");
+    }
+  }
+
+  if (confirming) {
+    return (
+      <div className="flex flex-wrap items-center gap-2 rounded border border-red-900 bg-red-950/40 p-2">
+        <span className="text-xs text-red-300">
+          Delete <strong>{name}</strong>? This removes their platform access permanently — their order/audit
+          history stays intact. Type the name to confirm.
+        </span>
+        <input className="input !w-40 !py-1 text-xs" value={confirmText} onChange={(e) => setConfirmText(e.target.value)} placeholder={name} autoFocus />
+        <button
+          className="btn !border-red-700 !bg-red-900 !px-3 !py-1 text-xs !text-red-100"
+          disabled={busy || confirmText.trim() !== name.trim()}
+          onClick={() => void confirmDelete()}
+        >
+          {busy ? "Deleting…" : "Delete"}
+        </button>
+        <button className="btn !px-3 !py-1 text-xs" onClick={() => { setConfirming(false); setConfirmText(""); }}>Cancel</button>
+      </div>
+    );
+  }
+  return (
+    <>
+      <button className="btn !px-3 !py-1 text-xs" disabled={busy} onClick={() => void loginAs()}>
+        {busy ? "…" : "Login as"}
+      </button>
+      <button className="btn !border-red-800 !px-3 !py-1 text-xs !text-red-400" onClick={() => setConfirming(true)}>
+        Delete
+      </button>
+    </>
   );
 }
 
@@ -372,6 +449,11 @@ function RidersTab(): React.JSX.Element {
               <button className="btn !px-3 !py-1 text-xs" disabled={update.isPending} onClick={() => void update.mutate({ id: r.id, active: !r.active })}>
                 {r.active ? "Disable login" : "Re-enable login"}
               </button>
+              {r.userId && !r.accountDeleted ? (
+                <AccountActions userId={r.userId} name={r.name} onDeleted={() => void qc.invalidateQueries({ queryKey: ["platform", "riders"] })} />
+              ) : r.accountDeleted ? (
+                <span className="rounded bg-red-950 px-2 py-0.5 text-xs font-medium text-red-400">Account deleted</span>
+              ) : null}
             </div>
             <AttachmentControl
               rider={r}
@@ -583,11 +665,18 @@ function StaffTab(): React.JSX.Element {
                 {[...u.businesses.map((b) => `${b.name} (${b.role})`), ...u.merchants.map((m) => `${m.name} (merchant)`)].join(", ") || "no access yet"}
               </p>
             </div>
-            <div className="flex items-center gap-2">
-              <StatusPill active={u.active} />
-              <button className="btn !px-3 !py-1 text-xs" disabled={toggle.isPending} onClick={() => void toggle.mutate({ id: u.id, active: !u.active })}>
-                {u.active ? "Disable" : "Reactivate"}
-              </button>
+            <div className="flex flex-wrap items-center gap-2">
+              {u.deletedAt ? (
+                <span className="rounded bg-red-950 px-2 py-0.5 text-xs font-medium text-red-400">Deleted</span>
+              ) : (
+                <>
+                  <StatusPill active={u.active} />
+                  <button className="btn !px-3 !py-1 text-xs" disabled={toggle.isPending} onClick={() => void toggle.mutate({ id: u.id, active: !u.active })}>
+                    {u.active ? "Disable" : "Reactivate"}
+                  </button>
+                  <AccountActions userId={u.id} name={u.name} onDeleted={() => void qc.invalidateQueries({ queryKey: ["platform", "staff"] })} />
+                </>
+              )}
             </div>
           </div>
         ))}
