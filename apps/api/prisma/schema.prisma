@@ -101,6 +101,16 @@ enum RiderMembershipStatus {
   removed
 }
 
+/** Whether a rider is currently attached to a given merchant (see
+ *  MerchantRider below). `active` is the attached state; `removed` is the
+ *  soft-removed correction that keeps the relationship's history without
+ *  letting it show up in any "my riders" list — same "corrections are new
+ *  state, never erased history" rule as RiderMembershipStatus. */
+enum MerchantRiderStatus {
+  active
+  removed
+}
+
 /** A rider's relationship with one specific business. A Rider is the global
  *  profile (one login, one location stream, one vehicle); which businesses
  *  they actually carry jobs for is tracked here, and a membership can only
@@ -155,6 +165,7 @@ model User {
   logisticsCompanyStaffMemberships LogisticsCompanyStaff[]
   invitesSent Invite[]
   riderMembershipApprovals RiderMembership[] @relation("riderMembershipApprover")
+  merchantRiderCreations   MerchantRider[]    @relation("merchantRiderCreator")
   sessions  Session[]
   audits    AuditLog[]
   payouts   Payout[]           @relation("payoutApprover")
@@ -252,6 +263,7 @@ model Rider {
   settlements Settlement[]
   ratings     Rating[]
   platformMessages PlatformMessage[]
+  merchantRiders MerchantRider[]
 }
 
 // ---------- Geography / pricing ----------
@@ -330,6 +342,7 @@ model Merchant {
   settlements Settlement[]
   staff    MerchantStaff[]
   attachedRiders Rider[]
+  merchantRiders MerchantRider[]
 
   @@unique([businessId, slug])
 }
@@ -354,6 +367,45 @@ model MerchantStaff {
 
   @@unique([userId, merchantId])
   @@index([merchantId])
+}
+
+/**
+ * A rider's attachment to one specific merchant — the many-to-many link
+ * between a merchant (a store client) and the couriers that deliver its
+ * orders. Deliberately separate from (and additive to) two other existing
+ * relationships:
+ *   - `RiderMembership` links a rider to a `Business` (the courier operator)
+ *     and is about which *business* a rider carries jobs for at all.
+ *   - `Rider.attachedMerchantId` is the platform-owner's *eligibility* gate
+ *     ("attached only to one merchant"), a single-merchant flag that drives
+ *     offer eligibility in offers.ts.
+ * This model is the merchant-facing roster: one merchant can have many
+ * riders, one rider can belong to many merchants, and removing a rider here
+ * only removes this one relationship — never the rider's platform account,
+ * never another merchant's relationship with that same rider.
+ *
+ * `@@unique([merchantId, riderId])` is the duplicate-prevention guarantee:
+ * a merchant can never be attached to the same rider twice. Re-adding after
+ * a removal re-activates the same row rather than inserting a second one.
+ */
+model MerchantRider {
+  id          String              @id @default(cuid())
+  merchantId  String
+  merchant    Merchant            @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+  riderId     String
+  rider       Rider               @relation(fields: [riderId], references: [id], onDelete: Cascade)
+  status      MerchantRiderStatus @default(active)
+  createdAt   DateTime            @default(now())
+  /** Who attached this rider — a merchant-portal login or a platform-owner. */
+  createdById String?
+  createdBy   User?               @relation("merchantRiderCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  /** Set when the relationship is `active`; null once removed. */
+  approvedAt  DateTime?
+  updatedAt   DateTime            @updatedAt
+
+  @@unique([merchantId, riderId])
+  @@index([riderId, status])
+  @@index([merchantId, status])
 }
 
 /** A fleet operator — a business with its own riders who deliver for

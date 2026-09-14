@@ -21,6 +21,7 @@ interface RiderRow {
   id: string;
   name: string;
   phone: string;
+  email: string | null;
   vehicle: string;
   active: boolean;
   platformStatus: "pending" | "approved" | "suspended";
@@ -29,6 +30,7 @@ interface RiderRow {
   attachedMerchant: { id: string; name: string } | null;
   attachedLogisticsCompany: { id: string; name: string } | null;
   memberships: { businessId: string; businessName: string; status: string }[];
+  merchants: { merchantId: string; merchantName: string; status: string; addedAt: string }[];
   createdAt: string;
 }
 interface RiderDetail extends RiderRow {
@@ -37,8 +39,7 @@ interface RiderDetail extends RiderRow {
   loginActive: boolean | null;
   jobsByStatus: Record<string, number>;
   cashByBusiness: { businessId: string; businessName: string }[];
-}
-interface StaffRow { id: string; name: string; email: string | null; phone: string | null; active: boolean; platformRole: string | null; businesses: { id: string; name: string; role: string; active: boolean }[]; merchants: { id: string; name: string; active: boolean }[]; createdAt: string }
+}interface StaffRow { id: string; name: string; email: string | null; phone: string | null; active: boolean; platformRole: string | null; businesses: { id: string; name: string; role: string; active: boolean }[]; merchants: { id: string; name: string; active: boolean }[]; createdAt: string }
 interface AuditRow { id: string; userName: string | null; userEmail: string | null; role: string | null; action: string; entityType: string; entityId: string | null; createdAt: string }
 
 type Tab = "businesses" | "merchants" | "logistics" | "riders" | "staff" | "messages" | "audit";
@@ -205,6 +206,17 @@ function RidersTab(): React.JSX.Element {
     },
     onError: (err) => window.alert(err instanceof ApiError ? err.message : "Could not update this courier"),
   });
+  const merchantAssign = useMutation({
+    mutationFn: ({ riderId, merchantId, action }: { riderId: string; merchantId: string; action: "assign" | "remove" }) =>
+      action === "assign"
+        ? apiFetch(API.platform.assignRiderToMerchant(riderId), { method: "POST", body: JSON.stringify({ merchantId }) })
+        : apiFetch(API.platform.removeRiderFromMerchant(riderId, merchantId), { method: "DELETE" }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["platform", "riders"] });
+      void qc.invalidateQueries({ queryKey: ["platform", "rider"] });
+    },
+    onError: (err) => window.alert(err instanceof ApiError ? err.message : "Could not update merchant assignment"),
+  });
   return (
     <div className="space-y-3">
       <SearchBox value={q} onChange={setQ} />
@@ -223,7 +235,7 @@ function RidersTab(): React.JSX.Element {
                 <StatusPill active={r.active} />
               </div>
             </div>
-            <p className="text-xs text-zinc-500">{r.phone} · {r.vehicle} · member of {r.memberships.map((m) => m.businessName).join(", ") || "no business yet"}</p>
+            <p className="text-xs text-zinc-500">{r.phone}{r.email ? ` · ${r.email}` : ""} · {r.vehicle} · member of {r.memberships.map((m) => m.businessName).join(", ") || "no business yet"}</p>
             <div className="flex flex-wrap gap-2">
               {r.platformStatus !== "approved" ? (
                 <button className="btn !px-3 !py-1 text-xs !border-emerald-700 !text-emerald-300" disabled={update.isPending} onClick={() => void update.mutate({ id: r.id, platformStatus: "approved" })}>
@@ -245,6 +257,13 @@ function RidersTab(): React.JSX.Element {
               logisticsCompanies={companies.data?.logisticsCompanies ?? []}
               busy={update.isPending}
               onChange={(body) => void update.mutate({ id: r.id, ...body })}
+            />
+            <MerchantAssignment
+              rider={r}
+              merchants={merchants.data?.merchants ?? []}
+              busy={merchantAssign.isPending}
+              onAssign={(merchantId) => void merchantAssign.mutate({ riderId: r.id, merchantId, action: "assign" })}
+              onRemove={(merchantId) => void merchantAssign.mutate({ riderId: r.id, merchantId, action: "remove" })}
             />
             {openId === r.id ? <RiderDetailPanel id={r.id} /> : null}
           </div>
@@ -317,6 +336,60 @@ function AttachmentControl({
       ) : null}
       {rider.attachment === "merchant" && rider.attachedMerchant ? <span className="text-zinc-500">currently: {rider.attachedMerchant.name}</span> : null}
       {rider.attachment === "logistics" && rider.attachedLogisticsCompany ? <span className="text-zinc-500">currently: {rider.attachedLogisticsCompany.name}</span> : null}
+    </div>
+  );
+}
+
+/** Spec: one rider can belong to more than one merchant. The many-to-many
+ *  MerchantRider relationship is managed here (assign to any merchant,
+ *  remove from one) — separate from AttachmentControl above, which is the
+ *  single-merchant *eligibility* gate. */
+function MerchantAssignment({
+  rider,
+  merchants,
+  busy,
+  onAssign,
+  onRemove,
+}: {
+  rider: RiderRow;
+  merchants: MerchantRow[];
+  busy: boolean;
+  onAssign: (merchantId: string) => void;
+  onRemove: (merchantId: string) => void;
+}): React.JSX.Element {
+  const [selected, setSelected] = useState("");
+  const attached = rider.merchants ?? [];
+  const available = merchants.filter((m) => !attached.some((a) => a.merchantId === m.id));
+  return (
+    <div className="space-y-2 rounded-lg border border-zinc-800 p-2 text-xs">
+      <p className="text-zinc-500">Merchants:</p>
+      {attached.length === 0 ? <p className="text-zinc-600">Not attached to any merchant yet.</p> : null}
+      {attached.map((a) => (
+        <div key={a.merchantId} className="flex items-center justify-between gap-2">
+          <span>{a.merchantName}</span>
+          <button className="btn !px-2 !py-0.5 text-xs !border-red-800 !text-red-300" disabled={busy} onClick={() => onRemove(a.merchantId)}>
+            Remove
+          </button>
+        </div>
+      ))}
+      <div className="flex items-center gap-2">
+        <select className="input !w-auto !py-1 text-xs" value={selected} disabled={busy} onChange={(e) => setSelected(e.target.value)}>
+          <option value="" disabled>Assign to merchant…</option>
+          {available.map((m) => (
+            <option key={m.id} value={m.id}>{m.name} · {m.business.name}</option>
+          ))}
+        </select>
+        <button
+          className="btn !px-2 !py-0.5 text-xs"
+          disabled={busy || !selected}
+          onClick={() => {
+            onAssign(selected);
+            setSelected("");
+          }}
+        >
+          Assign
+        </button>
+      </div>
     </div>
   );
 }

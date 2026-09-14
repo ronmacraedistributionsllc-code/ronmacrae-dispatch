@@ -218,3 +218,128 @@ describe("merchant portal", () => {
     expect(del.statusCode).toBe(200);
   });
 });
+
+describe("merchant portal: courier roster", () => {
+  // Mints a merchant-portal token directly (rather than hitting the
+  // rate-limited login endpoint) — the login flow itself is already covered
+  // above; these tests are about the rider routes' authorization, which only
+  // checks the token's merchantId via verifyMerchantPortal.
+  async function portalToken(h: TestHarness, merchantId: string): Promise<string> {
+    const user = await h.prisma.user.create({ data: { name: `Owner ${uniq()}`, email: `owner-${uniq()}@vbr.example`, passwordHash: "unused-in-tests", emailVerifiedAt: new Date() } });
+    await h.prisma.merchantStaff.create({ data: { userId: user.id, merchantId, active: true } });
+    return h.jwt.issueMerchantPortal(user.id, merchantId);
+  }
+
+  async function makeRider(h: TestHarness, auth: string, phone?: string) {
+    const res = await h.app.inject({
+      method: "POST",
+      url: "/api/riders",
+      headers: { authorization: `Bearer ${auth}` },
+      payload: { name: `Rider ${uniq()}`, phone: phone ?? `+1876555${uniq().slice(-4)}` },
+    });
+    return (res.json() as { rider: { id: string; phone: string } }).rider;
+  }
+
+  it("adds, lists, and removes its own couriers without touching the rider account or another merchant's roster", async () => {
+    const admin = await adminToken(harness);
+    const merchantA = await makeMerchant(harness, admin);
+    const merchantB = await makeMerchant(harness, admin);
+    const riderA = await makeRider(harness, admin);
+    const tokenA = await portalToken(harness, merchantA.id);
+    const tokenB = await portalToken(harness, merchantB.id);
+
+    // Starts empty.
+    const empty = await harness.app.inject({ method: "GET", url: "/api/merchant-portal/riders", headers: { authorization: `Bearer ${tokenA}` } });
+    expect((empty.json() as { riders: unknown[] }).riders).toHaveLength(0);
+
+    // Add by riderId.
+    const add = await harness.app.inject({
+      method: "POST",
+      url: "/api/merchant-portal/riders",
+      headers: { authorization: `Bearer ${tokenA}` },
+      payload: { riderId: riderA.id },
+    });
+    expect(add.statusCode).toBe(200);
+    expect((add.json() as { rider: { id: string } }).rider.id).toBe(riderA.id);
+
+    // Now listed for A.
+    const listA = await harness.app.inject({ method: "GET", url: "/api/merchant-portal/riders", headers: { authorization: `Bearer ${tokenA}` } });
+    expect((listA.json() as { riders: { id: string }[] }).riders.some((r) => r.id === riderA.id)).toBe(true);
+
+    // Search surfaces it as already attached.
+    const search = await harness.app.inject({ method: "GET", url: `/api/merchant-portal/riders/search?q=${encodeURIComponent(riderA.phone)}`, headers: { authorization: `Bearer ${tokenA}` } });
+    const searchRow = (search.json() as { riders: { id: string; alreadyAttached: boolean }[] }).riders.find((r) => r.id === riderA.id);
+    expect(searchRow?.alreadyAttached).toBe(true);
+
+    // Duplicate add is refused, not silently duplicated.
+    const dup = await harness.app.inject({ method: "POST", url: "/api/merchant-portal/riders", headers: { authorization: `Bearer ${tokenA}` }, payload: { riderId: riderA.id } });
+    expect(dup.statusCode).toBe(409);
+
+    // Merchant B never sees A's courier.
+    const listB = await harness.app.inject({ method: "GET", url: "/api/merchant-portal/riders", headers: { authorization: `Bearer ${tokenB}` } });
+    expect((listB.json() as { riders: { id: string }[] }).riders.some((r) => r.id === riderA.id)).toBe(false);
+
+    // Remove from A — relationship gone, account still exists.
+    const remove = await harness.app.inject({ method: "DELETE", url: `/api/merchant-portal/riders/${riderA.id}`, headers: { authorization: `Bearer ${tokenA}` } });
+    expect(remove.statusCode).toBe(200);
+    const afterRemove = await harness.app.inject({ method: "GET", url: "/api/merchant-portal/riders", headers: { authorization: `Bearer ${tokenA}` } });
+    expect((afterRemove.json() as { riders: { id: string }[] }).riders.some((r) => r.id === riderA.id)).toBe(false);
+    expect(await harness.prisma.rider.findUnique({ where: { id: riderA.id } })).not.toBeNull();
+
+    // Removing again (not attached) is a 404.
+    const removeAgain = await harness.app.inject({ method: "DELETE", url: `/api/merchant-portal/riders/${riderA.id}`, headers: { authorization: `Bearer ${tokenA}` } });
+    expect(removeAgain.statusCode).toBe(404);
+
+    // Re-add works (reactivates the soft-removed relationship).
+    const readd = await harness.app.inject({ method: "POST", url: "/api/merchant-portal/riders", headers: { authorization: `Bearer ${tokenA}` }, payload: { riderId: riderA.id } });
+    expect(readd.statusCode).toBe(200);
+    const rel = await harness.prisma.merchantRider.findUniqueOrThrow({ where: { merchantId_riderId: { merchantId: merchantA.id, riderId: riderA.id } } });
+    expect(rel.status).toBe("active");
+  });
+
+  it("adds a courier by phone number and by email", async () => {
+    const admin = await adminToken(harness);
+    const merchant = await makeMerchant(harness, admin);
+    const token = await portalToken(harness, merchant.id);
+
+    // Rider without a login (phone only) — add by phone.
+    const phoneRider = await makeRider(harness, admin);
+    const byPhone = await harness.app.inject({ method: "POST", url: "/api/merchant-portal/riders", headers: { authorization: `Bearer ${token}` }, payload: { phone: phoneRider.phone } });
+    expect(byPhone.statusCode).toBe(200);
+
+    // Rider with a login — add by email (resolves via Rider.user.email).
+    const email = `rider-${uniq()}@vbr.example`;
+    const createWithLogin = await harness.app.inject({
+      method: "POST",
+      url: "/api/riders",
+      headers: { authorization: `Bearer ${admin}` },
+      payload: { name: `Rider ${uniq()}`, phone: `+1876555${uniq().slice(-4)}`, email, password: "riderpass1" },
+    });
+    expect(createWithLogin.statusCode).toBe(200);
+    const byEmail = await harness.app.inject({ method: "POST", url: "/api/merchant-portal/riders", headers: { authorization: `Bearer ${token}` }, payload: { email } });
+    expect(byEmail.statusCode).toBe(200);
+
+    // Unknown reference is a 404.
+    const unknown = await harness.app.inject({ method: "POST", url: "/api/merchant-portal/riders", headers: { authorization: `Bearer ${token}` }, payload: { phone: "+18769999999" } });
+    expect(unknown.statusCode).toBe(404);
+  });
+
+  it("a merchant cannot remove a courier it is not attached to", async () => {
+    const admin = await adminToken(harness);
+    const merchantA = await makeMerchant(harness, admin);
+    const merchantB = await makeMerchant(harness, admin);
+    const rider = await makeRider(harness, admin);
+    const tokenB = await portalToken(harness, merchantB.id);
+
+    // Attach to A only.
+    const tokenA = await portalToken(harness, merchantA.id);
+    const addA = await harness.app.inject({ method: "POST", url: "/api/merchant-portal/riders", headers: { authorization: `Bearer ${tokenA}` }, payload: { riderId: rider.id } });
+    expect(addA.statusCode).toBe(200);
+
+    // B cannot remove A's relationship.
+    const crossRemove = await harness.app.inject({ method: "DELETE", url: `/api/merchant-portal/riders/${rider.id}`, headers: { authorization: `Bearer ${tokenB}` } });
+    expect(crossRemove.statusCode).toBe(404);
+    const rel = await harness.prisma.merchantRider.findUniqueOrThrow({ where: { merchantId_riderId: { merchantId: merchantA.id, riderId: rider.id } } });
+    expect(rel.status).toBe("active");
+  });
+});

@@ -152,3 +152,71 @@ describe("platform-admin: audit", () => {
     expect(body.logs.some((l) => l.action.startsWith("platform.business"))).toBe(true);
   });
 });
+
+describe("platform-admin: rider merchant assignment", () => {
+  it("assigns one rider to multiple merchants and removes one relationship without deleting the rider", async () => {
+    const admin = await adminToken(harness);
+    const merchantA = await makeMerchant(harness, admin);
+    const merchantB = await makeMerchant(harness, admin);
+    const rider = await makeRider(harness, admin);
+    const owner = await ownerToken(harness);
+
+    // Rider starts with no merchant relationships.
+    const initialList = await harness.app.inject({ method: "GET", url: "/api/platform/riders", headers: { authorization: `Bearer ${owner}` } });
+    const initialRow = (initialList.json() as { riders: { id: string; merchants: unknown[] }[] }).riders.find((r) => r.id === rider.id);
+    expect(initialRow?.merchants).toHaveLength(0);
+
+    // Assign to A.
+    const assignA = await harness.app.inject({ method: "POST", url: `/api/platform/riders/${rider.id}/merchants`, headers: { authorization: `Bearer ${owner}` }, payload: { merchantId: merchantA.id } });
+    expect(assignA.statusCode).toBe(200);
+
+    // Assign to B too (many-to-many: same rider, second merchant).
+    const assignB = await harness.app.inject({ method: "POST", url: `/api/platform/riders/${rider.id}/merchants`, headers: { authorization: `Bearer ${owner}` }, payload: { merchantId: merchantB.id } });
+    expect(assignB.statusCode).toBe(200);
+
+    // Duplicate assignment is refused.
+    const dup = await harness.app.inject({ method: "POST", url: `/api/platform/riders/${rider.id}/merchants`, headers: { authorization: `Bearer ${owner}` }, payload: { merchantId: merchantA.id } });
+    expect(dup.statusCode).toBe(409);
+
+    // List shows both merchants.
+    const list = await harness.app.inject({ method: "GET", url: "/api/platform/riders", headers: { authorization: `Bearer ${owner}` } });
+    const row = (list.json() as { riders: { id: string; merchants: { merchantId: string }[] }[] }).riders.find((r) => r.id === rider.id);
+    expect(row?.merchants.some((m) => m.merchantId === merchantA.id)).toBe(true);
+    expect(row?.merchants.some((m) => m.merchantId === merchantB.id)).toBe(true);
+
+    // Remove from A only.
+    const removeA = await harness.app.inject({ method: "DELETE", url: `/api/platform/riders/${rider.id}/merchants/${merchantA.id}`, headers: { authorization: `Bearer ${owner}` } });
+    expect(removeA.statusCode).toBe(200);
+
+    // Rider account still exists; still attached to B, no longer to A.
+    expect(await harness.prisma.rider.findUnique({ where: { id: rider.id } })).not.toBeNull();
+    const relA = await harness.prisma.merchantRider.findUnique({ where: { merchantId_riderId: { merchantId: merchantA.id, riderId: rider.id } } });
+    expect(relA?.status).toBe("removed");
+    const relB = await harness.prisma.merchantRider.findUnique({ where: { merchantId_riderId: { merchantId: merchantB.id, riderId: rider.id } } });
+    expect(relB?.status).toBe("active");
+  });
+
+  it("refuses assignment to a non-existent merchant or rider", async () => {
+    const owner = await ownerToken(harness);
+    const admin = await adminToken(harness);
+    const rider = await makeRider(harness, admin);
+
+    const badMerchant = await harness.app.inject({ method: "POST", url: `/api/platform/riders/${rider.id}/merchants`, headers: { authorization: `Bearer ${owner}` }, payload: { merchantId: "does-not-exist" } });
+    expect(badMerchant.statusCode).toBe(404);
+
+    const badRider = await harness.app.inject({ method: "POST", url: "/api/platform/riders/does-not-exist/merchants", headers: { authorization: `Bearer ${owner}` }, payload: { merchantId: "x" } });
+    expect(badRider.statusCode).toBe(404);
+  });
+
+  it("an ordinary admin is refused the merchant-assignment routes", async () => {
+    const admin = await adminToken(harness);
+    const rider = await makeRider(harness, admin);
+    const merchant = await makeMerchant(harness, admin);
+
+    const assign = await harness.app.inject({ method: "POST", url: `/api/platform/riders/${rider.id}/merchants`, headers: { authorization: `Bearer ${admin}` }, payload: { merchantId: merchant.id } });
+    expect(assign.statusCode).toBe(403);
+
+    const remove = await harness.app.inject({ method: "DELETE", url: `/api/platform/riders/${rider.id}/merchants/${merchant.id}`, headers: { authorization: `Bearer ${admin}` } });
+    expect(remove.statusCode).toBe(403);
+  });
+});

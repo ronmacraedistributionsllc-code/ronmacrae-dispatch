@@ -137,13 +137,20 @@ export async function platformAdminRoutes(app: FastifyInstance, ctx: AppCtx): Pr
     const rows = await ctx.prisma.rider.findMany({
       where: q ? { OR: [{ name: { contains: q } }, { phone: { contains: q } }] } : undefined,
       orderBy: { createdAt: "desc" },
-      include: { memberships: { include: { business: businessName } }, attachedMerchant: businessName, attachedLogisticsCompany: businessName },
+      include: {
+        memberships: { include: { business: businessName } },
+        attachedMerchant: businessName,
+        attachedLogisticsCompany: businessName,
+        merchantRiders: { where: { status: "active" }, include: { merchant: businessName } },
+        user: { select: { email: true } },
+      },
     });
     return {
       riders: rows.map((r) => ({
         id: r.id,
         name: r.name,
         phone: r.phone,
+        email: r.user?.email ?? null,
         vehicle: r.vehicle,
         active: r.active,
         platformStatus: r.platformStatus,
@@ -152,6 +159,7 @@ export async function platformAdminRoutes(app: FastifyInstance, ctx: AppCtx): Pr
         attachedMerchant: r.attachedMerchant ? { id: r.attachedMerchant.id, name: r.attachedMerchant.name } : null,
         attachedLogisticsCompany: r.attachedLogisticsCompany ? { id: r.attachedLogisticsCompany.id, name: r.attachedLogisticsCompany.name } : null,
         memberships: r.memberships.map((m) => ({ businessId: m.businessId, businessName: m.business.name, status: m.status })),
+        merchants: r.merchantRiders.map((m) => ({ merchantId: m.merchantId, merchantName: m.merchant.name, status: m.status, addedAt: m.createdAt.toISOString() })),
         createdAt: r.createdAt.toISOString(),
       })),
     };
@@ -165,6 +173,7 @@ export async function platformAdminRoutes(app: FastifyInstance, ctx: AppCtx): Pr
         user: { select: { email: true, phone: true, emailVerifiedAt: true, active: true } },
         attachedMerchant: businessName,
         attachedLogisticsCompany: businessName,
+        merchantRiders: { where: { status: "active" }, include: { merchant: businessName } },
       },
     });
     if (!rider) throw httpErrors.createError(404, "Courier not found");
@@ -193,6 +202,7 @@ export async function platformAdminRoutes(app: FastifyInstance, ctx: AppCtx): Pr
         emailVerified: rider.user?.emailVerifiedAt != null,
         loginActive: rider.user?.active ?? null,
         memberships: rider.memberships.map((m) => ({ businessId: m.businessId, businessName: m.business.name, status: m.status, approvedAt: m.approvedAt?.toISOString() ?? null })),
+        merchants: rider.merchantRiders.map((m) => ({ merchantId: m.merchantId, merchantName: m.merchant.name, status: m.status, addedAt: m.createdAt.toISOString() })),
         jobsByStatus: Object.fromEntries(statusCounts.map((s) => [s.status, s._count])),
         cashByBusiness: cashByBusiness.map((c) => ({ businessId: c.businessId, businessName: rider.memberships.find((m) => m.businessId === c.businessId)?.business.name ?? "", ...c.profile })),
       },
@@ -265,6 +275,38 @@ export async function platformAdminRoutes(app: FastifyInstance, ctx: AppCtx): Pr
       { platformStatus: body.platformStatus, active: body.active, ...attachmentData },
     );
     return { ok: true, platformStatus: rider.platformStatus, active: rider.active, attachment: rider.attachment, attachedMerchantId: rider.attachedMerchantId, attachedLogisticsCompanyId: rider.attachedLogisticsCompanyId };
+  });
+
+  // Spec: one rider can belong to more than one merchant (a many-to-many
+  // MerchantRider relationship). These two routes are the platform-owner's
+  // cross-merchant assignment controls: attach a rider to a merchant, or
+  // detach them — removing the RELATIONSHIP only, never the rider's
+  // platform account, never another merchant's relationship with that rider.
+  app.post<{ Params: { id: string } }>("/api/platform/riders/:id/merchants", { preHandler: owner }, async (req) => {
+    const body = z.object({ merchantId: z.string().min(1) }).parse(req.body);
+    const rider = await ctx.prisma.rider.findUnique({ where: { id: req.params.id } });
+    if (!rider) throw httpErrors.createError(404, "Courier not found");
+    const merchant = await ctx.prisma.merchant.findUnique({ where: { id: body.merchantId } });
+    if (!merchant) throw httpErrors.createError(404, "Merchant not found");
+    const existing = await ctx.prisma.merchantRider.findUnique({ where: { merchantId_riderId: { merchantId: merchant.id, riderId: rider.id } } });
+    if (existing?.status === "active") throw httpErrors.createError(409, "This courier is already attached to that merchant.");
+    await ctx.prisma.merchantRider.upsert({
+      where: { merchantId_riderId: { merchantId: merchant.id, riderId: rider.id } },
+      create: { merchantId: merchant.id, riderId: rider.id, status: "active", createdById: req.user!.sub, approvedAt: new Date() },
+      update: { status: "active", createdById: req.user!.sub, approvedAt: new Date() },
+    });
+    await ctx.audit.record({ id: req.user!.sub, role: "platform_owner" }, "platform.rider.assign_merchant", "rider", rider.id, { merchantId: merchant.id, merchantName: merchant.name });
+    return { ok: true, merchantId: merchant.id, merchantName: merchant.name, riderId: rider.id };
+  });
+
+  app.delete<{ Params: { id: string; merchantId: string } }>("/api/platform/riders/:id/merchants/:merchantId", { preHandler: owner }, async (req) => {
+    const rider = await ctx.prisma.rider.findUnique({ where: { id: req.params.id } });
+    if (!rider) throw httpErrors.createError(404, "Courier not found");
+    const rel = await ctx.prisma.merchantRider.findUnique({ where: { merchantId_riderId: { merchantId: req.params.merchantId, riderId: rider.id } } });
+    if (!rel || rel.status !== "active") throw httpErrors.createError(404, "This courier is not attached to that merchant.");
+    await ctx.prisma.merchantRider.update({ where: { id: rel.id }, data: { status: "removed", approvedAt: null } });
+    await ctx.audit.record({ id: req.user!.sub, role: "platform_owner" }, "platform.rider.remove_merchant", "rider", rider.id, { merchantId: req.params.merchantId });
+    return { ok: true, riderId: rider.id, merchantId: req.params.merchantId };
   });
 
   // ---------------------------------------------------------------------

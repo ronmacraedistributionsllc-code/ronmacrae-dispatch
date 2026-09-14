@@ -148,6 +148,12 @@ export const API = {
     rate: (jobId: string) => `/api/merchant-portal/orders/${jobId}/rate`,
     /** "Message the owner" (spec: "admin-to-anyone") — same GET/POST path. */
     ownerMessages: "/api/merchant-portal/messages/owner",
+    /** Merchant rider management (spec: merchant rider roster) — the
+     *  many-to-many MerchantRider relationship, scoped to this merchant. */
+    riders: "/api/merchant-portal/riders",
+    riderSearch: "/api/merchant-portal/riders/search",
+    addRider: "/api/merchant-portal/riders",
+    removeRider: (riderId: string) => `/api/merchant-portal/riders/${riderId}`,
   },
 
   /** Fleet-supplier clients of the courier business (spec: "Bearer/
@@ -383,6 +389,9 @@ export const API = {
     riders: "/api/platform/riders",
     rider: (id: string) => `/api/platform/riders/${id}`,
     updateRider: (id: string) => `/api/platform/riders/${id}`,
+    /** many-to-many rider<->merchant assignment (owner-only) */
+    assignRiderToMerchant: (riderId: string) => `/api/platform/riders/${riderId}/merchants`,
+    removeRiderFromMerchant: (riderId: string, merchantId: string) => `/api/platform/riders/${riderId}/merchants/${merchantId}`,
     staff: "/api/platform/staff",
     updateUser: (id: string) => `/api/platform/users/${id}`,
     audit: "/api/platform/audit",

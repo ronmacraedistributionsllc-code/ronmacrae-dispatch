@@ -71,7 +71,7 @@ export function MerchantPortal(): React.JSX.Element {
   const [hasStaffAccess, setHasStaffAccess] = useState(false);
   const [switching, setSwitching] = useState(false);
   const [orders, setOrders] = useState<PortalOrder[] | null>(null);
-  const [tab, setTab] = useState<"orders" | "catalog" | "messages">("orders");
+  const [tab, setTab] = useState<"orders" | "catalog" | "couriers" | "messages">("orders");
   const navigate = useNavigate();
   const { refresh: refreshStaffSession } = useAuth();
 
@@ -148,6 +148,7 @@ export function MerchantPortal(): React.JSX.Element {
       <div className="flex gap-1 border-b border-zinc-800">
         <button className={`px-3 py-2 text-sm font-medium ${tab === "orders" ? "border-b-2 border-brand-accent text-brand-accent" : "text-zinc-400"}`} onClick={() => setTab("orders")}>Orders</button>
         <button className={`px-3 py-2 text-sm font-medium ${tab === "catalog" ? "border-b-2 border-brand-accent text-brand-accent" : "text-zinc-400"}`} onClick={() => setTab("catalog")}>Catalog</button>
+        <button className={`px-3 py-2 text-sm font-medium ${tab === "couriers" ? "border-b-2 border-brand-accent text-brand-accent" : "text-zinc-400"}`} onClick={() => setTab("couriers")}>Couriers</button>
         <button className={`px-3 py-2 text-sm font-medium ${tab === "messages" ? "border-b-2 border-brand-accent text-brand-accent" : "text-zinc-400"}`} onClick={() => setTab("messages")}>Messages</button>
       </div>
 
@@ -184,6 +185,8 @@ export function MerchantPortal(): React.JSX.Element {
         </>
       ) : tab === "catalog" ? (
         <Catalog token={token} />
+      ) : tab === "couriers" ? (
+        <Couriers token={token} />
       ) : (
         <section className="card">
           <p className="mb-2 text-sm text-zinc-400">A direct line to Platform Admin about your store.</p>
@@ -253,6 +256,135 @@ function Catalog({ token }: { token: string }): React.JSX.Element {
             <div className="flex gap-2">
               <button type="button" className="btn !px-3 !py-1 text-xs" onClick={() => void toggleActive(p)}>{p.active ? "Deactivate" : "Activate"}</button>
               <button type="button" className="btn !px-3 !py-1 text-xs !border-red-800 !text-red-300" onClick={() => void remove(p)}>Delete</button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+interface MerchantRider {
+  id: string;
+  name: string;
+  phone: string;
+  vehicle: string;
+  plate: string | null;
+  status: string;
+  active: boolean;
+  platformStatus: string;
+  addedAt: string;
+}
+
+interface RiderSearchResult {
+  id: string;
+  name: string;
+  phone: string;
+  vehicle: string;
+  active: boolean;
+  platformStatus: string;
+  alreadyAttached: boolean;
+}
+
+const RIDER_STATUS_LABEL: Record<string, string> = { offline: "Offline", available: "Available", on_job: "On a job", unavailable: "Unavailable" };
+
+/**
+ * A merchant's own courier roster (spec: merchant rider management) —
+ * real MerchantRider data, not a mock list. Add searches the central rider
+ * registry; remove detaches only this merchant's relationship, never the
+ * courier's platform account.
+ */
+function Couriers({ token }: { token: string }): React.JSX.Element {
+  const [riders, setRiders] = useState<MerchantRider[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [adding, setAdding] = useState(false);
+  const [q, setQ] = useState("");
+  const [results, setResults] = useState<RiderSearchResult[] | null>(null);
+
+  const reload = useCallback(() => {
+    portalFetch<{ riders: MerchantRider[] }>(API.merchantPortal.riders, { headers: { authorization: `Bearer ${token}` } })
+      .then((r) => setRiders(r.riders))
+      .catch((err) => setError(err instanceof PortalError ? err.message : "Could not load your couriers"));
+  }, [token]);
+
+  useEffect(() => reload(), [reload]);
+
+  function search(term: string) {
+    setQ(term);
+    portalFetch<{ riders: RiderSearchResult[] }>(`${API.merchantPortal.riderSearch}?q=${encodeURIComponent(term)}`, { headers: { authorization: `Bearer ${token}` } })
+      .then((r) => setResults(r.riders))
+      .catch((err) => setError(err instanceof PortalError ? err.message : "Could not search couriers"));
+  }
+
+  async function add(riderId: string) {
+    setError(null);
+    try {
+      await portalFetch(API.merchantPortal.addRider, { method: "POST", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ riderId }) });
+      setAdding(false);
+      setQ("");
+      setResults(null);
+      reload();
+    } catch (err) {
+      setError(err instanceof PortalError ? err.message : "Could not add this courier");
+    }
+  }
+
+  async function remove(riderId: string) {
+    setError(null);
+    try {
+      await portalFetch(API.merchantPortal.removeRider(riderId), { method: "DELETE", headers: { authorization: `Bearer ${token}` } });
+      reload();
+    } catch (err) {
+      setError(err instanceof PortalError ? err.message : "Could not remove this courier");
+    }
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-sm text-zinc-400">Couriers attached to your store.</p>
+        <button className="btn-accent !px-3 !py-1 text-xs" onClick={() => { setAdding((v) => !v); setResults(null); setQ(""); }}>{adding ? "Cancel" : "+ Add courier"}</button>
+      </div>
+      {error ? <p className="text-sm text-red-400">{error}</p> : null}
+
+      {adding ? (
+        <div className="card space-y-2">
+          <p className="text-sm text-zinc-400">Find an existing courier by name, phone, or email.</p>
+          <input className="input" autoFocus placeholder="Search couriers…" value={q} onChange={(e) => search(e.target.value)} />
+          {results === null ? null : results.length === 0 ? <p className="text-sm text-zinc-500">No couriers match that search.</p> : null}
+          <div className="space-y-2">
+            {results?.map((r) => (
+              <div key={r.id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-zinc-800 p-2">
+                <div>
+                  <p className="text-sm font-medium">{r.name} <span className="text-xs text-zinc-500">· {r.vehicle}</span></p>
+                  <p className="text-xs text-zinc-500">{r.phone}{!r.active ? " · disabled" : ""}</p>
+                </div>
+                {r.alreadyAttached ? (
+                  <span className="text-xs text-zinc-500">Already attached</span>
+                ) : (
+                  <button className="btn !px-3 !py-1 text-xs" onClick={() => void add(r.id)}>Add</button>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
+      {riders === null ? <p className="text-sm text-zinc-400">Loading…</p> : null}
+      {riders && riders.length === 0 ? <div className="card text-sm text-zinc-400">No couriers attached yet — add one above.</div> : null}
+      <div className="space-y-2">
+        {riders?.map((r) => (
+          <div key={r.id} className={`card flex flex-wrap items-center justify-between gap-2 ${r.active ? "" : "opacity-60"}`}>
+            <div>
+              <p className="font-medium">{r.name} <span className="text-xs text-zinc-500">· {r.vehicle}{r.plate ? ` · ${r.plate}` : ""}</span></p>
+              <p className="text-xs text-zinc-500">
+                {r.phone} · {RIDER_STATUS_LABEL[r.status] ?? r.status}
+                {r.platformStatus !== "approved" ? ` · ${r.platformStatus}` : ""} · added {new Date(r.addedAt).toLocaleDateString()}
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              {!r.active ? <span className="rounded bg-zinc-800 px-2 py-0.5 text-xs font-medium text-zinc-500">Disabled</span> : null}
+              <button type="button" className="btn !px-3 !py-1 text-xs !border-red-800 !text-red-300" onClick={() => void remove(r.id)}>Remove</button>
             </div>
           </div>
         ))}

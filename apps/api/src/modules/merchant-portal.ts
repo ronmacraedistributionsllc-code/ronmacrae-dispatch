@@ -10,7 +10,7 @@ import { moneyField } from "../geo-mappers.js";
 import type { PaymentMethod } from "@ronmacrae/contracts";
 import { PAYMENT_METHOD_LABELS } from "@ronmacrae/contracts";
 import { CreateProduct, productToDto } from "./merchants.js";
-import { resolveStaffContext, toUserDto } from "./auth.js";
+import { normalizePhone, resolveStaffContext, toUserDto } from "./auth.js";
 import { listOwnerUserThread, sendOwnerUserMessage, SendPlatformMessageBody } from "./platform-messages.js";
 
 /**
@@ -91,6 +91,36 @@ function toMerchantOrderDto(job: JobRow): MerchantOrderDto {
     riderName: job.rider?.name ?? null,
   };
 }
+
+/** A courier in this merchant's roster (spec: "a merchant should have a
+ *  login where they can view [their orders] as well" — and, here, manage
+ *  the couriers attached to their store). This is the MerchantRider
+ *  relationship's merchant-facing shape: just what a merchant legitimately
+ *  needs about their own couriers, never another merchant's data. */
+interface MerchantRiderDto {
+  id: string;
+  name: string;
+  phone: string;
+  vehicle: string;
+  plate: string | null;
+  /** Live availability (offline/available/on_job/unavailable). */
+  status: string;
+  /** Whether the rider's own account is enabled (rider.active). */
+  active: boolean;
+  /** Platform-wide approval gate (pending/approved/suspended). */
+  platformStatus: string;
+  /** When this merchant attached this courier (relationship createdAt). */
+  addedAt: string;
+}
+
+/** Which identifier to look an existing courier up by. Prefer a strong
+ *  identifier (riderId or phone) over name; email resolves via the rider's
+ *  linked login. */
+const AddRiderBody = z.object({
+  riderId: z.string().min(1).max(64).optional(),
+  phone: z.string().min(7).max(20).optional(),
+  email: z.string().email().max(160).optional(),
+});
 
 export async function merchantPortalRoutes(app: FastifyInstance, ctx: AppCtx): Promise<void> {
   app.post("/api/merchant-portal/login", { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } }, async (req) => {
@@ -273,6 +303,95 @@ export async function merchantPortalRoutes(app: FastifyInstance, ctx: AppCtx): P
     }
     await ctx.prisma.product.delete({ where: { id: existing.id } });
     await ctx.audit.record({ id: auth.userId, role: "merchant" }, "product.delete", "product", existing.id);
+    return { ok: true };
+  });
+
+  // -----------------------------------------------------------------
+  // Couriers — a merchant's own rider roster (spec: merchant rider
+  // management). Backed by the many-to-many MerchantRider relationship:
+  // one merchant can have many couriers, one courier can belong to many
+  // merchants, and removing a courier here only removes THIS relationship.
+  // Every query is scoped to auth.merchantId server-side — a merchant can
+  // never see or touch another merchant's roster.
+  // -----------------------------------------------------------------
+  const merchantRiderDto = (rider: { id: string; name: string; phone: string; vehicle: string; plate: string | null; status: string; active: boolean; platformStatus: string }, addedAt: Date): MerchantRiderDto => ({
+    id: rider.id,
+    name: rider.name,
+    phone: rider.phone,
+    vehicle: rider.vehicle,
+    plate: rider.plate,
+    status: rider.status,
+    active: rider.active,
+    platformStatus: rider.platformStatus,
+    addedAt: addedAt.toISOString(),
+  });
+
+  const resolveRiderReference = async (body: z.infer<typeof AddRiderBody>) => {
+    if (body.riderId) return ctx.prisma.rider.findUnique({ where: { id: body.riderId } });
+    if (body.phone) return ctx.prisma.rider.findUnique({ where: { phone: normalizePhone(body.phone) } });
+    if (body.email) {
+      const email = normalizeEmail(body.email);
+      if (email) return ctx.prisma.rider.findFirst({ where: { user: { email } } });
+    }
+    throw httpErrors.createError(400, "Provide a courier ID, phone, or email to add.");
+  };
+
+  app.get("/api/merchant-portal/riders", async (req) => {
+    const auth = await requireMerchantAuth(ctx, req);
+    const rows = await ctx.prisma.merchantRider.findMany({
+      where: { merchantId: auth.merchantId, status: "active" },
+      include: { rider: true },
+      orderBy: { createdAt: "desc" },
+    });
+    return { riders: rows.map((rel) => merchantRiderDto(rel.rider, rel.createdAt)) };
+  });
+
+  app.get("/api/merchant-portal/riders/search", async (req) => {
+    const auth = await requireMerchantAuth(ctx, req);
+    const { q } = z.object({ q: z.string().max(120).optional() }).parse(req.query ?? {});
+    const term = q?.trim();
+    const riders = await ctx.prisma.rider.findMany({
+      where: term ? { OR: [{ name: { contains: term } }, { phone: { contains: term } }, { user: { email: { contains: term } } }] } : undefined,
+      orderBy: { name: "asc" },
+      take: 50,
+      include: { merchantRiders: { where: { merchantId: auth.merchantId } } },
+    });
+    return {
+      riders: riders.map((r) => ({
+        id: r.id,
+        name: r.name,
+        phone: r.phone,
+        vehicle: r.vehicle,
+        active: r.active,
+        platformStatus: r.platformStatus,
+        alreadyAttached: r.merchantRiders.some((m) => m.status === "active"),
+      })),
+    };
+  });
+
+  app.post("/api/merchant-portal/riders", async (req) => {
+    const auth = await requireMerchantAuth(ctx, req);
+    const body = AddRiderBody.parse(req.body);
+    const rider = await resolveRiderReference(body);
+    if (!rider) throw httpErrors.createError(404, "No courier found matching that phone, email, or ID.");
+    const existing = await ctx.prisma.merchantRider.findUnique({ where: { merchantId_riderId: { merchantId: auth.merchantId, riderId: rider.id } } });
+    if (existing?.status === "active") throw httpErrors.createError(409, "This courier is already attached to your store.");
+    await ctx.prisma.merchantRider.upsert({
+      where: { merchantId_riderId: { merchantId: auth.merchantId, riderId: rider.id } },
+      create: { merchantId: auth.merchantId, riderId: rider.id, status: "active", createdById: auth.userId, approvedAt: new Date() },
+      update: { status: "active", createdById: auth.userId, approvedAt: new Date() },
+    });
+    const rel = await ctx.prisma.merchantRider.findUniqueOrThrow({ where: { merchantId_riderId: { merchantId: auth.merchantId, riderId: rider.id } } });
+    await ctx.audit.record({ id: auth.userId, role: "merchant" }, "merchant.rider.add", "rider", rider.id, { merchantId: auth.merchantId });
+    return { rider: merchantRiderDto(rider, rel.createdAt) };
+  });
+
+  app.delete<{ Params: { riderId: string } }>("/api/merchant-portal/riders/:riderId", async (req) => {
+    const auth = await requireMerchantAuth(ctx, req);
+    const rel = await ctx.prisma.merchantRider.findUnique({ where: { merchantId_riderId: { merchantId: auth.merchantId, riderId: req.params.riderId } } });
+    if (!rel || rel.status !== "active") throw httpErrors.createError(404, "Courier not found in your roster.");
+    await ctx.prisma.merchantRider.update({ where: { id: rel.id }, data: { status: "removed", approvedAt: null } });
+    await ctx.audit.record({ id: auth.userId, role: "merchant" }, "merchant.rider.remove", "rider", req.params.riderId, { merchantId: auth.merchantId });
     return { ok: true };
   });
 }
