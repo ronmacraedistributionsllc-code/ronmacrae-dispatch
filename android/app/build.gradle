@@ -21,7 +21,7 @@ plugins {
 }
 
 def twaManifest = [
-    applicationId: 'com.ronmacraedistributions.dispatch',
+    applicationId: 'com.login.dispatched',
     hostName: 'orders.ronmacraedistributions.com', // The domain being opened in the TWA.
     launchUrl: '/', // The start path for the TWA. Must be relative to the domain.
     name: 'Ronmacrae Dispatch', // The application name.
@@ -52,9 +52,9 @@ def twaManifest = [
 
 android {
     compileSdkVersion 36
-    namespace "com.ronmacraedistributions.dispatch"
+    namespace "com.login.dispatched"
     defaultConfig {
-        applicationId "com.ronmacraedistributions.dispatch"
+        applicationId "com.login.dispatched"
         minSdkVersion 21
         targetSdkVersion 36
         versionCode 1

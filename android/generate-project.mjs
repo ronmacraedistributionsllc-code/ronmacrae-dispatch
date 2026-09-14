@@ -24,14 +24,26 @@ const config = {
 let twaManifest = await TwaManifest.fromWebManifest(manifestUrl);
 
 // --- Android app details (bubblewrap init's "Step 2/5") ---
-twaManifest.packageId = "com.ronmacraedistributions.dispatch";
+// Play Console created the app listing under this exact applicationId —
+// it must match precisely, and it's unrelated to the actual web domain
+// (hostName below stays orders.ronmacraedistributions.com regardless;
+// the Android package id is purely a store-listing identity, not
+// something the web app's own login/API/OTP logic reads or depends on).
+twaManifest.packageId = "com.login.dispatched";
 twaManifest.launcherName = "Dispatch"; // max 12 chars
+// First build under this (new, never-before-uploaded) package id — 1 is
+// the correct starting versionCode, not a bump off the old package's
+// history, which doesn't carry over to a different applicationId.
 twaManifest.appVersionCode = 1;
 twaManifest.appVersionName = "1";
 twaManifest.orientation = "portrait";
 // name/display/themeColor/backgroundColor/iconUrl/maskableIconUrl all
 // came from the live manifest.webmanifest already (Step 1 + 3 defaults).
 
+// Same existing production keystore and key alias — the alias name is
+// baked into that keystore file's own entry and must stay exactly what
+// it already is regardless of the app's package id, or signing will
+// fail against the real key.
 twaManifest.signingKey.path = join(targetDirectory, "android-keystore");
 twaManifest.signingKey.alias = "ronmacrae-dispatch";
 twaManifest.generatorApp = "@bubblewrap/cli";
