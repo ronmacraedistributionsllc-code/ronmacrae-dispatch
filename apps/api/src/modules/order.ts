@@ -12,6 +12,7 @@ import { FareEngine } from "./quotes.js";
 import { CustomersService } from "./customers.js";
 import { createTrackingLink } from "./jobs/history.js";
 import { jobInclude, jobToDto, actorType, type Actor, type JobRow, type Viewer } from "./jobs/dto.js";
+import { notifyDispatchOfNewOrder } from "./jobs/create.js";
 import { nextJobNumber, isUniqueViolation } from "./jobs/repository.js";
 import { sendMerchantOrderEmail } from "./merchant-notify.js";
 import { sendDispatchOrderNotification } from "./dispatch-notify.js";
@@ -369,6 +370,13 @@ export async function orderRoutes(app: FastifyInstance, ctx: AppCtx): Promise<vo
     void sendDispatchOrderNotification(ctx, row.id).catch((err) => ctx.log.error({ err: String(err), jobId: row!.id }, "dispatch order email failed"));
 
     const dto = jobToDto(row, viewer, ctx.config.APP_ORIGIN);
+    // Real-time + push, distinct from the email above (that's opt-in, per
+    // business, and gated on dispatchNotificationEmail being configured —
+    // most businesses never set it). This is the same in-app/push signal
+    // a courier already gets for a new offer, and fires unconditionally:
+    // a customer placing this order has no staff "actor" to exclude, so
+    // every admin/dispatcher at this business gets it.
+    void notifyDispatchOfNewOrder(ctx, resolved.businessId, dto, null);
     return {
       jobId: row.id,
       jobNumber: row.jobNumber,

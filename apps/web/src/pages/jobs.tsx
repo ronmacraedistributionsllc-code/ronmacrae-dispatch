@@ -197,6 +197,7 @@ function JobRow({ job, riders, canWrite, busy, offersOpen, queueOpen, chatOpen, 
 export function Jobs(): React.JSX.Element {
   const { user } = useAuth();
   const qc = useQueryClient();
+  const { subscribe: subscribeRealtime } = useRealtime();
   const canWrite = user?.role === "admin" || user?.role === "dispatcher";
   const [offersJobId, setOffersJobId] = useState<string | null>(null);
   const [queueJobId, setQueueJobId] = useState<string | null>(null);
@@ -237,6 +238,13 @@ export function Jobs(): React.JSX.Element {
     void qc.invalidateQueries({ queryKey: ["jobs"] });
     void qc.invalidateQueries({ queryKey: ["riders"] });
   };
+
+  // A brand-new order (public/merchant order, or another dispatcher's own
+  // booking) shows up here the moment it lands, not just on the next
+  // 15s poll — same live-refresh precedent as every mutation above
+  // already gets via invalidate(), just triggered by the realtime event
+  // instead of this session's own action.
+  useEffect(() => subscribeRealtime(["job.created"], () => invalidate()), [subscribeRealtime]);
 
   const assign = useMutation({
     mutationFn: ({ jobId, riderId }: { jobId: string; riderId: string }) =>

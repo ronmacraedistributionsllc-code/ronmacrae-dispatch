@@ -6,7 +6,6 @@ import { majorOf } from "@ronmacrae/money";
 import { ApiError, apiFetch, formatMoney } from "../lib/api.js";
 import { useAuth } from "../lib/auth.js";
 import { useRealtime } from "../lib/realtime.js";
-import { PushOptIn } from "../components/push-opt-in.js";
 import { LocationSharing } from "../components/location-sharing.js";
 import { RouteQueue } from "../components/route-queue.js";
 import { ContactDispatch } from "../components/contact-dispatch.js";
@@ -173,7 +172,6 @@ export function RiderDashboard(): React.JSX.Element {
             {realtimeStatus === "reconnecting" ? "Reconnecting…" : "Offline — updates may be delayed"}
           </span>
         ) : null}
-        <PushOptIn />
         <button
           className={available ? "btn-accent" : "btn"}
           disabled={availabilityChange.isPending}

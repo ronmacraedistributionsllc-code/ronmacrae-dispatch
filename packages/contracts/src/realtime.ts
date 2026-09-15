@@ -16,6 +16,7 @@ import type { JobStatus, TrackingState } from "./enums.js";
 export type RealtimeMessage =
   | { type: "rider.location"; payload: RiderLocationDto }
   | { type: "rider.status"; payload: { riderId: string; status: string } }
+  | { type: "job.created"; payload: { job: JobDto } }
   | { type: "job.state"; payload: { job: JobDto; event: JobEventDto } }
   | { type: "job.assigned"; payload: { job: JobDto; riderId: string; source: "assign" | "offer" } }
   | { type: "job.rerouted"; payload: { jobId: string; route: RouteDto } }

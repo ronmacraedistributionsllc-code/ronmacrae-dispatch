@@ -4,7 +4,7 @@ import { Prisma } from "@prisma/client";
 import type { AppCtx } from "../../ctx.js";
 import { minorOf } from "@ronmacrae/money";
 import type { GeoPoint, JobDto } from "@ronmacrae/contracts";
-import { JOB_SOURCES } from "@ronmacrae/contracts";
+import { JOB_SOURCES, roomForDispatch } from "@ronmacrae/contracts";
 import { pointToJson } from "../../geo-mappers.js";
 import { deliveryPin } from "../../lib/ids.js";
 import { ZonesService } from "../zones.js";
@@ -85,6 +85,23 @@ export type UpdateJobInput = z.infer<typeof UpdateJobBody>;
 
 export function viewerFor(req: { user: { role: string; riderId?: string; businessId?: string } | null }): Viewer {
   return { role: req.user?.role ?? "anonymous", riderId: req.user?.riderId ?? null, businessId: req.user?.businessId ?? null };
+}
+
+/** Real-time + push "a new order came in" signal to this business's own
+ *  dispatch — the same in-app room every other job/offer event already
+ *  broadcasts to, plus a push notification for anyone whose app is
+ *  backgrounded/closed (spec: dispatch/staff should be notified of a new
+ *  order the same way a courier already gets pushed for a new offer —
+ *  see offers.ts's own createOffers). `excludeUserId` skips whoever just
+ *  performed the action themselves (a dispatcher who just typed in a
+ *  booking doesn't need telling about their own action); a public/
+ *  merchant order has no such actor, so every eligible staff member gets it. */
+export async function notifyDispatchOfNewOrder(ctx: AppCtx, businessId: string, job: JobDto, excludeUserId?: string | null): Promise<void> {
+  ctx.hub.broadcast(roomForDispatch(businessId), { type: "job.created", payload: { job } });
+  const body = [job.itemSummary, job.merchantName ? `from ${job.merchantName}` : null].filter(Boolean).join(" ") || `Order ${job.jobNumber ?? ""}`.trim();
+  void ctx.push
+    .sendToBusinessStaff(businessId, { title: "New order", body, tag: `job-created-${job.id}`, url: "/jobs" }, excludeUserId ?? undefined)
+    .catch((err) => ctx.log.error({ err: String(err), jobId: job.id }, "new-order push notification failed"));
 }
 
 export async function createJob(
@@ -204,7 +221,9 @@ export async function createJob(
   if (!row) throw httpErrors.createError(409, "Could not allocate a job number");
 
   const returnJobId = await returnJobFor(ctx, row.id);
-  return jobToDto(row, viewer, ctx.config.APP_ORIGIN, { returnJobId });
+  const dto = jobToDto(row, viewer, ctx.config.APP_ORIGIN, { returnJobId });
+  void notifyDispatchOfNewOrder(ctx, businessId, dto, actor.id);
+  return dto;
 }
 
 /** Staff edit of a job's fields (address, items, pricing, schedule). */

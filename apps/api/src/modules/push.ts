@@ -78,6 +78,23 @@ export class PushService {
     const rider = await this.prisma.rider.findUnique({ where: { id: riderId }, select: { userId: true } });
     if (rider?.userId) await this.sendToUser(rider.userId, payload);
   }
+
+  /** Push every admin/dispatcher at one business who's opted in — the
+   *  staff-side equivalent of sendToRider, for events dispatch needs to
+   *  know about even with the app closed/backgrounded (spec: "when an
+   *  order comes in the dispatch courier get a notification of a new
+   *  order the same" as an offer already pushes a courier). Scoped to
+   *  admin/dispatcher only — accountant/viewer don't act on new orders,
+   *  same role set offers.ts's own writer guard uses. `excludeUserId`
+   *  skips whoever just performed the action themselves (a dispatcher who
+   *  just typed in a booking doesn't need to be told about it). */
+  async sendToBusinessStaff(businessId: string, payload: Record<string, unknown>, excludeUserId?: string): Promise<void> {
+    const memberships = await this.prisma.staffMembership.findMany({
+      where: { businessId, active: true, role: { in: ["admin", "dispatcher"] }, ...(excludeUserId ? { userId: { not: excludeUserId } } : {}) },
+      select: { userId: true },
+    });
+    await Promise.all(memberships.map((m) => this.sendToUser(m.userId, payload)));
+  }
 }
 
 export async function pushRoutes(app: FastifyInstance, ctx: AppCtx): Promise<void> {

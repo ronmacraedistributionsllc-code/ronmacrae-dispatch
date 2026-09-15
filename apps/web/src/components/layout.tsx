@@ -5,6 +5,7 @@ import { useRealtime, type ConnectionStatus } from "../lib/realtime.js";
 import { AlertsToaster } from "./alerts-toaster.js";
 import { apiFetch } from "../lib/api.js";
 import { CompactThemeSelect } from "../lib/theme.js";
+import { PushOptIn } from "./push-opt-in.js";
 
 const TABS = [
   { to: "/", label: "Dashboard", icon: "🏠", end: true },
@@ -188,6 +189,13 @@ export function Layout({ children }: { children: React.ReactNode }): React.JSX.E
               ))}
             </div>
           ) : null}
+          {/* Previously rider-only (rider-dashboard.tsx) — staff (a
+           *  dispatcher especially) needs this too now that a new order
+           *  pushes them the same way a new offer already pushes a
+           *  courier. Renders nothing on an unsupported browser. */}
+          <div className="mt-3">
+            <PushOptIn />
+          </div>
           <button className="btn mt-3 w-full" onClick={() => void logout()}>
             Sign out
           </button>
@@ -295,6 +303,9 @@ function MoreSheet({
               <span className="text-center leading-tight">{t.label}</span>
             </NavLink>
           ))}
+        </div>
+        <div className="mt-3">
+          <PushOptIn />
         </div>
         <button className="btn mt-3 w-full" onClick={onSignOut}>
           Sign out

@@ -40,6 +40,10 @@ function isAlertWorthy(msg: { type: string; payload?: unknown }, role: string | 
     return isRider ? source === "assign" : true;
   }
   if (msg.type === "sos") return true;
+  // A new order landing is dispatch's own equivalent of a courier's "new
+  // offer" — never relevant to a rider (they get their own offer/
+  // assignment signal instead, not a raw new-order count).
+  if (msg.type === "job.created") return !isRider;
   // Spec item 5 — a rider or dispatcher who has no idea a message came in
   // can't know to go check for one. Skip a rider's own just-sent message
   // (there's only ever one active rider session); staff is a shared role

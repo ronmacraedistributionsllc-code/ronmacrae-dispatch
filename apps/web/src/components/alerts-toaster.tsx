@@ -32,6 +32,12 @@ function toastFor(msg: RealtimeMessage, isRider: boolean): { text: string; tone:
   if (msg.type === "sos") {
     return { text: `SOS — ${msg.payload.riderName}${msg.payload.note ? `: ${msg.payload.note}` : ""}`, tone: "danger" };
   }
+  if (msg.type === "job.created" && !isRider) {
+    const label = msg.payload.job.jobNumber ?? msg.payload.job.id.slice(0, 8);
+    const source = msg.payload.job.merchantName ? ` from ${msg.payload.job.merchantName}` : "";
+    const urgent = msg.payload.job.priority === "urgent" ? "URGENT — " : "";
+    return { text: `${urgent}New order ${label}${source}`, tone: msg.payload.job.priority === "urgent" ? "danger" : "info" };
+  }
   return null;
 }
 
@@ -45,7 +51,7 @@ export function AlertsToaster(): React.JSX.Element | null {
 
   useEffect(() => {
     const isRider = user?.role === "rider";
-    return subscribe(["offer", "job.assigned", "sos"], (msg) => {
+    return subscribe(["offer", "job.assigned", "sos", "job.created"], (msg) => {
       const toast = toastFor(msg, isRider);
       if (!toast) return;
       const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
