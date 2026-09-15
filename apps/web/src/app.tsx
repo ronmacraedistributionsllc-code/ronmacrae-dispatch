@@ -10,6 +10,7 @@ import { Dashboard } from "./pages/dashboard.js";
 import { RiderDashboard } from "./pages/rider-dashboard.js";
 import { Jobs } from "./pages/jobs.js";
 import { Login } from "./pages/login.js";
+import { DownloadApp } from "./pages/download-app.js";
 import { MyPackages } from "./pages/my-packages.js";
 import { NewJob } from "./pages/new-job.js";
 import { PublicOrder } from "./pages/order.js";
@@ -88,6 +89,7 @@ export default function App(): React.JSX.Element {
           <BrowserRouter>
             <Routes>
               <Route path="/login" element={<Login />} />
+              <Route path="/download-app" element={<DownloadApp />} />
               <Route path="/book" element={<Book />} />
               <Route path="/order" element={<PublicOrder />} />
               <Route path="/order/:merchantSlug" element={<PublicOrder />} />
