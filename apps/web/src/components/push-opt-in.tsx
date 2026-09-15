@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { API } from "@ronmacrae/contracts";
 import { apiFetch, ApiError } from "../lib/api.js";
+import { unsubscribeThisDeviceFromPush } from "../lib/push.js";
 
 function urlBase64ToUint8Array(base64String: string): Uint8Array<ArrayBuffer> {
   const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
@@ -70,12 +71,10 @@ export function PushOptIn(): React.JSX.Element | null {
     setBusy(true);
     setError(null);
     try {
-      const reg = await navigator.serviceWorker.ready;
-      const sub = await reg.pushManager.getSubscription();
-      if (sub) {
-        await apiFetch(API.push.unsubscribe, { method: "POST", body: JSON.stringify({ endpoint: sub.endpoint }) });
-        await sub.unsubscribe();
-      }
+      // Same device-scoped cleanup logout() runs automatically — see its
+      // own doc comment (lib/push.ts) for why only this browser's
+      // subscription is touched.
+      await unsubscribeThisDeviceFromPush();
       setStatus("off");
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Could not disable notifications");

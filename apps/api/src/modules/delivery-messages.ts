@@ -222,6 +222,26 @@ async function sendMessage(
     type: "delivery_message",
     payload: { jobId, id: row.id, conversationKind: kind, senderRole },
   });
+  // Push only the one direction that's currently actionable: a courier is
+  // the only role that can opt into push at all today (staff has no
+  // opt-in UI yet — see push-opt-in.tsx's own doc comment), and only when
+  // they genuinely have no live socket right now (`deliveredNow` already
+  // computed that, so this reuses the exact same signal rather than a
+  // second, possibly-drifting check — same "duplicate-notification
+  // prevention" concern the spec names). Body stays generic, never the
+  // actual message text, matching the offer/assignment push's own
+  // no-sensitive-content bar.
+  if (kind === "rider_dispatch" && senderRole === "dispatcher" && riderId && !deliveredNow) {
+    const job = await ctx.prisma.job.findUnique({ where: { id: jobId }, select: { jobNumber: true } });
+    void ctx.push
+      .sendToRider(riderId, {
+        title: "New message from dispatch",
+        body: job?.jobNumber ? `About order ${job.jobNumber} — open the app to reply` : "Open the app to reply",
+        tag: `message-${jobId}`,
+        url: "/",
+      })
+      .catch((err) => ctx.log.error({ err: String(err), jobId }, "message push notification failed"));
+  }
   return row;
 }
 

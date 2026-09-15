@@ -4,7 +4,7 @@
  * replacing the old single shared thread (Stage 18). Real Fastify app +
  * real sqlite db.
  */
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 import { buildTestHarness, type TestHarness } from "./helpers/test-app.js";
 
@@ -533,5 +533,51 @@ describe("reassignment revokes realtime access (spec 5)", () => {
     } finally {
       wsA.close();
     }
+  });
+});
+
+describe("push notification on a new dispatch-to-rider message (spec 67: must reach a backgrounded/closed app)", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("pushes the rider when dispatch messages them and they have no live socket right now — generic body, never the message text", async () => {
+    const customer = await makeCustomer(harness);
+    const { rider, token: riderTok } = await makeRider(harness);
+    const { job } = await makeJobWithLink(harness, customer.id, { riderId: rider.id, jobNumber: "RM-900001" });
+    const dispatcherTok = await staffToken(harness, "dispatcher");
+    const sendToRider = vi.spyOn(harness.ctx.push, "sendToRider").mockResolvedValue(undefined);
+
+    const res = await harness.app.inject({
+      method: "POST",
+      url: `/api/jobs/${job.id}/messages/rider_dispatch`,
+      headers: { authorization: `Bearer ${dispatcherTok}` },
+      payload: { body: "Please confirm you're heading to the pickup now" },
+    });
+    expect(res.statusCode).toBe(200);
+    await new Promise((r) => setTimeout(r, 10)); // the push call is fire-and-forget
+
+    expect(sendToRider).toHaveBeenCalledTimes(1);
+    const [pushedRiderId, payload] = sendToRider.mock.calls[0]!;
+    expect(pushedRiderId).toBe(rider.id);
+    const body = JSON.stringify(payload);
+    expect(body).not.toContain("Please confirm you're heading to the pickup now");
+    expect(body).toContain("RM-900001");
+
+    // Sanity: this really is the rider being messaged, not a fluke —
+    // they can read it through their own face too.
+    const read = await harness.app.inject({ method: "GET", url: `/api/bearer/jobs/${job.id}/messages/rider_dispatch`, headers: { authorization: `Bearer ${riderTok}` } });
+    expect(read.statusCode).toBe(200);
+  });
+
+  it("never pushes for a customer_dispatch or customer_rider message — no rider recipient exists on those", async () => {
+    const customer = await makeCustomer(harness);
+    const { job, link } = await makeJobWithLink(harness, customer.id);
+    const sendToRider = vi.spyOn(harness.ctx.push, "sendToRider").mockResolvedValue(undefined);
+
+    await harness.app.inject({ method: "POST", url: `/api/tracking/${link.token}/messages/customer_dispatch`, payload: { body: "Where is my order?" } });
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(sendToRider).not.toHaveBeenCalled();
   });
 });

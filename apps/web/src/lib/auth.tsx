@@ -3,6 +3,7 @@ import type { RiderDto, UserDto } from "@ronmacrae/contracts";
 import { API } from "@ronmacrae/contracts";
 import { apiFetch, getAccessToken, onSessionExpires, setAccessToken } from "./api.js";
 import { applyRemoteTheme } from "./theme.js";
+import { unsubscribeThisDeviceFromPush } from "./push.js";
 
 /** sessionStorage key for a merchant-portal session — shared with
  *  merchant-portal.tsx, which reads this same key on mount. Kept here
@@ -173,6 +174,10 @@ export function AuthProvider({ children }: { children: ReactNode }): ReactNode {
   );
 
   const logout = useCallback(async () => {
+    // Runs first, while the session is still authenticated — see the
+    // function's own doc comment for why this is scoped to THIS device
+    // only, not every device the account has push enabled on.
+    await unsubscribeThisDeviceFromPush();
     try {
       await apiFetch("/auth/logout", { method: "POST" });
     } catch {
