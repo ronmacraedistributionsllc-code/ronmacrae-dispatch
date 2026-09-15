@@ -20,8 +20,8 @@
     "path": "/Users/geniussound/Developer/Genius-AI-Workspace/ronmacrae-dispatch/android/android-keystore",
     "alias": "ronmacrae-dispatch"
   },
-  "appVersionName": "1",
-  "appVersionCode": 1,
+  "appVersionName": "2",
+  "appVersionCode": 2,
   "shortcuts": [],
   "generatorApp": "@bubblewrap/cli",
   "webManifestUrl": "https://orders.ronmacraedistributions.com/manifest.webmanifest",
@@ -43,5 +43,5 @@
   "fileHandlers": [],
   "launchHandlerClientMode": "",
   "displayOverride": [],
-  "appVersion": "1"
+  "appVersion": "2"
 }
