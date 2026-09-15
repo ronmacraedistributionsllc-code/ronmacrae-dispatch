@@ -260,7 +260,12 @@ function MyBusinesses(): React.JSX.Element | null {
   if (businesses.length === 0 && merchants.length === 0) return null;
 
   return (
-    <details className="card space-y-2">
+    // Open by default whenever there's an actual merchant roster to show —
+    // "which merchant(s) am I attached to" is directly actionable
+    // information a courier would want to see, not something to bury
+    // behind an extra tap; collapsed only for the plain freelance case
+    // (businesses only, nothing merchant-specific to draw attention to).
+    <details className="card space-y-2" open={merchants.length > 0}>
       <summary className="cursor-pointer text-sm font-semibold uppercase tracking-wide text-zinc-400">My businesses</summary>
       <div className="mt-2 space-y-3 text-sm">
         {businesses.length > 0 ? (

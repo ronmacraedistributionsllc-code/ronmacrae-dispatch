@@ -113,6 +113,39 @@
   --theme-brand: #14682f;
   --theme-brand-dark: #0d4520;
 }
+/* Sunset Reef — the "wow factor" premium theme: a Jamaican dusk-over-the-
+ * water gradient (plum → magenta → coral) behind frosted-glass panels,
+ * with a reef-turquoise accent that pops hard against the warm backdrop.
+ * Every other theme is a flat surface colour; this is the one that gets an
+ * actual gradient body + blurred glass cards — additive only (a new
+ * background-image + backdrop-filter layered on the same tokens every
+ * other theme already uses, nothing existing changes). */
+:root[data-theme="sunset-reef"] {
+  --theme-bg: #1a0b2e;
+  --theme-panel: rgba(58, 18, 46, 0.45);
+  --theme-panel2: rgba(96, 28, 58, 0.4);
+  --theme-input: rgba(26, 10, 28, 0.65);
+  --theme-border: rgba(255, 186, 204, 0.22);
+  --theme-border-strong: rgba(255, 186, 204, 0.42);
+  --theme-fg: #fff6f9;
+  --theme-fg-muted: #f0c7da;
+  --theme-fg-subtle: #c98fa8;
+  --theme-accent: #2fe6d0;
+  --theme-brand: #7a1550;
+  --theme-brand-dark: #4a0d32;
+}
+:root[data-theme="sunset-reef"] body {
+  background-image: linear-gradient(165deg, #1a0b2e 0%, #45123f 28%, #9c2c5c 58%, #ff7a45 100%);
+  background-attachment: fixed;
+}
+:root[data-theme="sunset-reef"] .card {
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  box-shadow: 0 8px 32px rgba(15, 2, 20, 0.35);
+}
+:root[data-theme="sunset-reef"] .btn-accent {
+  box-shadow: 0 0 0 1px rgba(47, 230, 208, 0.5), 0 0 20px rgba(47, 230, 208, 0.45);
+}
 body { background-color: var(--theme-bg); }
 
 /* Map the neutral Tailwind utilities this app actually uses onto the theme

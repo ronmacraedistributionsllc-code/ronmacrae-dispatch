@@ -9,6 +9,7 @@ export const THEMES = [
   { id: "clean-light", label: "Clean Light" },
   { id: "night-courier", label: "Night Courier" },
   { id: "jamaica", label: "Jamaica" },
+  { id: "sunset-reef", label: "Sunset Reef ✨" },
 ] as const;
 
 export type ThemeId = (typeof THEMES)[number]["id"];

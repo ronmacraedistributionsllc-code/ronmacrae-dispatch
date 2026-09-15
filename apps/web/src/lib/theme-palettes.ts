@@ -17,6 +17,7 @@ export const THEME_PALETTES: Record<ThemeId, { bg: string; panel: string; accent
   "clean-light": { bg: "#f5f7fb", panel: "#ffffff", accent: "#c88a04", fg: "#172033", fgMuted: "#3f4a5f", border: "#d8dfeb" },
   "night-courier": { bg: "#07151a", panel: "#092327", accent: "#f2b705", fg: "#e2fbf4", fgMuted: "#a3d6cd", border: "#174e52" },
   jamaica: { bg: "#060a07", panel: "#0d1e14", accent: "#f7c948", fg: "#eafff2", fgMuted: "#a7d7b7", border: "#1f5c3a" },
+  "sunset-reef": { bg: "#1a0b2e", panel: "#3a122e", accent: "#2fe6d0", fg: "#fff6f9", fgMuted: "#f0c7da", border: "#ffbacc" },
 };
 
 export const THEME_DESCRIPTIONS: Record<ThemeId, string> = {
@@ -26,4 +27,5 @@ export const THEME_DESCRIPTIONS: Record<ThemeId, string> = {
   "clean-light": "White and soft grey with a blue-leaning accent — the one light theme.",
   "night-courier": "Dark slate with a glowing neon-blue-green edge.",
   jamaica: "Black, green, and gold — bonus, not one of the four requested, kept because it already shipped and works well.",
+  "sunset-reef": "A Jamaican dusk-over-the-water gradient — plum into magenta into coral, frosted-glass panels, a glowing reef-turquoise accent. The premium, wow-factor pick.",
 };
