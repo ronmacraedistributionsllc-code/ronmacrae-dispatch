@@ -372,3 +372,47 @@ describe("COD reconciliation: dispute type + archival (Stage 38)", () => {
     expect(body.disputedBeforeHandoverCount).toBeGreaterThanOrEqual(1);
   });
 });
+
+describe("COD reconciliation: concurrent actions on the same job can never both silently win", () => {
+  it("two concurrent approve requests on the same handed-in job — exactly one succeeds, exactly one real 'approved' audit event", async () => {
+    const customer = await makeCustomer(harness);
+    const { rider, token: riderTok } = await makeRider(harness);
+    const job = await makeCodJob(harness, customer.id, rider.id, 1000);
+    const accountantTok = await staffToken(harness, "accountant");
+    await harness.app.inject({ method: "POST", url: `/api/jobs/${job.id}/collect`, headers: { authorization: `Bearer ${riderTok}` }, payload: { amountCollected: 1000 } });
+    await harness.app.inject({ method: "POST", url: `/api/jobs/${job.id}/cod/hand-in`, headers: { authorization: `Bearer ${riderTok}` }, payload: { amountHandedIn: 1000 } });
+
+    const [first, second] = await Promise.all([
+      harness.app.inject({ method: "POST", url: `/api/jobs/${job.id}/cod/approve`, headers: { authorization: `Bearer ${accountantTok}` }, payload: {} }),
+      harness.app.inject({ method: "POST", url: `/api/jobs/${job.id}/cod/approve`, headers: { authorization: `Bearer ${accountantTok}` }, payload: {} }),
+    ]);
+    const statuses = [first.statusCode, second.statusCode].sort();
+    expect(statuses).toEqual([200, 409]);
+
+    const approvedEvents = await harness.prisma.codEvent.findMany({ where: { jobId: job.id, to: "approved" } });
+    expect(approvedEvents).toHaveLength(1);
+    // The one real event's own `from` reflects the job's actual prior
+    // state (handed_in) — not a second, stale-read duplicate.
+    expect(approvedEvents[0]!.from).toBe("handed_in");
+  });
+
+  it("two concurrent archive requests on the same approved entry — exactly one succeeds", async () => {
+    const customer = await makeCustomer(harness);
+    const { rider, token: riderTok } = await makeRider(harness);
+    const job = await makeCodJob(harness, customer.id, rider.id, 1000);
+    const accountantTok = await staffToken(harness, "accountant");
+    await harness.app.inject({ method: "POST", url: `/api/jobs/${job.id}/collect`, headers: { authorization: `Bearer ${riderTok}` }, payload: { amountCollected: 1000 } });
+    await harness.app.inject({ method: "POST", url: `/api/jobs/${job.id}/cod/hand-in`, headers: { authorization: `Bearer ${riderTok}` }, payload: { amountHandedIn: 1000 } });
+    await harness.app.inject({ method: "POST", url: `/api/jobs/${job.id}/cod/approve`, headers: { authorization: `Bearer ${accountantTok}` }, payload: {} });
+
+    const [first, second] = await Promise.all([
+      harness.app.inject({ method: "POST", url: `/api/jobs/${job.id}/cod/archive`, headers: { authorization: `Bearer ${accountantTok}` }, payload: {} }),
+      harness.app.inject({ method: "POST", url: `/api/jobs/${job.id}/cod/archive`, headers: { authorization: `Bearer ${accountantTok}` }, payload: {} }),
+    ]);
+    const statuses = [first.statusCode, second.statusCode].sort();
+    expect(statuses).toEqual([200, 409]);
+
+    const row = await harness.prisma.job.findUniqueOrThrow({ where: { id: job.id } });
+    expect(row.codArchivedAt).not.toBeNull();
+  });
+});
