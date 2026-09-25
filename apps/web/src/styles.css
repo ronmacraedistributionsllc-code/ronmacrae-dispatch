@@ -148,6 +148,20 @@
 }
 body { background-color: var(--theme-bg); }
 
+/* iOS Safari zooms the entire page in whenever a form field under 16px
+ * takes focus, and doesn't zoom back out — every field here is text-sm/
+ * text-xs (14/12px), so tapping any input on an iPhone left the login
+ * screen (and every form after it) cropped and mis-scaled. Targeted with
+ * the iOS-only -webkit-touch-callout feature query so Android and desktop
+ * keep the compact sizing untouched. */
+@supports (-webkit-touch-callout: none) {
+  input,
+  select,
+  textarea {
+    font-size: 16px !important;
+  }
+}
+
 /* Map the neutral Tailwind utilities this app actually uses onto the theme
  * tokens. Kept explicit (not a blanket remap) so status colours (red/amber/
  * emerald) and any deliberate non-theme choice are left untouched. */
