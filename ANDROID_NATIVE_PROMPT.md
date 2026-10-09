@@ -168,3 +168,12 @@ Known limitations: <list>
 4. **Google Play Console:** upload the new AAB (existing `android/upload-release.mjs` can do it with their service-account JSON); update the **Data safety** form (location, device identifiers/push token), the **foreground-service / location permission declaration** if prompted, the **privacy policy** (mention location sharing during deliveries and push tokens), and add the new `app signing` SHA-256 where needed. Test on the Internal track first.
 5. **A physical Android phone** with USB debugging for the Phase 5/6 device tests (or approval to create an emulator).
 6. Decide whether to **retire the TWA** (`android/`, the public APK in `public/downloads`) once the Capacitor build is live.
+
+---
+
+## Addendum (2026-10-09) — state of the repo when you start
+
+- The store-readiness work is **already merged to `master`**: account deletion (all four login types), `/privacy` `/terms` `/support` `/delete-account`, reviewer-accounts script, security fixes, and the `store/` kit. Read `store/BLOCKERS.md`, `store/AAB_VERIFICATION.md` and `store/SECURITY_RULES.md` first. Do not undo any of it.
+- **The existing `.aab` in `android/app/build/outputs/bundle/release/` is unsigned and this machine has no JDK.** Install a JDK (Android Studio's bundled one is fine) before Phase 8, add a `signingConfig` that reads the keystore path and passwords from environment variables (never from committed files), and bump `versionCode` (currently 2) in both `twa-manifest.json` and `app/build.gradle`.
+- Privacy policy (`apps/web/src/pages/legal.tsx`) and the Data Safety draft (`store/LISTING.md`) currently say location is shared only while the app is open. If you add background location or FCM, **update both** before release.
+- `/api/users` and proof routes are now business-scoped; any new endpoint you add must follow the same rule (derive `businessId` from the token, never from the request) and ship with a cross-business test like `apps/api/test/security-rules.test.ts`.
