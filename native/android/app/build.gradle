@@ -1,0 +1,88 @@
+apply plugin: 'com.android.application'
+
+android {
+    namespace = "com.login.dispatched"
+    compileSdk = rootProject.ext.compileSdkVersion
+    defaultConfig {
+        applicationId "com.login.dispatched"
+        minSdkVersion rootProject.ext.minSdkVersion
+        targetSdkVersion rootProject.ext.targetSdkVersion
+        // Must stay > the TWA's versionCode 2 (android/twa-manifest.json).
+        versionCode 3
+        versionName "3"
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+        aaptOptions {
+             // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
+             // Default: https://android.googlesource.com/platform/frameworks/base/+/282e181b58cf72b6ca770dc7ca5f91f135444502/tools/aapt/AaptAssets.cpp#61
+            ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
+        }
+    }
+    // Release signing reads the upload keystore ONLY through environment
+    // variables the human exports in their own shell — never from a
+    // committed file and never on the command line (hard rule R1).
+    // Required: ANDROID_KEYSTORE_PATH, ANDROID_KEYSTORE_PASSWORD,
+    //           ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD.
+    signingConfigs {
+        release {
+            def ksPath = System.getenv("ANDROID_KEYSTORE_PATH")
+            def ksPassword = System.getenv("ANDROID_KEYSTORE_PASSWORD")
+            def ksAlias = System.getenv("ANDROID_KEY_ALIAS")
+            def ksKeyPassword = System.getenv("ANDROID_KEY_PASSWORD")
+            // Fail fast for release builds only: debug builds and IDE syncs
+            // (no release task on the command line) must work with no
+            // signing material present at all.
+            def releaseRequested = gradle.startParameter.taskNames.any { it.toLowerCase().contains("release") }
+            if ((!ksPath || !ksPassword || !ksAlias || !ksKeyPassword) && releaseRequested) {
+                throw new GradleException(
+                    "Release signing is not configured: export ANDROID_KEYSTORE_PATH, " +
+                    "ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS and ANDROID_KEY_PASSWORD " +
+                    "in your own shell before building a release. Debug builds need none of these.")
+            }
+            if (ksPath) {
+                storeFile file(ksPath)
+            }
+            // Dummy non-empty defaults keep Gradle's configuration phase happy
+            // when no release task is requested; they are never used because
+            // no signing actually happens without the real env vars.
+            storePassword ksPassword ?: "unset"
+            keyAlias ksAlias ?: "unset"
+            keyPassword ksKeyPassword ?: "unset"
+        }
+    }
+    buildTypes {
+        release {
+            signingConfig signingConfigs.release
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+        }
+    }
+}
+
+repositories {
+    flatDir{
+        dirs '../capacitor-cordova-android-plugins/src/main/libs', 'libs'
+    }
+}
+
+dependencies {
+    implementation fileTree(include: ['*.jar'], dir: 'libs')
+    implementation "androidx.appcompat:appcompat:$androidxAppCompatVersion"
+    implementation "androidx.coordinatorlayout:coordinatorlayout:$androidxCoordinatorLayoutVersion"
+    implementation "androidx.core:core-splashscreen:$coreSplashScreenVersion"
+    implementation project(':capacitor-android')
+    testImplementation "junit:junit:$junitVersion"
+    androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
+    androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"
+    implementation project(':capacitor-cordova-android-plugins')
+}
+
+apply from: 'capacitor.build.gradle'
+
+try {
+    def servicesJSON = file('google-services.json')
+    if (servicesJSON.text) {
+        apply plugin: 'com.google.gms.google-services'
+    }
+} catch(Exception e) {
+    logger.info("google-services.json not found, google-services plugin not applied. Push Notifications won't work")
+}

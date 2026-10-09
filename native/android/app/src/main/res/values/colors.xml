@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Brand colours carried over from the TWA manifest (android/twa-manifest.json):
+     themeColor #123F2E, background #0B1F17, navigation #000000. -->
+<resources>
+    <color name="colorPrimary">#123F2E</color>
+    <color name="colorPrimaryDark">#0B1F17</color>
+    <color name="colorAccent">#123F2E</color>
+</resources>

@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Ronmacrae Dispatch</string>
+    <string name="title_activity_main">Ronmacrae Dispatch</string>
+    <string name="package_name">com.login.dispatched</string>
+    <string name="custom_url_scheme">com.login.dispatched</string>
+</resources>
