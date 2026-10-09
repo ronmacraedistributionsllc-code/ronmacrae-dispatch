@@ -13,7 +13,8 @@
     "preview": "node ./scripts/prepare-db.mjs && node dist/main.js",
     "seed": "node ./scripts/prepare-db.mjs && tsx src/seed.ts",
     "test:unit": "vitest run",
-    "test": "vitest run"
+    "test": "vitest run",
+    "reviewer-accounts": "node ./scripts/prepare-db.mjs && tsx src/create-reviewer-accounts.ts"
   },
   "dependencies": {
     "@fastify/cookie": "^11.1.2",

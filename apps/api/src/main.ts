@@ -1,3 +1,4 @@
+import { deploymentWarnings } from "./lib/deployment-warnings.js";
 import { loadConfig } from "./config.js";
 import { createLogger } from "./lib/log.js";
 import { getPrisma } from "./prisma.js";
@@ -45,6 +46,12 @@ async function main(): Promise<void> {
   hub.startPing();
 
   await app.listen({ port: config.PORT, host: config.HOST });
+  // A real deployment running a "memory" provider silently sends nothing
+  // (it logs and reports success) — say so loudly at every boot; /api/health
+  // reports the same provider names so it can be checked from outside.
+  for (const warning of deploymentWarnings({ devDb: config.DEV_DB, emailProvider: ctx.email.name, notificationProvider: ctx.notifier.name })) {
+    log.warn(warning);
+  }
   log.info(
     { port: config.PORT, db: config.DEV_DB ? "sqlite" : "postgres", queue: queue.kind, web: config.WEB_DIST || null },
     "ronmacrae-dispatch api listening",
