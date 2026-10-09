@@ -96,6 +96,8 @@ const StatusBody = z.object({
 
 const ListQuery = z.object({
   includeInactive: z.coerce.boolean().default(false),
+  /** Case-insensitive match on name or phone. Always applied inside the caller's business. */
+  q: z.string().trim().max(80).optional(),
 });
 
 /** Public self-signup — deliberately smaller than CreateBody (a staff
@@ -134,8 +136,8 @@ export class RidersService {
 
   /** Riders who are members of this business — global riders shared with
    *  other businesses never appear in a business that hasn't invited them. */
-  async list(businessId: string, includeInactive: boolean): Promise<RiderDto[]> {
-    const rows = await this.app.prisma.rider.findMany({
+  async list(businessId: string, includeInactive: boolean, search?: string): Promise<RiderDto[]> {
+    const allRows = await this.app.prisma.rider.findMany({
       where: {
         ...(includeInactive ? {} : { active: true }),
         memberships: { some: { businessId, ...(includeInactive ? {} : { status: "active" }) } },
@@ -143,6 +145,12 @@ export class RidersService {
       orderBy: { name: "asc" },
       include: { homeZone: { select: { name: true } } },
     });
+    // Filtered in memory rather than with `contains`: SQLite (dev) and Postgres
+    // (prod) disagree on case-insensitivity, and a business's courier list is small.
+    const needle = search?.toLowerCase();
+    const rows = needle
+      ? allRows.filter((r) => r.name.toLowerCase().includes(needle) || r.phone.replace(/\s/g, "").includes(needle.replace(/\s/g, "")))
+      : allRows;
     const ids = rows.map((r) => r.id);
     // Deliberately global (not businessId-scoped) — see the same note in
     // ops-board.ts: a rider's "current job" for capacity/status purposes
@@ -560,7 +568,7 @@ export async function riderRoutes(app: FastifyInstance, ctx: AppCtx): Promise<vo
 
   app.get("/api/riders", { preHandler: ctx.requireStaff("admin", "dispatcher", "accountant", "viewer") }, async (req) => {
     const q = ListQuery.parse(req.query);
-    return { riders: await svc.list(req.user!.businessId!, q.includeInactive) };
+    return { riders: await svc.list(req.user!.businessId!, q.includeInactive, q.q || undefined) };
   });
 
   app.post("/api/riders", { preHandler: ctx.requireStaff("admin", "dispatcher") }, async (req) => {

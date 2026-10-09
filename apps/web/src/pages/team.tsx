@@ -39,7 +39,13 @@ export function Team(): React.JSX.Element {
   const [addingRider, setAddingRider] = useState(false);
 
   const staff = useQuery({ queryKey: ["users"], queryFn: () => apiFetch<{ users: UserDto[] }>(API.users.list) });
-  const riders = useQuery({ queryKey: ["riders"], queryFn: () => apiFetch<{ riders: RiderDto[] }>(API.riders.list) });
+  const [riderSearch, setRiderSearch] = useState("");
+  const riderTerm = riderSearch.trim();
+  const riders = useQuery({
+    queryKey: ["riders", "search", riderTerm],
+    queryFn: () => apiFetch<{ riders: RiderDto[] }>(riderTerm ? `${API.riders.list}?q=${encodeURIComponent(riderTerm)}` : API.riders.list),
+    placeholderData: (prev) => prev,
+  });
   const invites = useQuery({ queryKey: ["invites"], queryFn: () => apiFetch<{ invites: InviteDto[] }>(API.invites.list) });
   const resendInvite = useMutation({
     mutationFn: (id: string) => apiFetch(API.invites.resend(id), { method: "POST" }),
@@ -150,9 +156,19 @@ export function Team(): React.JSX.Element {
         {addingRider ? (
           <CreateRiderForm onDone={() => { setAddingRider(false); void qc.invalidateQueries({ queryKey: ["riders"] }); }} />
         ) : null}
+        <input
+          className="input"
+          type="search"
+          aria-label="Search couriers"
+          placeholder="Search couriers by name or phone"
+          value={riderSearch}
+          onChange={(e) => setRiderSearch(e.target.value)}
+        />
         {riders.isLoading ? <p className="text-sm text-zinc-400">Loading…</p> : null}
         {riders.data && riders.data.riders.length === 0 ? (
-          <div className="card text-sm text-zinc-400">No couriers yet — add one so jobs can actually be assigned and delivered.</div>
+          <div className="card text-sm text-zinc-400">
+            {riderTerm ? `No couriers match “${riderTerm}”.` : "No couriers yet — add one so jobs can actually be assigned and delivered."}
+          </div>
         ) : null}
         <div className="space-y-2">
           {riders.data?.riders.map((r) => (
