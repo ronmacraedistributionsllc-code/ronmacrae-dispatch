@@ -56,7 +56,7 @@ Collected, **not sold**, **encrypted in transit** (HTTPS), **deletion available*
 | Email address | Yes | Sign-in, notices | No (email is sent via a processor, Resend) |
 | Phone number | Yes | Sign-in, contacting the customer/courier | No (SMS/WhatsApp go via Twilio only if the owner enables it) |
 | Physical address | Yes | Delivery pickup/drop-off | No |
-| Precise location | Yes — couriers only, while using the app | Live tracking for the business and the customer on that order | No |
+| Precise location | Yes — couriers only, while sharing during an active delivery (in the Android app this includes screen-off/background while the delivery is active, with a permanent notification shown; stops on delivery end or manual stop) | Live tracking for the business and the customer on that order | No |
 | Photos | Yes — proof-of-delivery photos | Delivery proof | No |
 | Messages | Yes — in-delivery chat | Coordination | No |
 | User IDs / device push token | Yes | Account, notifications | No |

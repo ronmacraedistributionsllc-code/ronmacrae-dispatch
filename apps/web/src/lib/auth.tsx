@@ -6,6 +6,7 @@ import { applyRemoteTheme } from "./theme.js";
 import { unsubscribeThisDeviceFromPush } from "./push.js";
 import { isNative } from "../native/platform.js";
 import { unregisterNativeTokenOnLogout } from "../native/push.js";
+import { stopNativeSharing } from "../native/location.js";
 
 /** sessionStorage key for a merchant-portal session — shared with
  *  merchant-portal.tsx, which reads this same key on mount. Kept here
@@ -180,8 +181,13 @@ export function AuthProvider({ children }: { children: ReactNode }): ReactNode {
     // function's own doc comment for why this is scoped to THIS device
     // only, not every device the account has push enabled on.
     await unsubscribeThisDeviceFromPush();
-    // Native shell only (no-op on web): unregister this shell's FCM token.
-    if (isNative()) await unregisterNativeTokenOnLogout();
+    // Native shell only (all no-ops on web): unregister this shell's FCM
+    // token and stop any background location watcher (no `paused` report —
+    // the session is over and the server sweeps staleness anyway).
+    if (isNative()) {
+      await unregisterNativeTokenOnLogout();
+      await stopNativeSharing();
+    }
     try {
       await apiFetch("/auth/logout", { method: "POST" });
     } catch {

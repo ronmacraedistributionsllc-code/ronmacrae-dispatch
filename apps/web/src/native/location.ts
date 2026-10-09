@@ -92,6 +92,70 @@ export async function stopNativeSharing(): Promise<void> {
   }
 }
 
+/** Open the OS app-settings screen (used for the battery-optimization hint). */
+export async function openNativeLocationSettings(): Promise<void> {
+  if (!isNative()) return;
+  try {
+    const geo = await plugin();
+    await geo.openSettings();
+  } catch {
+    // best-effort
+  }
+}
+
+const SHARING_FLAG_KEY = "native-sharing-was-on";
+const BATTERY_HINT_KEY = "native-battery-hint-dismissed";
+
+async function prefs() {
+  const { Preferences } = await import("@capacitor/preferences");
+  return Preferences;
+}
+
+/**
+ * True when a previous session was sharing but this one isn't (the OS
+ * killed the service while the app was closed). Never auto-resumes — the
+ * caller shows an honest "tap to resume" note instead.
+ */
+export async function wasSharingWhenClosed(): Promise<boolean> {
+  if (!isNative()) return false;
+  try {
+    const { value } = await (await prefs()).get({ key: SHARING_FLAG_KEY });
+    return value === "1" && watcherId === null;
+  } catch {
+    return false;
+  }
+}
+
+export async function markSharingFlag(on: boolean): Promise<void> {
+  if (!isNative()) return;
+  try {
+    const p = await prefs();
+    if (on) await p.set({ key: SHARING_FLAG_KEY, value: "1" });
+    else await p.remove({ key: SHARING_FLAG_KEY });
+  } catch {
+    // best-effort
+  }
+}
+
+export async function batteryHintDismissed(): Promise<boolean> {
+  if (!isNative()) return true;
+  try {
+    const { value } = await (await prefs()).get({ key: BATTERY_HINT_KEY });
+    return value === "1";
+  } catch {
+    return true;
+  }
+}
+
+export async function dismissBatteryHint(): Promise<void> {
+  if (!isNative()) return;
+  try {
+    await (await prefs()).set({ key: BATTERY_HINT_KEY, value: "1" });
+  } catch {
+    // best-effort
+  }
+}
+
 /** Test-only reset of the module-level watcher id. */
 export function __resetNativeSharingForTests(): void {
   watcherId = null;

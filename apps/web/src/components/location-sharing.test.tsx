@@ -1,6 +1,6 @@
 import React from "react";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { LocationSharing } from "./location-sharing.js";
 
 const authState: { role: string | null } = { role: null };
@@ -12,7 +12,12 @@ vi.mock("../lib/auth.js", () => ({
 vi.mock("../native/location.js", () => ({
   isNativeSharing: vi.fn(() => false),
   startNativeSharing: vi.fn(),
-  stopNativeSharing: vi.fn(),
+  stopNativeSharing: vi.fn(() => Promise.resolve()),
+  wasSharingWhenClosed: vi.fn(() => Promise.resolve(false)),
+  markSharingFlag: vi.fn(() => Promise.resolve()),
+  batteryHintDismissed: vi.fn(() => Promise.resolve(true)),
+  dismissBatteryHint: vi.fn(() => Promise.resolve()),
+  openNativeLocationSettings: vi.fn(() => Promise.resolve()),
 }));
 
 async function locationAdapter() {
@@ -20,6 +25,10 @@ async function locationAdapter() {
     isNativeSharing: ReturnType<typeof vi.fn>;
     startNativeSharing: ReturnType<typeof vi.fn>;
     stopNativeSharing: ReturnType<typeof vi.fn>;
+    wasSharingWhenClosed: ReturnType<typeof vi.fn>;
+    markSharingFlag: ReturnType<typeof vi.fn>;
+    batteryHintDismissed: ReturnType<typeof vi.fn>;
+    dismissBatteryHint: ReturnType<typeof vi.fn>;
   };
 }
 
@@ -52,21 +61,67 @@ describe("LocationSharing native gating", () => {
     expect(screen.getByText("Share my location")).toBeTruthy();
   });
 
-  it("native + rider: shows the native path with the screen-off disclosure, start uses the watcher", async () => {
+  it("native + rider with an active delivery: disclosure first, watcher only after confirm", async () => {
     setNative(true);
     authState.role = "rider";
     const adapter = await locationAdapter();
     adapter.startNativeSharing.mockResolvedValue("sharing");
-    render(<LocationSharing riderId="r1" />);
-    expect(screen.getByText(/even with the screen off/)).toBeTruthy();
+    render(<LocationSharing riderId="r1" hasActiveDelivery />);
     fireEvent.click(screen.getByText("Share my location"));
-    expect(adapter.startNativeSharing).toHaveBeenCalled();
+    // The prominent disclosure appears BEFORE any OS prompt or watcher.
+    expect(screen.getByText("Share your location in the background?")).toBeTruthy();
+    expect(adapter.startNativeSharing).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByText("I understand — start sharing"));
+    await waitFor(() => expect(adapter.startNativeSharing).toHaveBeenCalled());
+    expect(await screen.findByText(/Sharing in background/)).toBeTruthy();
+  });
+
+  it("native + rider without an active delivery: sharing is unavailable, watcher never starts", () => {
+    setNative(true);
+    authState.role = "rider";
+    render(<LocationSharing riderId="r1" hasActiveDelivery={false} />);
+    expect(screen.getByText(/available while you have an active delivery/)).toBeTruthy();
+    expect(screen.getByText("Share my location").closest("button")?.disabled).toBe(true);
+  });
+
+  it("delivery ending while sharing stops the watcher", async () => {
+    setNative(true);
+    authState.role = "rider";
+    const adapter = await locationAdapter();
+    adapter.startNativeSharing.mockResolvedValue("sharing");
+    const { rerender } = render(<LocationSharing riderId="r1" hasActiveDelivery />);
+    fireEvent.click(screen.getByText("Share my location"));
+    fireEvent.click(screen.getByText("I understand — start sharing"));
+    await waitFor(() => expect(adapter.startNativeSharing).toHaveBeenCalled());
+    rerender(<LocationSharing riderId="r1" hasActiveDelivery={false} />);
+    await waitFor(() => expect(adapter.stopNativeSharing).toHaveBeenCalled());
+  });
+
+  it("a service killed while the app was closed is reported honestly, never resumed silently", async () => {
+    setNative(true);
+    authState.role = "rider";
+    const adapter = await locationAdapter();
+    adapter.wasSharingWhenClosed.mockResolvedValue(true);
+    render(<LocationSharing riderId="r1" hasActiveDelivery />);
+    expect(await screen.findByText(/Sharing stopped while the app was closed/)).toBeTruthy();
+    expect(adapter.startNativeSharing).not.toHaveBeenCalled();
+  });
+
+  it("the battery hint shows once until dismissed", async () => {
+    setNative(true);
+    authState.role = "rider";
+    const adapter = await locationAdapter();
+    adapter.batteryHintDismissed.mockResolvedValue(false);
+    render(<LocationSharing riderId="r1" hasActiveDelivery />);
+    expect(await screen.findByText("Keep location sharing alive")).toBeTruthy();
+    fireEvent.click(screen.getByText("Don't show again"));
+    await waitFor(() => expect(adapter.dismissBatteryHint).toHaveBeenCalled());
   });
 
   it("native + non-rider: renders nothing", async () => {
     setNative(true);
     authState.role = "dispatcher";
-    const { container } = render(<LocationSharing riderId="r1" />);
+    const { container } = render(<LocationSharing riderId="r1" hasActiveDelivery />);
     const adapter = await locationAdapter();
     expect(adapter.startNativeSharing).not.toHaveBeenCalled();
     expect(container.innerHTML).toBe("");

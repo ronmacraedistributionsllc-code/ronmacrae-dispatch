@@ -82,8 +82,11 @@ export function Privacy(): React.JSX.Element {
 
       <h2>Location</h2>
       <p>
-        A courier's location is collected only when they switch location sharing on. In the current version of the app
-        this works while the app is open on screen; it does not track in the background. Dispatch staff of the business
+        A courier's location is collected only when they switch location sharing on, and only while they have an
+        active delivery. In a web browser this works while the app is open on screen. In the Android app, sharing
+        continues while the delivery is active even if the screen is off or the app is in the background — the app
+        shows a permanent notification while this is happening, and sharing stops by itself when the delivery ends
+        (or whenever the courier taps “Stop sharing location”). Dispatch staff of the business
         a courier works for can see that location. A customer can see their courier's position only while their own
         delivery is out with the courier — not before it's assigned and not after it's finished.
       </p>
@@ -93,7 +96,7 @@ export function Privacy(): React.JSX.Element {
         <li><strong>Maps and routing:</strong> delivery addresses and pickup/drop-off coordinates are sent to OpenStreetMap services (Nominatim for address search, OSRM for routing) to find the place and estimate the route. If the business has configured them, Google Maps or JamNav may be used instead.</li>
         <li><strong>Messaging:</strong> Twilio delivers SMS/WhatsApp messages (your phone number and the message text).</li>
         <li><strong>Email:</strong> verification codes and some order emails are sent through Resend when email is enabled.</li>
-        <li><strong>Push notifications:</strong> delivered through the push service of your browser or phone maker (for example Google, Apple, or Mozilla). Content is kept minimal — a courier's job alert shows the pickup and the general delivery area; no alert includes a customer's name, phone number, or delivery PIN.</li>
+        <li><strong>Push notifications:</strong> delivered through the push service of your browser or phone maker (for example Google, Apple, or Mozilla). The Android app uses Google's Firebase Cloud Messaging, which handles a device push token for each phone with notifications switched on. Content is kept minimal — a courier's job alert shows the pickup and the general delivery area; no alert includes a customer's name, phone number, or delivery PIN.</li>
         <li><strong>Hosting:</strong> the service runs on Render, behind Cloudflare.</li>
       </ul>
 

@@ -12,7 +12,8 @@ Goal: Capacitor shell (`native/`) wrapping https://orders.ronmacraedistributions
 | 2 Capacitor shell scaffold | done | `assembleDebug` BUILD SUCCESSFUL; APK installs/loads live site: NOT TESTED (no device) |
 | 3 Web-side native bridge | done | typecheck/lint/test:unit/build green; bundle evidence below |
 | 4 Native push (FCM) end-to-end | done (UNIT-TESTED; device test blocked on Firebase) | API + client below; debug build green with and without google-services.json |
-| 5 Background location | in progress | disclosure screen + device test next |
+| 5 Background location | done (UNIT-TESTED; device test pending a phone) | disclosure + gating + battery hint + DEVICE_TEST.md; e2e rider-dashboard green |
+| 6 Offline resilience | in progress | ConnectionStatus + cache + queue next |
 | 4 Native push (FCM) end-to-end | not started | blocked on Firebase project (human) for device test |
 | 5 Background location | not started | needs device (human) |
 | 6 Offline resilience | not started | — |
@@ -133,6 +134,33 @@ Goal: Capacitor shell (`native/`) wrapping https://orders.ronmacraedistributions
 - Known limitations: no custom small push icon (default app icon is used;
   a white-on-transparent asset can replace it later); server registration
   only takes effect after the human deploys the API.
+
+## Phase 5 — background location (done, UNIT-TESTED)
+
+- Watcher starts ONLY after the prominent disclosure (what/when/why/who/
+  how-to-stop, copy in `apps/web/src/native/location-disclosure.ts`) AND
+  only while the rider has an active delivery (`hasActiveDelivery` from the
+  dashboard's own `activeJobs`; button disabled otherwise). API unchanged.
+- Stops (with a `paused` report, same semantics as the web hook) on manual
+  stop, delivery end (auto effect on the flag flip: complete/cancel/
+  unassign all covered), and logout. Ongoing notification:
+  “Sharing location for your active delivery” — no customer details.
+- Killed-service honesty: a persisted flag detects “was sharing when the
+  app closed” and shows “tap to resume” — never claims continuity, never
+  auto-resumes. Permission-denied / GPS-off / start-error states all have
+  honest UI; “background” is shown ONLY while the watcher runs.
+- Battery: one-time, optional, skippable card linking to the OS app
+  settings (`openSettings()`); dismissal persisted. No forced exemption.
+- Legal updated for background + FCM: `legal.tsx` Location section and
+  push-processor line; `store/LISTING.md` precise-location row.
+- `native/DEVICE_TEST.md`: full device script (5-min locked-screen test,
+  expected logcat guidance without invented strings, push + offline parts).
+- Tests: web 45/45 (disclosure-before-start, no-delivery gate, auto-stop
+  on delivery end, killed-service honesty, battery-once); e2e
+  rider-dashboard 1/1 serial.
+- NOT DEVICE-TESTED (no phone attached — BLOCKERS #4). If the service
+  stops reporting with the screen off, the rule is: capture logcat, file
+  in BLOCKERS, do NOT silently add ACCESS_BACKGROUND_LOCATION.
 
 ## Machine notes (Phase 0)
 

@@ -219,7 +219,7 @@ export function RiderDashboard(): React.JSX.Element {
     ) : null}
     <MyBusinesses />
     <CashSummary />
-    <LocationSharing riderId={rider.id} />
+    <LocationSharing riderId={rider.id} hasActiveDelivery={activeJobs.length > 0} />
     <LogisticsFleetChat />
 
     <SectionHeading label="To pick up" count={toPickUp.length} />
