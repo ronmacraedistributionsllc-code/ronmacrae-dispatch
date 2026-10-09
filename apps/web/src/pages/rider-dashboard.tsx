@@ -7,6 +7,19 @@ import { ApiError, apiFetch, formatMoney } from "../lib/api.js";
 import { useAuth } from "../lib/auth.js";
 import { useRealtime } from "../lib/realtime.js";
 import { LocationSharing } from "../components/location-sharing.js";
+import {
+  OfflineQueued,
+  dismissQueuedAction,
+  enqueueAction,
+  flushQueue,
+  isOfflineError,
+  pendingForJob,
+  pendingForOffer,
+  retryQueuedAction,
+  useQueuedActions,
+  type QueuedAction,
+} from "../lib/offline-queue.js";
+import { cacheAge, loadJobsCache, loadOffersCache, saveJobsCache, saveOffersCache, type CachedJobs, type CachedOffers } from "../lib/offline-cache.js";
 import { RouteQueue } from "../components/route-queue.js";
 import { ContactDispatch } from "../components/contact-dispatch.js";
 import { DeliveryChat } from "../components/delivery-chat.js";
@@ -149,11 +162,48 @@ export function RiderDashboard(): React.JSX.Element {
   useEffect(() => subscribe(["offer", "job.assigned"], () => refreshOffersAndJobs()), [subscribe]);
   // Catch up immediately on (re)connect — a dropped socket shouldn't leave a
   // missed offer or a withdrawn/expired one sitting stale until the next poll.
-  useEffect(() => onReconnect(() => refreshOffersAndJobs()), [onReconnect]);
+  // Reconnect is also when the offline action queue replays (in order, with
+  // idempotency keys); the browser-online event and first mount cover the
+  // cases where the socket was never the thing that noticed.
+  useEffect(() => onReconnect(() => {
+    refreshOffersAndJobs();
+    void flushQueue(refreshOffersAndJobs);
+  }), [onReconnect]);
+  useEffect(() => {
+    const onOnline = () => void flushQueue(refreshOffersAndJobs);
+    window.addEventListener("online", onOnline);
+    // Items queued in a previous session (app closed before reconnect).
+    void flushQueue(refreshOffersAndJobs);
+    return () => window.removeEventListener("online", onOnline);
+  }, []);
+
+  // Last-known cache: written on every successful fetch, shown (labelled
+  // with its age) only when the live fetch is unavailable while offline.
+  const [cachedJobs, setCachedJobs] = useState<CachedJobs | null>(null);
+  const [cachedOffers, setCachedOffers] = useState<CachedOffers | null>(null);
+  useEffect(() => {
+    void loadJobsCache().then(setCachedJobs);
+    void loadOffersCache().then(setCachedOffers);
+  }, []);
+  useEffect(() => {
+    if (jobs.data) void saveJobsCache(jobs.data.jobs);
+  }, [jobs.data]);
+  useEffect(() => {
+    if (offers.data) void saveOffersCache(offers.data.offers);
+  }, [offers.data]);
+
+  // Above the `!rider` early return — hooks must run unconditionally.
+  const queuedActions = useQueuedActions();
 
   if (!rider) return <p className="text-sm text-zinc-400">Loading courier profile…</p>;
 
-  const allJobs = jobs.data?.jobs ?? [];
+  const offline = realtimeStatus === "offline";
+  const liveJobs = jobs.data?.jobs;
+  const liveOffers = offers.data?.offers;
+  const usingJobsCache = !liveJobs && offline && cachedJobs !== null;
+  const usingOffersCache = !liveOffers && offline && cachedOffers !== null;
+  const allJobs = liveJobs ?? cachedJobs?.jobs ?? [];
+  const allOffers = liveOffers ?? cachedOffers?.offers ?? [];
   const activeJobs = allJobs.filter((job) => ACTIVE_JOB_STATUSES.includes(job.status));
   const toPickUp = allJobs.filter((job) => TO_PICK_UP_STATUSES.includes(job.status));
   const inPossession = allJobs.filter((job) => IN_POSSESSION_STATUSES.includes(job.status));
@@ -161,7 +211,8 @@ export function RiderDashboard(): React.JSX.Element {
   const capacity = rider.dailyCapacity;
   const atCapacity = activeJobs.length >= capacity;
   const available = isAvailableForJobs(availability);
-  const offerCount = offers.data?.offers.length ?? 0;
+  const offerCount = allOffers.length;
+  const pendingCount = queuedActions.filter((a) => a.state === "pending").length;
 
   return <div className="space-y-4 pb-4">
     <header className="flex flex-wrap items-center justify-between gap-3">
@@ -198,16 +249,30 @@ export function RiderDashboard(): React.JSX.Element {
     </section>
     {availabilityChange.error ? <p className="text-sm text-red-400">{availabilityChange.error instanceof ApiError ? availabilityChange.error.message : "Could not update availability"}</p> : null}
 
+    {/* Offline honesty, rider-only: complements (never duplicates) the
+     *  connection badge in the layout header. Cached rows below are always
+     *  labelled with their age; queued actions show per-item state. */}
+    {offline ? <p className="text-xs text-amber-300">Offline — changes will sync when you reconnect.</p> : null}
+    {usingJobsCache || usingOffersCache ? (
+      <p className="text-xs text-zinc-400">
+        Showing last saved {usingJobsCache ? `jobs (${cacheAge(cachedJobs!.savedAt)})` : ""}
+        {usingJobsCache && usingOffersCache ? " and " : ""}{usingOffersCache ? `offers (${cacheAge(cachedOffers!.savedAt)})` : ""} — you're offline.
+      </p>
+    ) : null}
+    {pendingCount > 0 ? (
+      <p className="text-xs text-sky-300">{pendingCount} action{pendingCount === 1 ? "" : "s"} pending sync — will send automatically when you're back online.</p>
+    ) : null}
+    <QueueFailures actions={queuedActions} onChanged={refreshOffersAndJobs} />
     {/* Spec item 4 — a clear, unmissable "Available Jobs" section: jobs
      *  dispatch has offered that this rider can tap to accept. Placed above
      *  everything else on the dashboard since it's the most actionable thing
      *  a rider not already mid-delivery needs to see first. */}
     <SectionHeading label="Available jobs" count={offerCount} />
-    {offers.isLoading ? <p className="text-sm text-zinc-400">Checking for available jobs…</p> : null}
+    {offers.isLoading && !usingOffersCache ? <p className="text-sm text-zinc-400">Checking for available jobs…</p> : null}
     {offerCount === 0 ? (
       <p className="text-sm text-zinc-500">No jobs available right now — they'll appear here the moment dispatch offers one.</p>
     ) : (
-      <div className="space-y-2">{offers.data!.offers.map((offer) => <OfferCard key={offer.id} offer={offer} onChanged={refreshOffersAndJobs} />)}</div>
+      <div className="space-y-2">{allOffers.map((offer) => <OfferCard key={offer.id} offer={offer} onChanged={refreshOffersAndJobs} />)}</div>
     )}
 
     {activeJobs.length > 0 ? (
@@ -411,17 +476,56 @@ function useClockTick(intervalMs: number): number {
   return now;
 }
 
+/** Failed queue items, surfaced with the server's message — Retry replays
+ *  (same idempotency key), Dismiss drops. Never silent, never automatic. */
+function QueueFailures({ actions, onChanged }: { actions: QueuedAction[]; onChanged: () => void }): React.JSX.Element | null {
+  const failed = actions.filter((a) => a.state === "failed");
+  if (failed.length === 0) return null;
+  return (
+    <div className="space-y-2">
+      {failed.map((a) => (
+        <div key={a.id} className="card space-y-1 border border-red-900/50">
+          <p className="text-sm text-red-300">{a.label} couldn&apos;t sync: {a.error ?? "rejected by the server"}</p>
+          <div className="flex gap-2">
+            <button className="btn !px-2.5 !py-1 text-xs" onClick={() => void retryQueuedAction(a.id).then(() => flushQueue(onChanged))}>Retry</button>
+            <button className="btn !px-2.5 !py-1 text-xs" onClick={() => void dismissQueuedAction(a.id)}>Dismiss</button>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function OfferCard({ offer, onChanged }: { offer: JobOfferDto; onChanged: () => void }): React.JSX.Element {
+  const queued = useQueuedActions();
+  const pending = pendingForOffer(queued, offer.id).filter((a) => a.state === "pending");
   const accept = useMutation({
     mutationFn: () => apiFetch(API.bearer.acceptOffer(offer.id), { method: "POST", body: JSON.stringify({}) }),
     onSuccess: onChanged,
+    onError: (err) => {
+      // Offline tap: queue the accept (idempotent replay on reconnect)
+      // instead of failing — the card stays open showing "pending sync".
+      if (isOfflineError(err)) {
+        void enqueueAction({
+          kind: "accept-offer",
+          offerId: offer.id,
+          url: API.bearer.acceptOffer(offer.id),
+          body: "{}",
+          label: `Accept offer ${offer.pickupArea ?? "pickup"} → ${offer.destinationArea ?? "destination"}`,
+        });
+      }
+    },
   });
   const decline = useMutation({
     mutationFn: () => apiFetch(API.bearer.declineOffer(offer.id), { method: "POST", body: JSON.stringify({}) }),
     onSuccess: onChanged,
   });
   const busy = accept.isPending || decline.isPending;
-  const error = accept.error ?? decline.error;
+  const rawError = accept.error ?? decline.error;
+  // An offline accept is queued by onError above, so it is never a failure —
+  // the "Pending sync" line below says what happened; server rejections
+  // still show exactly as before.
+  const error = rawError && isOfflineError(rawError) ? null : rawError;
   const now = useClockTick(1_000);
   const msLeft = new Date(offer.expiresAt).getTime() - now;
   const expired = msLeft <= 0;
@@ -447,6 +551,7 @@ function OfferCard({ offer, onChanged }: { offer: JobOfferDto; onChanged: () => 
       <div><dt className="label !mb-0">Cash to collect</dt><dd className="text-zinc-200">{formatMoney(offer.codAmount)}</dd></div>
     </dl>
     {error ? <p className="text-sm text-red-400">{error instanceof ApiError ? error.message : "Could not respond to offer"}</p> : null}
+    {pending.length > 0 ? <p className="text-xs text-sky-300">Pending sync — your accept will send automatically when you&apos;re back online.</p> : null}
     {expired ? (
       <p className="text-sm text-zinc-500">This offer has expired.</p>
     ) : (
@@ -470,6 +575,8 @@ function navigateHref(job: JobDto): string {
 
 function RiderJobCard({ job, onChanged }: { job: JobDto; onChanged: () => void }): React.JSX.Element {
   const businessName = useBusinessName(job.id);
+  const queued = useQueuedActions();
+  const pending = pendingForJob(queued, job.id).filter((a) => a.state === "pending");
   const [sheet, setSheet] = useState<Action | null>(null);
   const [note, setNote] = useState("");
   const [pin, setPin] = useState("");
@@ -478,26 +585,53 @@ function RiderJobCard({ job, onChanged }: { job: JobDto; onChanged: () => void }
   const [landmark, setLandmark] = useState(job.landmark ?? "");
   const [showMore, setShowMore] = useState(false);
   const [showChat, setShowChat] = useState(false);
+  const jobLabel = job.jobNumber ?? job.id.slice(0, 8);
   const mutation = useMutation({
     mutationFn: async (next: Action) => {
-      if (next.label === "Accept job") return apiFetch(API.bearer.accept(job.id), { method: "POST", body: JSON.stringify({}) });
-      const result = await apiFetch(API.bearer.transition(job.id), {
-        method: "POST",
-        body: JSON.stringify({
-          to: next.to,
-          note,
-          ...(next.needsPin ? { pin } : {}),
-          ...(next.needsAmount && amount.trim() !== "" ? { amountCollected: Number(amount) } : {}),
-          ...(next.location ? { addressText, landmark } : {}),
-          ...(next.failed ? { failureReason: "other", failureNote: note } : {}),
-        }),
-      });
+      // One tap can mean one or two server steps (Confirm pickup chains
+      // into in_transit). Each step is queued separately on transport
+      // failure, so a half-completed tap replays only what never arrived —
+      // with the same idempotency key, so even a lost response can't
+      // double-apply. The sheet stays open showing "will sync".
+      const steps: { url: string; body: string; kind: "accept-job" | "transition"; label: string }[] =
+        next.label === "Accept job"
+          ? [{ url: API.bearer.accept(job.id), body: "{}", kind: "accept-job", label: `Accept job ${jobLabel}` }]
+          : [
+              {
+                url: API.bearer.transition(job.id),
+                body: JSON.stringify({
+                  to: next.to,
+                  note,
+                  ...(next.needsPin ? { pin } : {}),
+                  ...(next.needsAmount && amount.trim() !== "" ? { amountCollected: Number(amount) } : {}),
+                  ...(next.location ? { addressText, landmark } : {}),
+                  ...(next.failed ? { failureReason: "other", failureNote: note } : {}),
+                }),
+                kind: "transition",
+                label: `${next.label} ${jobLabel}`,
+              },
+              ...(next.chainTo
+                ? [{ url: API.bearer.transition(job.id), body: JSON.stringify({ to: next.chainTo }), kind: "transition" as const, label: `Start delivery ${jobLabel}` }]
+                : []),
+            ];
+      let last: unknown = null;
+      for (const step of steps) {
+        try {
+          last = await apiFetch(step.url, { method: "POST", body: step.body });
+        } catch (err) {
+          if (isOfflineError(err)) {
+            await enqueueAction({ kind: step.kind, jobId: job.id, url: step.url, body: step.body, label: step.label });
+            throw new OfflineQueued();
+          }
+          throw err;
+        }
+      }
       // Collapses "Confirm pickup" (picked_up) straight into in_transit — one
       // rider-facing tap instead of two (spec item 1). If this second leg
-      // fails, the job is left at `picked_up` and "Start delivery" appears
-      // as a normal fallback next step rather than the rider being stuck.
-      if (next.chainTo) return apiFetch(API.bearer.transition(job.id), { method: "POST", body: JSON.stringify({ to: next.chainTo }) });
-      return result;
+      // fails online, the job is left at `picked_up` and "Start delivery"
+      // appears as a normal fallback next step rather than the rider being
+      // stuck; offline, the leg above is queued instead.
+      return last;
     },
     // Data entered in the sheet (note/pin/etc.) is deliberately left in place
     // on success too — closing it clears the sheet, not what was typed, so a
@@ -508,7 +642,6 @@ function RiderJobCard({ job, onChanged }: { job: JobDto; onChanged: () => void }
   const primary = primaryActionFor(job);
   const unavailable = customerUnavailableActionFor(job);
   const secondary = secondaryActionsFor(job);
-  const jobLabel = job.jobNumber ?? job.id.slice(0, 8);
 
   return <section className={`card space-y-3 ${urgent ? "border-red-900/50 bg-red-950/10" : ""}`}>
     <div className="flex items-start justify-between gap-3">
@@ -516,6 +649,9 @@ function RiderJobCard({ job, onChanged }: { job: JobDto; onChanged: () => void }
         <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">{businessName}{job.merchantName ? ` · ${job.merchantName}` : ""}</p>
         <h2 className="font-semibold">{jobLabel}</h2>
         <p className="text-xs text-zinc-400">{job.status.replaceAll("_", " ")}</p>
+        {/* A queued deliver/collect/accept is PENDING — the server-confirmed
+         *  status above never claims otherwise until the replay succeeds. */}
+        {pending.length > 0 ? <p className="text-xs text-sky-300">Pending sync — will send automatically when you&apos;re back online.</p> : null}
       </div>
       {urgent ? <span className="whitespace-nowrap rounded bg-red-900/70 px-2 py-1 text-xs font-bold uppercase tracking-wide text-red-200">Urgent</span> : null}
     </div>
@@ -619,7 +755,15 @@ function RiderJobCard({ job, onChanged }: { job: JobDto; onChanged: () => void }
         landmark={landmark}
         setLandmark={setLandmark}
         pending={mutation.isPending}
-        error={mutation.error instanceof ApiError ? mutation.error.message : mutation.error ? "Could not update this job — try again" : null}
+        error={
+          mutation.error instanceof OfflineQueued
+            ? "Saved — will sync when you're back online. It is NOT confirmed yet."
+            : mutation.error instanceof ApiError
+              ? mutation.error.message
+              : mutation.error
+                ? "Could not update this job — try again"
+                : null
+        }
         onConfirm={() => void mutation.mutate(sheet)}
         onDismiss={() => setSheet(null)}
       />

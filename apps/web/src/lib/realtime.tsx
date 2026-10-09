@@ -3,6 +3,8 @@ import type { RealtimeMessage } from "@ronmacrae/contracts";
 import { WS_PATH } from "@ronmacrae/contracts";
 import { getAccessToken, refreshAccessToken } from "./api.js";
 import { useAuth } from "./auth.js";
+import { isNative } from "../native/platform.js";
+import { isNativeOnline, watchNativeNetwork } from "../native/network.js";
 
 type Handler = (msg: RealtimeMessage) => void;
 type Subscription = { types: RealtimeMessage["type"][] | "*"; handler: Handler };
@@ -98,6 +100,23 @@ export function RealtimeProvider({ children }: { children: ReactNode }): ReactNo
     };
     window.addEventListener("online", applyOfflineAwareStatus);
     window.addEventListener("offline", applyOfflineAwareStatus);
+    // Inside the native shell, @capacitor/network reports connectivity
+    // changes more reliably than navigator.onLine in a WebView. It only
+    // ever forces the honest "offline" label (and the initial check below);
+    // "live" still comes exclusively from the socket handshake. No second
+    // indicator is added anywhere — this feeds the same status badge.
+    let stopNativeWatch: (() => void) | null = null;
+    if (isNative()) {
+      // Only ever forces "offline" — coming back online is the socket's
+      // own reconnect path (hello handshake → "live"), never this watcher,
+      // so a live session never flickers on a connectivity flap.
+      stopNativeWatch = watchNativeNetwork((online) => {
+        if (!online) setStatus("offline");
+      });
+      void isNativeOnline().then((online) => {
+        if (!online) setStatus("offline");
+      });
+    }
 
     function scheduleReconnect(): void {
       if (cancelled) return;
@@ -159,6 +178,7 @@ export function RealtimeProvider({ children }: { children: ReactNode }): ReactNo
       cancelled = true;
       window.removeEventListener("online", applyOfflineAwareStatus);
       window.removeEventListener("offline", applyOfflineAwareStatus);
+      stopNativeWatch?.();
       if (reconnectTimer) clearTimeout(reconnectTimer);
       socket?.close();
     };

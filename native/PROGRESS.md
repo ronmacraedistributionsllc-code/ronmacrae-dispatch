@@ -13,7 +13,8 @@ Goal: Capacitor shell (`native/`) wrapping https://orders.ronmacraedistributions
 | 3 Web-side native bridge | done | typecheck/lint/test:unit/build green; bundle evidence below |
 | 4 Native push (FCM) end-to-end | done (UNIT-TESTED; device test blocked on Firebase) | API + client below; debug build green with and without google-services.json |
 | 5 Background location | done (UNIT-TESTED; device test pending a phone) | disclosure + gating + battery hint + DEVICE_TEST.md; e2e rider-dashboard green |
-| 6 Offline resilience | in progress | ConnectionStatus + cache + queue next |
+| 6 Offline resilience | done (UNIT-TESTED; device part in DEVICE_TEST.md) | audit + Network extension + cache + idempotent queue; e2e rider-dashboard/offers green |
+| 7 Lock-screen actions (stretch) | skipped | see note below |
 | 4 Native push (FCM) end-to-end | not started | blocked on Firebase project (human) for device test |
 | 5 Background location | not started | needs device (human) |
 | 6 Offline resilience | not started | — |
@@ -161,6 +162,50 @@ Goal: Capacitor shell (`native/`) wrapping https://orders.ronmacraedistributions
 - NOT DEVICE-TESTED (no phone attached — BLOCKERS #4). If the service
   stops reporting with the screen off, the rule is: capture logcat, file
   in BLOCKERS, do NOT silently add ACCESS_BACKGROUND_LOCATION.
+
+## Phase 6 — offline resilience (done, UNIT-TESTED)
+
+- Audit (exact): `idb-keyval` in deps, zero imports (no data cache, no
+  queue — only the SW shell precache + realtime ConnectionStatus badge
+  existed). `navigator.onLine` only in `realtime.tsx`. No duplication: the
+  queue/cache extend those exact seams.
+- Network: `RealtimeProvider` subscribes `@capacitor/network` when native
+  (forces only the honest "offline" label; "live" stays socket-owned). No
+  second badge; riders get one dashboard line “Offline — changes will sync”.
+- Cache: last-known rider jobs/offers in IndexedDB (existing dep), shown
+  ONLY while offline with an explicit age (“Showing last saved jobs (3m
+  ago) — you're offline”).
+- Queue: accept-offer / accept-job / transition, each with an idempotency
+  key, persisted in IndexedDB, replayed in order on reconnect/online/mount.
+  Deliver stays PENDING until the server confirms (UI renders only
+  server data; pending items say “Pending sync”, never “Delivered”).
+  Rejections (taken/cancelled/wrong PIN) become failed items with the
+  server message + Retry/Dismiss — never silent. 401/403 stops without
+  marking; transport errors stop and stay pending.
+- Server: new `IdempotencyKey` (per-user composite id; successes only —
+  rejections are deterministic guarded 409s) on offer-accept, job-accept,
+  transition; opportunistic 7-day prune. `dev.db` backed up first (R3).
+- Tests: api 50 files 377/377 (+5 idempotency: replay-equality,
+  no-key-409, cross-user isolation, transition replay, malformed key);
+  web 53/53 (+6 queue: order/keys/stop-on-offline/reject-surface/
+  auth-stop/dismiss/selectors; +2 cache roundtrip/age); e2e
+  rider-dashboard + offers 3/3 serial.
+- Cold start offline: NOT verified on a device (no phone). Expected to
+  work after one online visit (SW precache); if the WebView doesn't honor
+  it, that's a recorded limitation, not a bundled-assets build (out of
+  scope). Device steps are section C of DEVICE_TEST.md.
+
+## Phase 7 — lock-screen action buttons (SKIPPED, design note)
+
+- Phases 4–6 are green, so this was attempted as a design review, not code:
+  FCM notification messages can't carry actions; Accept/Decline needs the
+  data-message path (a small native `FirebaseMessagingService` building the
+  notification + PendingIntents to `/rider?offer=ID&action=accept`, which
+  the web app then performs through the normal authenticated API).
+- Skipped deliberately: it needs google-services runtime verification, a
+  device, and native code that can't be unit-tested here — the three things
+  this environment lacks. The loud offer channel + tap-to-open (Phases 3–4)
+  already cover the waking requirement. Revisit with a phone + Firebase.
 
 ## Machine notes (Phase 0)
 

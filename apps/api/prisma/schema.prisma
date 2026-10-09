@@ -195,6 +195,7 @@ model User {
   recon     ReconDaily[]       @relation("reconResolver")
   pushSubscriptions PushSubscription[]
   devicePushTokens DevicePushToken[]
+  idempotencyKeys IdempotencyKey[]
   codApprovals Job[]           @relation("codApprover")
   codArchives  Job[]           @relation("codArchiver")
   addressChangeReviews AddressChangeRequest[] @relation("addressChangeReviewer")
@@ -213,6 +214,24 @@ model PushSubscription {
   createdAt DateTime @default(now())
 
   @@index([userId])
+}
+
+/** Stored result of one idempotent rider mutation (offline queue replay).
+ *  Scoped per user (composite id) so one rider's key can never replay
+ *  another rider's response. Only successes are stored — rejections are
+ *  deterministic (guarded writes return the same 409), so re-executing
+ *  them is safe. Rows older than 7 days are pruned opportunistically on
+ *  each store (see lib/idempotency.ts). */
+model IdempotencyKey {
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  key       String
+  status    Int
+  body      String
+  createdAt DateTime @default(now())
+
+  @@id([userId, key])
+  @@index([createdAt])
 }
 
 /** One Android shell's FCM registration token (native push). A user may

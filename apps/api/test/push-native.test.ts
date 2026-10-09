@@ -259,7 +259,7 @@ describe("FcmSender HTTP shape (stubbed fetch, throwaway key)", () => {
 
   it("maps gone tokens to dead, rejections and network errors to failed", async () => {
     const mk = (handler: (url: string) => Response | Promise<Response>) =>
-      new FcmSender(projectId, saPath, harness.ctx.log, stubFetch((url, init) => (url === "https://oauth2.googleapis.com/token" ? json({ access_token: "t", expires_in: 3600 }) : handler(url))) as unknown as typeof fetch);
+      new FcmSender(projectId, saPath, harness.ctx.log, stubFetch((url, _init) => (url === "https://oauth2.googleapis.com/token" ? json({ access_token: "t", expires_in: 3600 }) : handler(url))) as unknown as typeof fetch);
     const msg: FcmMessage = { title: "t", body: "b", kind: "message", channelId: "messages" };
     expect(await mk(() => json({ error: { status: "NOT_FOUND" } }, 404)).sendToToken("gone", msg)).toBe("dead");
     expect(await mk(() => json({ error: { status: "INVALID_ARGUMENT" } }, 400)).sendToToken("bad", msg)).toBe("dead");

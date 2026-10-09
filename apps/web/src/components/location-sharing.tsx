@@ -140,7 +140,6 @@ function NativeLocationSharing({ riderId, hasActiveDelivery }: { riderId: string
   // stop immediately and report `paused`, exactly like a manual stop.
   useEffect(() => {
     if (!hasActiveDelivery && sharingRef.current) void stopWithReport();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hasActiveDelivery]);
 
   async function start(): Promise<void> {

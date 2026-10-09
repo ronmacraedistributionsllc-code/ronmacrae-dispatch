@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { httpErrors } from "@fastify/sensible";
 import type { AppCtx } from "../ctx.js";
+import { idempotencyKeyFrom, withIdempotency } from "../lib/idempotency.js";
 import { moneyField } from "../geo-mappers.js";
 import { ACTIVE_JOB_STATUSES, roomForDispatch, roomForJob, roomForRider } from "@ronmacrae/contracts";
 import type { JobOfferDto } from "@ronmacrae/contracts";
@@ -215,11 +216,13 @@ export async function offerRoutes(app: FastifyInstance, ctx: AppCtx): Promise<vo
     return { ok: true };
   });
 
-  app.post<{ Params: { id: string } }>("/api/bearer/offers/:id/accept", { preHandler: ctx.requireRider }, async (req) => {
-    await expire(ctx);
-    const riderId = req.user!.riderId!;
-    const actor = actorFor(req);
-    const result = await ctx.prisma.$transaction(async (tx) => {
+  app.post<{ Params: { id: string } }>("/api/bearer/offers/:id/accept", { preHandler: ctx.requireRider }, async (req, reply) => {
+    const key = idempotencyKeyFrom(req);
+    const { status, body } = await withIdempotency(ctx, req.user!.sub, key, async () => {
+      await expire(ctx);
+      const riderId = req.user!.riderId!;
+      const actor = actorFor(req);
+      const result = await ctx.prisma.$transaction(async (tx) => {
       const offer = await tx.jobOffer.findFirst({ where: { id: req.params.id, riderId, status: "open", expiresAt: { gt: new Date() } } });
       if (!offer) throw httpErrors.createError(409, "Offer is no longer available");
       // A membership can be suspended between the offer being sent and the
@@ -272,12 +275,14 @@ export async function offerRoutes(app: FastifyInstance, ctx: AppCtx): Promise<vo
       });
       return { job, event };
     });
-    const job = jobToDto(result.job, viewerFor(req), ctx.config.APP_ORIGIN);
-    const eventDto = eventToDto(result.event);
-    const dispatchRoom = roomForDispatch(result.job.businessId);
-    ctx.hub.broadcastMany([dispatchRoom, roomForRider(riderId)], { type: "job.assigned", payload: { job, riderId, source: "offer" } });
-    ctx.hub.broadcastMany([roomForJob(job.id), dispatchRoom], { type: "job.state", payload: { job, event: eventDto } });
-    await ctx.audit.record(actor, "offer.accept", "job", job.id, { offerId: req.params.id });
-    return { job };
+      const job = jobToDto(result.job, viewerFor(req), ctx.config.APP_ORIGIN);
+      const eventDto = eventToDto(result.event);
+      const dispatchRoom = roomForDispatch(result.job.businessId);
+      ctx.hub.broadcastMany([dispatchRoom, roomForRider(riderId)], { type: "job.assigned", payload: { job, riderId, source: "offer" } });
+      ctx.hub.broadcastMany([roomForJob(job.id), dispatchRoom], { type: "job.state", payload: { job, event: eventDto } });
+      await ctx.audit.record(actor, "offer.accept", "job", job.id, { offerId: req.params.id });
+      return { status: 200, body: { job } };
+    });
+    return reply.code(status).send(body);
   });
 }

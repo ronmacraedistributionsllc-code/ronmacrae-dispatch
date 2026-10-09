@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { httpErrors } from "@fastify/sensible";
 import type { AppCtx } from "../ctx.js";
+import { idempotencyKeyFrom, withIdempotency } from "../lib/idempotency.js";
 import { ACTIVE_JOB_STATUSES } from "@ronmacrae/contracts";
 import type { DispatchContactDto } from "@ronmacrae/contracts";
 import { getBusinessSettings } from "./settings.js";
@@ -105,13 +106,17 @@ export async function bearerRoutes(app: FastifyInstance, ctx: AppCtx): Promise<v
     return listLogisticsRiderThread(ctx, rider.attachedLogisticsCompanyId, rider.id, "rider", rider.id, true);
   });
 
-  app.post<{ Params: { id: string } }>("/api/bearer/jobs/:id/accept", { preHandler: ctx.requireRider }, async (req) => {
-    const job = await transitionJob(ctx, req.params.id, { to: "accepted" }, actorFor(req), viewerFor(req));
-    await ctx.audit.record(actorFor(req), "job.accepted", "job", job.id);
-    return { job };
+  app.post<{ Params: { id: string } }>("/api/bearer/jobs/:id/accept", { preHandler: ctx.requireRider }, async (req, reply) => {
+    const key = idempotencyKeyFrom(req);
+    const { status, body } = await withIdempotency(ctx, req.user!.sub, key, async () => {
+      const job = await transitionJob(ctx, req.params.id, { to: "accepted" }, actorFor(req), viewerFor(req));
+      await ctx.audit.record(actorFor(req), "job.accepted", "job", job.id);
+      return { status: 200, body: { job } };
+    });
+    return reply.code(status).send(body);
   });
 
-  app.post<{ Params: { id: string } }>("/api/bearer/jobs/:id/transition", { preHandler: ctx.requireRider }, async (req) => {
+  app.post<{ Params: { id: string } }>("/api/bearer/jobs/:id/transition", { preHandler: ctx.requireRider }, async (req, reply) => {
     const body = RiderTransitionBody.parse(req.body);
     const actor = actorFor(req);
     const viewer = viewerFor(req);
@@ -121,9 +126,13 @@ export async function bearerRoutes(app: FastifyInstance, ctx: AppCtx): Promise<v
       if (row.riderId !== req.user!.riderId) throw httpErrors.createError(403, "Not your job");
       if (!body.pin || body.pin !== row.pin) throw httpErrors.createError(400, "A valid delivery PIN is required");
     }
-    const job = await transitionJob(ctx, req.params.id, body, actor, viewer);
-    await ctx.audit.record(actor, `job.${body.to}`, "job", job.id);
-    return { job };
+    const key = idempotencyKeyFrom(req);
+    const { status, body: out } = await withIdempotency(ctx, req.user!.sub, key, async () => {
+      const job = await transitionJob(ctx, req.params.id, body, actor, viewer);
+      await ctx.audit.record(actor, `job.${body.to}`, "job", job.id);
+      return { status: 200, body: { job } };
+    });
+    return reply.code(status).send(out);
   });
 
   app.post<{ Params: { id: string } }>("/api/bearer/jobs/:id/stage", { preHandler: ctx.requireRider }, async (req) => {
