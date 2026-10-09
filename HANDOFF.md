@@ -155,3 +155,15 @@ This checkpoint made **no change** to the Render deployment, its environment var
 - A source-code comment in `packages/notifications/src/email.ts` states "No live credentials exist in this environment, so this has never sent a real email" — **this comment's accuracy in production is unverified this session.** Earlier session notes (from a prior context) asserted a real Resend key was configured in Render; this checkpoint did not independently confirm that against the live dashboard. Do not trust either claim without checking Render's actual environment variables directly.
 - **Do not** mark this resolved based on code review alone, based on the memory provider's local log output, or based on "it should work now" — only a real delivered (or provider-confirmed-sent) email to a real inbox, or explicit provider-dashboard evidence, counts as confirmation.
 - **Do not** expose verification codes in browser devtools, API responses, logs, or any admin screen while diagnosing this — read them from the real inbox or, for local/dev debugging only, from the memory provider's own dev-only log line, never from a production surface a user or attacker could reach.
+
+---
+
+## 10. Store-readiness pass (2026-10-09, branch `store-readiness`) — read `store/` first
+
+Everything for the app stores lives in [`store/`](store/): `SUBMISSION_CHECKLIST.md` (what's done vs. what only the owner can do), `SECURITY_RULES.md`, `REVIEWER_GUIDE.md`, `LISTING.md`, `AAB_VERIFICATION.md`, `APPLE_PLAN.md`, `ANDROID_DIAGNOSIS.md`, `BLOCKERS.md`.
+
+- **Added:** in-app account deletion for all four login types (`/api/auth/delete-account`, merchant/logistics-portal, `/api/customer-account/delete`) + "My account" page; public `/privacy`, `/terms`, `/support`, `/delete-account` pages (marked DRAFT until a human legal review); reviewer demo-account script (`npm run reviewer-accounts`, isolated demo business); startup warnings when email/SMS providers are the in-memory no-ops; courier search (`GET /api/riders?q=`).
+- **Security fixes found by the audit (see `store/SECURITY_RULES.md`):** `/api/users` list and edit were not business-scoped (any business admin could reset any account's password, including the platform owner's); proof photos weren't business-scoped; logout left push subscriptions. All fixed with tests that fail on the old code.
+- **e2e is deterministic:** one worker, fresh `e2e-test.db` every run, server never reused. Two consecutive runs: 50/50.
+- **Correction to §9:** production `/api/health` reports `email: "resend"`, so email is configured. It reports `notifications: "memory"`, so **SMS/WhatsApp are not actually sent in production** until Twilio credentials are set.
+- **Android bundle:** the AAB on disk is **unsigned** and no JDK is installed on this machine — see `store/AAB_VERIFICATION.md`.
