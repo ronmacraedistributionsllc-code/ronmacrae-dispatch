@@ -15,11 +15,7 @@ Goal: Capacitor shell (`native/`) wrapping https://orders.ronmacraedistributions
 | 5 Background location | done (UNIT-TESTED; device test pending a phone) | disclosure + gating + battery hint + DEVICE_TEST.md; e2e rider-dashboard green |
 | 6 Offline resilience | done (UNIT-TESTED; device part in DEVICE_TEST.md) | audit + Network extension + cache + idempotent queue; e2e rider-dashboard/offers green |
 | 7 Lock-screen actions (stretch) | skipped | see note below |
-| 4 Native push (FCM) end-to-end | not started | blocked on Firebase project (human) for device test |
-| 5 Background location | not started | needs device (human) |
-| 6 Offline resilience | not started | — |
-| 7 Lock-screen actions (stretch) | not started | only if 4–6 green |
-| 8 Build, sign, document | not started | unsigned/debug only until human supplies signing env vars |
+| 8 Build, sign, document | done | typecheck/lint/unit/build green; e2e 50/50 serial; AAB verified; signed release needs human vars |
 
 ## Baseline (Phase 0, 2026-10-09, Apple silicon, Node v26.8.1)
 
