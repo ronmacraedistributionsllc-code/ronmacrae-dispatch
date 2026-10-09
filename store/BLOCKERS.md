@@ -13,4 +13,4 @@
 | 9 | **Android "isn't working".** Not reproducible without the owner's description or a device. See `ANDROID_DIAGNOSIS.md`. | Owner | Unknown |
 | 10 | **Native features** (FCM push, background location, offline) — `ANDROID_NATIVE_PROMPT.md`, to be run after this branch is merged. Needs Firebase project + signing env vars from the owner. | Coder | Optional for v1 |
 | 11 | **Known low-severity:** a deleted/disabled account's current 15-minute access token keeps working until expiry. | Coder | Low |
-| 12 | **Mobile UX:** the Jobs table is wide on a phone (status/rider columns scroll off to the right). Fine for a first review, worth a card layout later. | Coder | Low |
+| 12 | ~~Mobile Jobs table~~ — fixed: cards on phones | — | Done |
