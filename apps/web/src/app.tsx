@@ -1,6 +1,10 @@
-import React, { Suspense } from "react";
+import React, { Suspense, useEffect } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
+import { BrowserRouter, Navigate, Route, Routes, useNavigate } from "react-router-dom";
+import { isNative } from "./native/platform.js";
+import { installExternalLinkInterceptor } from "./native/external.js";
+import { onNativeDeepLink } from "./native/lifecycle.js";
+import { onNativeNotificationTap } from "./native/push.js";
 import { AuthProvider, useAuth } from "./lib/auth.js";
 import { RealtimeProvider } from "./lib/realtime.js";
 import { Layout } from "./components/layout.js";
@@ -83,12 +87,43 @@ function OwnerOnly({ children }: { children: React.ReactNode }): React.ReactNode
   return <>{children}</>;
 }
 
+/**
+ * Native-shell wiring (no visual output). Inside the Capacitor shell only:
+ * cross-origin links open in the system browser (security decision D5) and
+ * notification taps / cold-start deep links route inside the SPA. On web
+ * this installs nothing — every import here is plugin-free, so the web
+ * bundle gains no eager Capacitor code.
+ */
+function NativeShell(): null {
+  const navigate = useNavigate();
+  useEffect(() => {
+    if (!isNative()) return;
+    const removeLinks = installExternalLinkInterceptor();
+    const removeTap = onNativeNotificationTap((url) => navigate(url));
+    const removeDeep = onNativeDeepLink((url) => {
+      try {
+        const target = new URL(url, window.location.origin);
+        if (target.origin === window.location.origin) navigate(target.pathname + target.search);
+      } catch {
+        // malformed deep link — stay where we are
+      }
+    });
+    return () => {
+      removeLinks();
+      removeTap();
+      removeDeep();
+    };
+  }, [navigate]);
+  return null;
+}
+
 export default function App(): React.JSX.Element {
   return (
     <QueryClientProvider client={queryClient}>
       <AuthProvider>
         <RealtimeProvider>
           <BrowserRouter>
+            <NativeShell />
             <Routes>
               <Route path="/login" element={<Login />} />
               <Route path="/download-app" element={<DownloadApp />} />

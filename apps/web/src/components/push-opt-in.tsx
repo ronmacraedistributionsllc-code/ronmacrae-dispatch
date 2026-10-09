@@ -2,6 +2,9 @@ import React, { useEffect, useState } from "react";
 import { API } from "@ronmacrae/contracts";
 import { apiFetch, ApiError } from "../lib/api.js";
 import { unsubscribeThisDeviceFromPush } from "../lib/push.js";
+import { useAuth } from "../lib/auth.js";
+import { isNative, isNativeRider } from "../native/platform.js";
+import { disableNativePush, enableNativePush, getNativePushStatus, type NativePushStatus } from "../native/push.js";
 
 function urlBase64ToUint8Array(base64String: string): Uint8Array<ArrayBuffer> {
   const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
@@ -21,6 +24,18 @@ type Status = "unsupported" | "checking" | "off" | "on" | "denied";
  * so it stays correct across page reloads and OS-level permission changes.
  */
 export function PushOptIn(): React.JSX.Element | null {
+  const { user } = useAuth();
+  // Decision D4: inside the native shell, push is native-FCM and rider-only.
+  // Non-riders in the shell get no toggle at all; everyone on web gets the
+  // exact pre-existing Web Push path below, untouched.
+  if (isNative()) {
+    if (!isNativeRider(user?.role)) return null;
+    return <NativePushOptIn />;
+  }
+  return <WebPushOptIn />;
+}
+
+function WebPushOptIn(): React.JSX.Element | null {
   const [status, setStatus] = useState<Status>("checking");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -94,6 +109,67 @@ export function PushOptIn(): React.JSX.Element | null {
         {busy ? "Working…" : status === "on" ? "Disable push notifications" : "Enable push notifications"}
       </button>
       {error ? <span className="text-xs text-red-400">{error}</span> : null}
+    </div>
+  );
+}
+
+/**
+ * Native-shell push toggle (riders only). Uses the device's FCM path via
+ * the adapter — never the Web Push API, which Android WebViews don't
+ * support. Server-side token registration lands in Phase 4; until then the
+ * toggle reflects the OS-level state only.
+ */
+function NativePushOptIn(): React.JSX.Element | null {
+  const [status, setStatus] = useState<NativePushStatus>("unsupported");
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    void getNativePushStatus().then((s) => {
+      if (!cancelled) setStatus(s);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  async function enable(): Promise<void> {
+    setBusy(true);
+    try {
+      // Phase 4 persists this with POST /api/push/native/register.
+      const s = await enableNativePush(() => {});
+      setStatus(s);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function disable(): Promise<void> {
+    setBusy(true);
+    try {
+      await disableNativePush();
+      setStatus("off");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (status === "unsupported") return null;
+  if (status === "denied") {
+    return <p className="text-xs text-zinc-500">Notifications are blocked — allow them in the Android settings to get job offers.</p>;
+  }
+  if (status === "error") {
+    return <p className="text-xs text-zinc-500">Push isn&apos;t available on this device right now.</p>;
+  }
+
+  return (
+    <div className="flex flex-col gap-1">
+      <p className="text-xs text-zinc-400">Allow notifications so new delivery offers wake your phone, even with the app closed.</p>
+      <div className="flex items-center gap-2">
+        <button className="btn !px-3 !py-1 text-xs" disabled={busy} onClick={() => void (status === "on" ? disable() : enable())}>
+          {busy ? "Working…" : status === "on" ? "Disable push notifications" : "Enable push notifications"}
+        </button>
+      </div>
     </div>
   );
 }

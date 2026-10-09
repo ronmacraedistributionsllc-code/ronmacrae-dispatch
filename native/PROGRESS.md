@@ -10,7 +10,8 @@ Goal: Capacitor shell (`native/`) wrapping https://orders.ronmacraedistributions
 | 0 Safety checkpoint + orientation | done | Branch `android-native`, tag `pre-android-native`; baseline below |
 | 1 Toolchain check | done | `npx cap doctor`: "Android looking great" (see below) |
 | 2 Capacitor shell scaffold | done | `assembleDebug` BUILD SUCCESSFUL; APK installs/loads live site: NOT TESTED (no device) |
-| 3 Web-side native bridge | not started | — |
+| 3 Web-side native bridge | done | typecheck/lint/test:unit/build green; bundle evidence below |
+| 4 Native push (FCM) end-to-end | in progress | API routes + token wiring next; device test blocked on Firebase |
 | 4 Native push (FCM) end-to-end | not started | blocked on Firebase project (human) for device test |
 | 5 Background location | not started | needs device (human) |
 | 6 Offline resilience | not started | — |
@@ -47,6 +48,42 @@ Goal: Capacitor shell (`native/`) wrapping https://orders.ronmacraedistributions
 - Manifest: `usesCleartextTraffic="false"`. Permissions so far: `INTERNET` only (template default).
 - `assembleDebug`: BUILD SUCCESSFUL → `android/app/build/outputs/apk/debug/app-debug.apk` (gitignored build output, not committed).
 - Device check (loads live-site login screen): NOT TESTED — no device attached.
+
+## Phase 3 — web-side native bridge (done, UNIT-TESTED)
+
+- Verified from the installed packages: the shell injects `window.Capacitor`
+  (Bridge.java `addDocumentStartJavaScript` + `native-bridge.js` asset), so
+  detection needs NO bundled runtime; each plugin's JS wrapper (ESM
+  `dist/esm/index.js`) MUST be bundled — hence dynamic `import()` after
+  `isNative()`. `@capacitor-community/background-geolocation` ships no JS at
+  all: reached via core `registerPlugin("BackgroundGeolocation")` (verified
+  in its `definitions.d.ts`: `addWatcher` → `Promise<string>`,
+  `removeWatcher({id})`, `openSettings()`).
+- `apps/web/src/native/`: `platform.ts` (zero Capacitor imports),
+  `push.ts` (channels `job_offers` HIGH/private, `active_delivery` LOW,
+  `messages` DEFAULT; token/register/tap), `location.ts` (watcher
+  lifecycle, same report semantics as the web hook), `network.ts`,
+  `lifecycle.ts` (deep links), `external.ts` (system-browser interceptor,
+  D5). Added `@capacitor/*` 8.x + background-geolocation to
+  `apps/web/package.json` (workspace-hoisted, no behavior change on web).
+- Branched `push-opt-in.tsx` (native+rider → FCM toggle; native+non-rider
+  → nothing) and `location-sharing.tsx` (native+rider → watcher UI with an
+  honest screen-off disclosure; native+non-rider → nothing). Web paths
+  byte-for-byte unchanged. `NativeShell` in `app.tsx` installs the
+  external-link interceptor + notification-tap/deep-link routing when native.
+- Bundle evidence (non-native entry): main `index-bLX4h9Qt.js` 552.00 kB
+  (gzip 141.98) → `index-CyjVAalV.js` 560.13 kB (gzip 144.22): +8 kB raw of
+  adapters/components only. Main chunk contains ZERO "capacitor" strings;
+  all plugin code (e.g. `index-jyOAJ8Vv.js` PushNotifications wrapper,
+  `index-C7nSr84o.js` registerPlugin runtime, `web-*.js` web fallbacks)
+  sits in lazy chunks reached only via dynamic `import()`. Precache 23 → 31
+  entries (new lazy chunks, not eager).
+- Tests: web 9 files 39/39 (20 prior + 19 new: platform detection, push
+  adapter incl. channel IDs + token forwarding, location adapter incl.
+  permission-denied mapping, component gating native±rider).
+- Known gap: FCM token is obtained on-device but NOT yet sent to the API
+  (routes land in Phase 4); native location reports to the existing endpoint
+  but the full disclosure screen + device test land in Phase 5.
 
 ## Machine notes (Phase 0)
 
