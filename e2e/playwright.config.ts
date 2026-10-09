@@ -10,6 +10,9 @@ export default defineConfig({
   testDir: join(here, "specs"),
   timeout: 45_000,
   expect: { timeout: 15_000 },
+  // One worker + a fresh database each run: specs share one API/DB, so parallel
+  // workers and rows left over from earlier runs made results order-dependent.
+  workers: 1,
   retries: process.env.CI ? 1 : 0,
   reporter: process.env.CI ? [["github"], ["html", { open: "never" }]] : "list",
   // Port 3900, not 3000/3001: this repo's LAN demo (Stage A) runs its own
@@ -26,11 +29,12 @@ export default defineConfig({
     baseURL: "http://localhost:3900",
   },
   webServer: {
-    command: "npm run seed --workspace @ronmacrae/api && npm run dev --workspace @ronmacrae/api",
+    command: "rm -f apps/api/data/e2e-test.db apps/api/data/e2e-test.db-journal && npm run seed --workspace @ronmacrae/api && npm run dev --workspace @ronmacrae/api",
     cwd: repoRoot,
     url: "http://localhost:3900/api/health",
     timeout: 120_000,
-    reuseExistingServer: !process.env.CI,
+    // Never reuse: a leftover server means a leftover database.
+    reuseExistingServer: false,
     env: {
       DEV_DB: "1",
       // Isolated from the manually-used apps/api/data/dev.db on purpose: e2e runs
