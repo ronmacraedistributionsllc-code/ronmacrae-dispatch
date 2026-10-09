@@ -323,6 +323,10 @@ export async function authRoutes(app: FastifyInstance, ctx: AppCtx): Promise<voi
     }
     if (req.user) {
       await ctx.prisma.session.deleteMany({ where: { userId: req.user.sub } });
+      // Every device's session just ended, so no device may keep receiving this
+      // account's private alerts. The web app also unsubscribes its own device
+      // first, but that is best-effort (offline, closed tab); this is the guarantee.
+      await ctx.prisma.pushSubscription.deleteMany({ where: { userId: req.user.sub } });
     }
     reply.clearCookie(REFRESH_COOKIE, { path: "/api/auth" });
     return { ok: true };

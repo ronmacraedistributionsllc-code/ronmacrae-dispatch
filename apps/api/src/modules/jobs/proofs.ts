@@ -60,6 +60,19 @@ function parsePointField(raw: string | undefined): { lat: number; lng: number } 
   }
 }
 
+/**
+ * Who may touch a job's proofs: staff of the business that owns the job (never
+ * another company's staff), the job's own courier, or the platform owner.
+ */
+function mayAccessProofs(
+  user: { role: string; businessId?: string | null; riderId?: string | null; platformRole?: string },
+  job: { businessId: string; riderId: string | null },
+): boolean {
+  if (user.platformRole === "owner") return true;
+  if (isStaff(user.role)) return user.businessId === job.businessId;
+  return !!user.riderId && job.riderId === user.riderId;
+}
+
 /** Extract a scalar form field value from a multipart field bag. */
 function fieldString(fields: Record<string, unknown>, name: string): string | undefined {
   const f = fields[name];
@@ -86,7 +99,7 @@ export async function proofRoutes(app: FastifyInstance, ctx: AppCtx): Promise<vo
       const job = await ctx.prisma.job.findUnique({ where: { id: req.params.jobId } });
       if (!job) throw httpErrors.createError(404, "Job not found");
       const user = req.user!;
-      if (!isStaff(user.role) && job.riderId !== user.riderId) {
+      if (!mayAccessProofs(user, job)) {
         throw httpErrors.createError(403, "You can only add proofs for your own jobs");
       }
 
@@ -130,10 +143,8 @@ export async function proofRoutes(app: FastifyInstance, ctx: AppCtx): Promise<vo
     const row = await ctx.prisma.proof.findFirst({ where: { filename: stored.key } });
     if (!row) throw httpErrors.createError(404, "Proof not found");
     const user = req.user!;
-    if (!isStaff(user.role)) {
-      const job = await ctx.prisma.job.findUnique({ where: { id: row.jobId }, select: { riderId: true } });
-      if (job?.riderId !== user.riderId) throw httpErrors.createError(403, "Not your proof");
-    }
+    const job = await ctx.prisma.job.findUnique({ where: { id: row.jobId }, select: { riderId: true, businessId: true } });
+    if (!job || !mayAccessProofs(user, job)) throw httpErrors.createError(403, "Not your proof");
     if (!existsSync(stored.path)) throw httpErrors.createError(404, "Proof file missing on disk");
     reply.header("content-type", stored.mime);
     reply.header("content-disposition", `attachment; filename="${stored.key}"`);
