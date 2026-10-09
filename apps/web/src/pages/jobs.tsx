@@ -59,8 +59,8 @@ function JobRow({ job, riders, canWrite, busy, offersOpen, queueOpen, chatOpen, 
   const deletable = !ACTIVE_JOB_STATUSES.includes(job.status);
 
   return (
-    <tr className={`border-t align-top ${job.priority === "urgent" ? "border-red-900/40 bg-red-950/20" : "border-zinc-800"}`}>
-      <td className="py-2 pr-3">
+    <tr className={`border-t align-top max-md:mb-3 max-md:block max-md:rounded-xl max-md:border max-md:p-3 ${job.priority === "urgent" ? "border-red-900/40 bg-red-950/20" : "border-zinc-800 max-md:bg-zinc-900/40"}`}>
+      <td className="py-2 pr-3 max-md:block max-md:pr-0">
         <div className="flex items-center gap-1.5">
           <span className="font-medium text-zinc-200">{job.jobNumber ?? job.id.slice(0, 8)}</span>
           {job.priority === "urgent" ? (
@@ -72,39 +72,39 @@ function JobRow({ job, riders, canWrite, busy, offersOpen, queueOpen, chatOpen, 
           {job.source} · {job.type}
         </div>
         {job.itemSummary ? (
-          <div className="max-w-40 truncate text-xs text-zinc-500" title={job.itemSummary}>
+          <div className="max-w-40 truncate text-xs text-zinc-500 max-md:max-w-none max-md:whitespace-normal" title={job.itemSummary}>
             {job.itemSummary}
           </div>
         ) : null}
       </td>
-      <td className="py-2 pr-3">
+      <td className="py-2 pr-3 max-md:block max-md:py-1 max-md:pr-0">
         <div className="text-zinc-200">{job.customerName}</div>
         <div className="text-xs text-zinc-500">{job.customerPhone}</div>
       </td>
-      <td className="max-w-44 py-2 pr-3">
-        <div className="truncate text-zinc-300" title={job.addressText ?? undefined}>
+      <td className={`max-w-44 py-2 pr-3 max-md:max-w-none max-md:py-1 max-md:pr-0 ${job.addressText || job.zoneName ? "max-md:block" : "max-md:hidden"}`}>
+        <div className="truncate text-zinc-300 max-md:whitespace-normal" title={job.addressText ?? undefined}>
           {job.addressText ?? "–"}
         </div>
         {job.zoneName ? <div className="text-xs text-zinc-500">{job.zoneName}</div> : null}
       </td>
-      <td className="py-2 pr-3">
+      <td data-label="Status" className="py-2 pr-3 max-md:flex max-md:items-center max-md:justify-between max-md:py-1 max-md:pr-0 max-md:before:text-[11px] max-md:before:uppercase max-md:before:tracking-wide max-md:before:text-zinc-500 max-md:before:content-[attr(data-label)]">
         <span className={`whitespace-nowrap rounded px-2 py-0.5 text-xs font-medium ${STATUS_BADGE[job.status]}`}>
           {job.status}
         </span>
       </td>
-      <td className="whitespace-nowrap py-2 pr-3 text-xs text-zinc-400">{RIDER_STAGE_LABELS[job.stage]}</td>
-      <td className="whitespace-nowrap py-2 pr-3">
+      <td data-label="Stage" className="whitespace-nowrap py-2 pr-3 text-xs text-zinc-400 max-md:flex max-md:items-center max-md:justify-between max-md:py-1 max-md:pr-0 max-md:before:text-[11px] max-md:before:uppercase max-md:before:tracking-wide max-md:before:text-zinc-500 max-md:before:content-[attr(data-label)]">{RIDER_STAGE_LABELS[job.stage]}</td>
+      <td data-label="Expected" className="whitespace-nowrap py-2 pr-3 max-md:flex max-md:items-center max-md:justify-between max-md:py-1 max-md:pr-0 max-md:before:text-[11px] max-md:before:uppercase max-md:before:tracking-wide max-md:before:text-zinc-500 max-md:before:content-[attr(data-label)]">
         <div>{formatMoney(job.amountExpected)}</div>
-        <div className="text-xs text-zinc-500">{job.paymentStatus}</div>
+        <div className="text-xs text-zinc-500 max-md:hidden">{job.paymentStatus}</div>
       </td>
-      <td className="whitespace-nowrap py-2 pr-3 text-zinc-300">{job.riderName ?? "—"}</td>
+      <td data-label="Courier" className="whitespace-nowrap py-2 pr-3 text-zinc-300 max-md:flex max-md:items-center max-md:justify-between max-md:py-1 max-md:pr-0 max-md:before:text-[11px] max-md:before:uppercase max-md:before:tracking-wide max-md:before:text-zinc-500 max-md:before:content-[attr(data-label)]">{job.riderName ?? "—"}</td>
       {canWrite ? (
-        <td className="py-2">
+        <td className="py-2 max-md:mt-2 max-md:block max-md:border-t max-md:border-zinc-800 max-md:pt-3">
           <div className="flex flex-wrap items-center gap-1.5">
             {assignable ? (
               <>
                 <select
-                  className="input w-40 !py-1"
+                  className="input w-40 !py-1 max-md:w-full"
                   value={riderId}
                   disabled={busy}
                   onChange={(e) => setRiderId(e.target.value)}
@@ -133,7 +133,7 @@ function JobRow({ job, riders, canWrite, busy, offersOpen, queueOpen, chatOpen, 
             {moves.length > 0 ? (
               <>
                 <select
-                  className="input w-36 !py-1"
+                  className="input w-36 !py-1 max-md:w-full"
                   value={moveTo}
                   disabled={busy}
                   onChange={(e) => setMoveTo(e.target.value as JobStatus | "")}
@@ -354,8 +354,8 @@ export function Jobs(): React.JSX.Element {
           </span>
         </div>
         <div className="overflow-x-auto">
-          <table className="w-full text-left text-sm">
-            <thead>
+          <table className="w-full text-left text-sm max-md:block">
+            <thead className="max-md:hidden">
               <tr className="text-xs uppercase tracking-wide text-zinc-500">
                 <th className="py-1 pr-3">Job</th>
                 <th className="py-1 pr-3">Customer</th>
@@ -367,7 +367,7 @@ export function Jobs(): React.JSX.Element {
                 {canWrite ? <th className="py-1">Actions</th> : null}
               </tr>
             </thead>
-            <tbody>
+            <tbody className="max-md:block">
               {jobs.data?.jobs.map((job) => (
                 <React.Fragment key={job.id}>
                   <JobRow
@@ -387,22 +387,22 @@ export function Jobs(): React.JSX.Element {
                     onDelete={(id, reason) => void deleteJob.mutate({ jobId: id, reason })}
                   />
                   {offersJobId === job.id ? (
-                    <tr className="border-t border-zinc-800" data-testid={`offers-panel-${job.id}`}>
-                      <td colSpan={canWrite ? 8 : 7} className="py-2">
+                    <tr className="border-t border-zinc-800 max-md:block" data-testid={`offers-panel-${job.id}`}>
+                      <td colSpan={canWrite ? 8 : 7} className="py-2 max-md:block">
                         <JobOffersPanel jobId={job.id} jobStatus={job.status} canWrite={canWrite} />
                       </td>
                     </tr>
                   ) : null}
                   {job.riderId && queueJobId === job.id ? (
-                    <tr className="border-t border-zinc-800" data-testid={`queue-panel-${job.riderId}`}>
-                      <td colSpan={canWrite ? 8 : 7} className="py-2">
+                    <tr className="border-t border-zinc-800 max-md:block" data-testid={`queue-panel-${job.riderId}`}>
+                      <td colSpan={canWrite ? 8 : 7} className="py-2 max-md:block">
                         <ReadOnlyRiderQueue riderId={job.riderId} />
                       </td>
                     </tr>
                   ) : null}
                   {chatJobId === job.id ? (
-                    <tr className="border-t border-zinc-800" data-testid={`chat-panel-${job.id}`}>
-                      <td colSpan={canWrite ? 8 : 7} className="py-2">
+                    <tr className="border-t border-zinc-800 max-md:block" data-testid={`chat-panel-${job.id}`}>
+                      <td colSpan={canWrite ? 8 : 7} className="py-2 max-md:block">
                         <DispatcherJobChat jobId={job.id} canWrite={canWrite} />
                       </td>
                     </tr>

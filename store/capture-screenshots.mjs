@@ -79,6 +79,7 @@ try {
   const browser = await chromium.launch();
   await shot(browser, "01-sign-in", null, null, "/login");
   await shot(browser, "02-dispatch-ops-board", "dispatcher@ronmacrae.example", "dispatch1234", "/ops");
+  await shot(browser, "02b-dispatch-jobs", "dispatcher@ronmacrae.example", "dispatch1234", "/jobs", async (page) => { await page.getByText("Dispatch queue", { exact: true }).first().evaluate((el) => el.scrollIntoView({ block: "start" })); });
   await shot(browser, "03-new-order", "dispatcher@ronmacrae.example", "dispatch1234", "/jobs/new");
   await shot(browser, "04-courier-deliveries", "+8765550001", "rider1234", "/");
   await shot(browser, "05-cash-reconciliation", "accountant@ronmacrae.example", "account1234", "/cod");
