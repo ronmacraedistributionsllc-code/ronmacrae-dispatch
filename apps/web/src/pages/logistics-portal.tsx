@@ -5,6 +5,7 @@ import type { LogisticsFleetJobDto, PlatformMessagesDto } from "@ronmacrae/contr
 import { setAccessToken } from "../lib/api.js";
 import { useAuth } from "../lib/auth.js";
 import { PlatformChat } from "../components/platform-chat.js";
+import { DeleteAccountPanel } from "../components/delete-account-panel.js";
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? "/api";
 const STORAGE_KEY = "logisticsPortalToken";
@@ -235,6 +236,13 @@ export function LogisticsPortal(): React.JSX.Element {
           </div>
         ))}
       </div>
+
+      <DeleteAccountPanel
+        onDelete={async (password) => {
+          await portalFetch(API.accountDeletion.logisticsPortal, { method: "POST", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ password }) });
+        }}
+        onDeleted={signOut}
+      />
     </div>
   );
 }

@@ -11,6 +11,8 @@ import { RiderDashboard } from "./pages/rider-dashboard.js";
 import { Jobs } from "./pages/jobs.js";
 import { Login } from "./pages/login.js";
 import { DownloadApp } from "./pages/download-app.js";
+import { Privacy, Terms, Support, DeleteAccountInfo } from "./pages/legal.js";
+import { Account } from "./pages/account.js";
 import { MyPackages } from "./pages/my-packages.js";
 import { NewJob } from "./pages/new-job.js";
 import { PublicOrder } from "./pages/order.js";
@@ -90,6 +92,10 @@ export default function App(): React.JSX.Element {
             <Routes>
               <Route path="/login" element={<Login />} />
               <Route path="/download-app" element={<DownloadApp />} />
+              <Route path="/privacy" element={<Privacy />} />
+              <Route path="/terms" element={<Terms />} />
+              <Route path="/support" element={<Support />} />
+              <Route path="/delete-account" element={<DeleteAccountInfo />} />
               <Route path="/book" element={<Book />} />
               <Route path="/order" element={<PublicOrder />} />
               <Route path="/order/:merchantSlug" element={<PublicOrder />} />
@@ -106,6 +112,14 @@ export default function App(): React.JSX.Element {
                 element={
                   <Protected>
                     <Dashboard />
+                  </Protected>
+                }
+              />
+              <Route
+                path="/account"
+                element={
+                  <Protected>
+                    <Account />
                   </Protected>
                 }
               />

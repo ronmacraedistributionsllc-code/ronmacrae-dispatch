@@ -30,6 +30,8 @@ const TABS = [
   { to: "/notifications", label: "Notifications", icon: "🔔" },
   { to: "/messages", label: "Messages", icon: "💬" },
   { to: "/platform-admin", label: "Platform Admin", icon: "🛡️" },
+  // Every role — account deletion has to be findable inside the app (store review).
+  { to: "/account", label: "My account", icon: "👤" },
 ];
 /** Never shown to anyone without platformRole: "owner" — filtered
  *  alongside STAFF_ONLY_TABS/ADMIN_ACCOUNTANT_ONLY_TABS below, not just

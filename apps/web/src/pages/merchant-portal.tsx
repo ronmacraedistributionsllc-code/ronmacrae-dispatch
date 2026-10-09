@@ -5,6 +5,7 @@ import type { PlatformMessagesDto, ProductDto } from "@ronmacrae/contracts";
 import { formatMoney, setAccessToken } from "../lib/api.js";
 import { useAuth } from "../lib/auth.js";
 import { PlatformChat } from "../components/platform-chat.js";
+import { DeleteAccountPanel } from "../components/delete-account-panel.js";
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? "/api";
 const STORAGE_KEY = "merchantPortalToken";
@@ -217,6 +218,13 @@ export function MerchantPortal(): React.JSX.Element {
           />
         </section>
       )}
+
+      <DeleteAccountPanel
+        onDelete={async (password) => {
+          await portalFetch(API.accountDeletion.merchantPortal, { method: "POST", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ password }) });
+        }}
+        onDeleted={signOut}
+      />
     </div>
   );
 }

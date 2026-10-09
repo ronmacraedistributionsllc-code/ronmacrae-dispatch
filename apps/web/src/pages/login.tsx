@@ -143,6 +143,10 @@ export function Login(): React.JSX.Element {
           <p><a className="text-brand-accent underline" href="/join/logistics">Sign up as Bearer/Logistics Company</a> <span className="text-zinc-600">for fleet operators supplying couriers</span></p>
           <p><a className="text-brand-accent underline" href="/book">Sign up as customer</a> <span className="text-zinc-600">when placing an order</span></p>
           <p><a className="text-brand-accent underline" href="/download-app">📱 Download the Android app</a></p>
+          <p className="text-xs text-zinc-500">
+            <a className="underline" href="/privacy">Privacy</a> · <a className="underline" href="/terms">Terms</a> ·{" "}
+            <a className="underline" href="/support">Support</a> · <a className="underline" href="/delete-account">Delete account</a>
+          </p>
         </div>
         <div className="mt-6 flex items-center justify-center gap-2 border-t border-zinc-800 pt-4 text-xs text-zinc-500">
           <span>Theme</span>

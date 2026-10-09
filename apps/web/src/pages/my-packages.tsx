@@ -9,6 +9,7 @@ import {
   type CustomerPackagesDto,
 } from "@ronmacrae/contracts";
 import { formatMoney } from "../lib/api.js";
+import { DeleteAccountPanel } from "../components/delete-account-panel.js";
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? "/api";
 const STORAGE_KEY = "customerDashboardToken";
@@ -386,7 +387,7 @@ function Dashboard({ token, onExpired }: { token: string; onExpired: () => void 
         <div className="card">
           <p className="text-sm text-zinc-400">No packages found for this number yet.</p>
         </div>
-        <AccountPanel token={token} />
+        <AccountPanel token={token} onDeleted={onExpired} />
       </div>
     );
   }
@@ -413,7 +414,7 @@ function Dashboard({ token, onExpired }: { token: string; onExpired: () => void 
           </div>
         </section>
       ) : null}
-      <AccountPanel token={token} />
+      <AccountPanel token={token} onDeleted={onExpired} />
     </div>
   );
 }
@@ -423,7 +424,7 @@ function Dashboard({ token, onExpired }: { token: string; onExpired: () => void 
  * phone-OTP session above, never a replacement for it. Collapsed by
  * default so it doesn't compete for attention with the actual packages.
  */
-function AccountPanel({ token }: { token: string }): React.JSX.Element | null {
+function AccountPanel({ token, onDeleted }: { token: string; onDeleted: () => void }): React.JSX.Element | null {
   const [status, setStatus] = useState<CustomerAccountStatusDto | null>(null);
   const [open, setOpen] = useState(false);
   const [email, setEmail] = useState("");
@@ -502,6 +503,7 @@ function AccountPanel({ token }: { token: string }): React.JSX.Element | null {
 
   if (status.hasAccount) {
     return (
+      <>
       <div className="card">
         <h2 className="mb-1 text-sm font-semibold uppercase tracking-wide text-zinc-400">Account</h2>
         <p className="text-sm text-zinc-300">
@@ -526,6 +528,14 @@ function AccountPanel({ token }: { token: string }): React.JSX.Element | null {
         {error ? <p className="mt-2 text-xs text-red-400">{error}</p> : null}
         {notice ? <p className="mt-2 text-xs text-emerald-400">{notice}</p> : null}
       </div>
+      <DeleteAccountPanel
+        consequences="Your email and password are removed. Your past orders stay with the stores that delivered them."
+        onDelete={async (password) => {
+          await dashboardFetch(API.customerAccount.delete, { method: "POST", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ password }) });
+        }}
+        onDeleted={onDeleted}
+      />
+      </>
     );
   }
 

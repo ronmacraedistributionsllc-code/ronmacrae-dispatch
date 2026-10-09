@@ -572,7 +572,7 @@ describe("push notification on a new dispatch-to-rider message (spec 67: must re
 
   it("never pushes for a customer_dispatch or customer_rider message — no rider recipient exists on those", async () => {
     const customer = await makeCustomer(harness);
-    const { job, link } = await makeJobWithLink(harness, customer.id);
+    const { link } = await makeJobWithLink(harness, customer.id);
     const sendToRider = vi.spyOn(harness.ctx.push, "sendToRider").mockResolvedValue(undefined);
 
     await harness.app.inject({ method: "POST", url: `/api/tracking/${link.token}/messages/customer_dispatch`, payload: { body: "Where is my order?" } });

@@ -32,6 +32,7 @@ import { trackingRoutes } from "./modules/tracking.js";
 import { settingsRoutes } from "./modules/settings.js";
 import { customerDashboardRoutes } from "./modules/customer-dashboard.js";
 import { customerAccountRoutes } from "./modules/customer-account.js";
+import { accountDeletionRoutes } from "./modules/account-deletion.js";
 import { ownerRoutes } from "./modules/owner.js";
 import { cashProfileRoutes } from "./modules/cash-profile.js";
 import { merchantRoutes } from "./modules/merchants.js";
@@ -143,6 +144,7 @@ export async function createApp(ctx: AppCtx): Promise<FastifyInstance> {
   await trackingRoutes(app, ctx);
   await customerDashboardRoutes(app, ctx);
   await customerAccountRoutes(app, ctx);
+  await accountDeletionRoutes(app, ctx);
   await settingsRoutes(app, ctx);
   await notificationRoutes(app, ctx);
   await auditRoutes(app, ctx);

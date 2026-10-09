@@ -283,6 +283,7 @@ export const API = {
     login: "/api/customer-account/login",
     requestPasswordReset: "/api/customer-account/request-password-reset",
     resetPassword: "/api/customer-account/reset-password",
+    delete: "/api/customer-account/delete",
   },
 
   /** delivery messaging (spec 5) — staff side. Staff may read all three
@@ -463,6 +464,13 @@ export const API = {
     broadcast: (jobId: string) => `/api/jobs/${jobId}/offers/broadcast`,
     withdraw: (id: string) => `/api/offers/${id}/withdraw`,
     rebroadcast: (jobId: string) => `/api/jobs/${jobId}/offers/rebroadcast`,
+  },
+
+  /** Self-service account deletion — one per auth "face" (see account-deletion.ts). */
+  accountDeletion: {
+    main: "/api/auth/delete-account",
+    merchantPortal: "/api/merchant-portal/delete-account",
+    logisticsPortal: "/api/logistics-portal/delete-account",
   },
 
   /** Opt-in browser push (Web Push / VAPID). */
