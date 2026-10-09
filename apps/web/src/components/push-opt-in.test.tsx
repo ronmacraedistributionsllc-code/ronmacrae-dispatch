@@ -13,6 +13,7 @@ vi.mock("../native/push.js", () => ({
   getNativePushStatus: vi.fn(),
   enableNativePush: vi.fn(),
   disableNativePush: vi.fn(),
+  registerNativeTokenWithApi: vi.fn(),
 }));
 
 async function pushAdapter() {
@@ -20,6 +21,7 @@ async function pushAdapter() {
     getNativePushStatus: ReturnType<typeof vi.fn>;
     enableNativePush: ReturnType<typeof vi.fn>;
     disableNativePush: ReturnType<typeof vi.fn>;
+    registerNativeTokenWithApi: ReturnType<typeof vi.fn>;
   };
 }
 
@@ -60,13 +62,18 @@ describe("PushOptIn native gating", () => {
     authState.role = "rider";
     const adapter = await pushAdapter();
     adapter.getNativePushStatus.mockResolvedValue("off");
-    adapter.enableNativePush.mockResolvedValue("on");
+    // Simulate FCM delivering the token right after register().
+    adapter.enableNativePush.mockImplementation((onToken: (t: string) => void) => {
+      onToken("fcm-token-9");
+      return Promise.resolve("on");
+    });
 
     render(<PushOptIn />);
     expect(await screen.findByText(/Allow notifications so new delivery offers wake your phone/)).toBeTruthy();
     fireEvent.click(screen.getByText("Enable push notifications"));
     await waitFor(() => expect(adapter.enableNativePush).toHaveBeenCalled());
     expect(await screen.findByText("Disable push notifications")).toBeTruthy();
+    expect(adapter.registerNativeTokenWithApi).toHaveBeenCalledWith("fcm-token-9");
   });
 
   it("native + non-rider: shows neither the native toggle nor the web one", async () => {

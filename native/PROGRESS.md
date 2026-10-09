@@ -11,7 +11,8 @@ Goal: Capacitor shell (`native/`) wrapping https://orders.ronmacraedistributions
 | 1 Toolchain check | done | `npx cap doctor`: "Android looking great" (see below) |
 | 2 Capacitor shell scaffold | done | `assembleDebug` BUILD SUCCESSFUL; APK installs/loads live site: NOT TESTED (no device) |
 | 3 Web-side native bridge | done | typecheck/lint/test:unit/build green; bundle evidence below |
-| 4 Native push (FCM) end-to-end | in progress | API routes + token wiring next; device test blocked on Firebase |
+| 4 Native push (FCM) end-to-end | done (UNIT-TESTED; device test blocked on Firebase) | API + client below; debug build green with and without google-services.json |
+| 5 Background location | in progress | disclosure screen + device test next |
 | 4 Native push (FCM) end-to-end | not started | blocked on Firebase project (human) for device test |
 | 5 Background location | not started | needs device (human) |
 | 6 Offline resilience | not started | — |
@@ -84,6 +85,54 @@ Goal: Capacitor shell (`native/`) wrapping https://orders.ronmacraedistributions
 - Known gap: FCM token is obtained on-device but NOT yet sent to the API
   (routes land in Phase 4); native location reports to the existing endpoint
   but the full disclosure screen + device test land in Phase 5.
+
+## Phase 4 — native push FCM (done, UNIT-TESTED)
+
+- API (`apps/api`): new `DevicePushToken` model (token unique, user FK,
+  platform/appVersion, lastSeenAt; `dev.db` backed up first per R3 as
+  `dev.db.bak-android-native`). Routes `POST /api/push/native/register`
+  + `/unregister` (requireAuth, zod, 60/min limit; ownership-scoped like
+  Web Push; re-register moves the token). `FcmSender`: hand-rolled FCM HTTP
+  v1 (RS256 JWT → OAuth token cached to expiry-60 s → one POST per token;
+  no firebase-admin dep). Optional `FCM_PROJECT_ID` /
+  `FCM_SERVICE_ACCOUNT_PATH` (file path, never in repo) in config +
+  `.env.example`; unset → disabled gracefully (log once) and
+  `/api/health` reports `nativePush: "disabled"|"enabled"`.
+- Fan-out: `sendToUser` tries native tokens first (HIGH priority,
+  `channel_id` job_offers for offer/assignment else messages,
+  collapse_key/tag = existing tag, data url/tag/kind). Dead tokens dropped
+  on 404/NOT_FOUND/INVALID_ARGUMENT. De-dupe: a recent (≤30 d) token that
+  was JUST reached suppresses that send's Web Push; FCM failures fall back
+  to Web Push; stale tokens never suppress (but refresh/prune on attempt).
+  Logout deletes all native tokens server-side (guarantee); client
+  unregisters its own token first (best-effort, mirrored).
+- Client: channels created before register (job_offers HIGH + bundled loud
+  `offer_alert.wav` in `res/raw`, private visibility; active_delivery LOW;
+  messages DEFAULT); in-app explanation before the Android 13 prompt;
+  token registered after login (+appVersion), unregistered on logout
+  (Preferences-stored token), rotation re-fires the same listener.
+  Tap → deep link (`data.url`, cold start included) via NativeShell.
+  Build succeeds without `google-services.json` (template conditional);
+  without Firebase the toggle honestly reports "not available".
+- Merged-manifest audit: INTERNET, COARSE/FINE_LOCATION,
+  FOREGROUND_SERVICE(+_LOCATION), POST_NOTIFICATIONS, WAKE_LOCK,
+  ACCESS_NETWORK_STATE (FCM IID), c2dm RECEIVE. Stripped with
+  `tools:node="remove"`: SCHEDULE_EXACT_ALARM + RECEIVE_BOOT_COMPLETED
+  (injected by local-notifications for unused scheduling). NO
+  ACCESS_BACKGROUND_LOCATION.
+- Tests: api 49 files 372/372 (358 prior + 14 new: auth/validation/move,
+  ownership, logout sweep, health, dedupe/suppress/fallback/refresh/prune,
+  disabled no-op, real-JWT HTTP shape incl. token caching + dead mapping);
+  web 41/41 (token register/unregister, toggle→register flow).
+- Gates: root typecheck/lint green; `assembleDebug` green; APK contains
+  `res/raw/offer_alert.wav`.
+- NOT DEVICE-TESTED: needs the human's Firebase project + service account
+  (BLOCKERS #1) and a device (BLOCKERS #4). Test plan: enable toggle as a
+  rider → server row appears → broadcast offer → FCM wakes phone on
+  job_offers channel with loud sound → tap opens the offer.
+- Known limitations: no custom small push icon (default app icon is used;
+  a white-on-transparent asset can replace it later); server registration
+  only takes effect after the human deploys the API.
 
 ## Machine notes (Phase 0)
 

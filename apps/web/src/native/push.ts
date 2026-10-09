@@ -1,3 +1,5 @@
+import { API } from "@ronmacrae/contracts";
+import { apiFetch } from "../lib/api.js";
 import { isNative } from "./platform.js";
 
 /**
@@ -34,12 +36,14 @@ async function createChannels(): Promise<void> {
     id: NATIVE_CHANNEL_JOB_OFFERS,
     name: "Delivery offers",
     description: "New job offers and assignments. Wake the phone with a loud sound.",
-    // IMPORTANCE_HIGH (4). A custom loud sound in res/raw is attached in
-    // Phase 4 — note channels are immutable once created, so a reinstall
-    // may be needed to pick the sound up on test devices.
+    // IMPORTANCE_HIGH (4) + the bundled loud alert
+    // (native/android/app/src/main/res/raw/offer_alert.wav). Note channels
+    // are immutable once created — a reinstall may be needed to pick the
+    // sound up on devices that already have the channel.
     importance: 4,
     visibility: 0,
     vibration: true,
+    sound: "offer_alert",
   });
   await LocalNotifications.createChannel({
     id: NATIVE_CHANNEL_ACTIVE_DELIVERY,
@@ -141,6 +145,73 @@ export function onNativeNotificationTap(onTap: (url: string) => void): () => voi
     cancelled = true;
     detach?.();
   };
+}
+
+const NATIVE_TOKEN_KEY = "native-fcm-token";
+
+async function storedToken(): Promise<string | null> {
+  try {
+    const { Preferences } = await import("@capacitor/preferences");
+    const { value } = await Preferences.get({ key: NATIVE_TOKEN_KEY });
+    return value;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Persist the FCM token server-side (`POST /api/push/native/register`, so
+ * offers/assignments/messages fan out to this device) and remember it
+ * on-device for logout cleanup. Best-effort: never throws.
+ */
+export async function registerNativeTokenWithApi(token: string): Promise<void> {
+  if (!isNative()) return;
+  let appVersion: string | undefined;
+  try {
+    const { App } = await import("@capacitor/app");
+    appVersion = (await App.getInfo()).version;
+  } catch {
+    appVersion = undefined;
+  }
+  try {
+    await apiFetch(API.push.native.register, {
+      method: "POST",
+      body: JSON.stringify({ token, platform: "android", ...(appVersion ? { appVersion } : {}) }),
+    });
+    const { Preferences } = await import("@capacitor/preferences");
+    await Preferences.set({ key: NATIVE_TOKEN_KEY, value: token });
+  } catch {
+    // best-effort — the OS-level registration stands regardless
+  }
+}
+
+/**
+ * Device-scoped logout cleanup, mirroring `unsubscribeThisDeviceFromPush`
+ * for Web Push: unregister THIS shell's token (never every device), forget
+ * it locally, and detach listeners. Must run BEFORE the access token is
+ * cleared, and must never throw (the server also deletes every token on
+ * logout as the guarantee).
+ */
+export async function unregisterNativeTokenOnLogout(): Promise<void> {
+  try {
+    const token = isNative() ? await storedToken() : null;
+    if (token) {
+      try {
+        await apiFetch(API.push.native.unregister, { method: "POST", body: JSON.stringify({ token }) });
+      } catch {
+        // best-effort — the server-side logout sweep covers this
+      }
+      try {
+        const { Preferences } = await import("@capacitor/preferences");
+        await Preferences.remove({ key: NATIVE_TOKEN_KEY });
+      } catch {
+        // ignore
+      }
+    }
+  } catch {
+    // never block sign-out
+  }
+  await disableNativePush();
 }
 
 /** Test-only reset of the module-level registration flag. */

@@ -133,12 +133,16 @@ export async function assignJob(
   // to every eligible rider — that's the offer flow). Content excludes customer
   // phone/name and the delivery PIN, same privacy bar as the offer-broadcast push.
   void ctx.push
-    .sendToRider(input.riderId, {
-      title: "New delivery assigned",
-      body: [dto.pickupAddressText, dto.zoneName ?? dto.addressText].filter(Boolean).join(" → ") || "Open the app to view details",
-      tag: `assign-${jobId}`,
-      url: "/",
-    })
+    .sendToRider(
+      input.riderId,
+      {
+        title: "New delivery assigned",
+        body: [dto.pickupAddressText, dto.zoneName ?? dto.addressText].filter(Boolean).join(" → ") || "Open the app to view details",
+        tag: `assign-${jobId}`,
+        url: "/",
+      },
+      { kind: "assignment" },
+    )
     .catch((err) => ctx.log.error({ err: String(err), jobId }, "assignment push notification failed"));
 
   // simulated leg towards the pickup

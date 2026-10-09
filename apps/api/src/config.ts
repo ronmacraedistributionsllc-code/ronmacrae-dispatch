@@ -121,6 +121,14 @@ const EnvSchema = z.object({
   VAPID_PUBLIC_KEY: z.string().default(""),
   VAPID_PRIVATE_KEY: z.string().default(""),
   VAPID_SUBJECT: z.string().default("mailto:ops@ronmacraedistributions.com"),
+
+  /** Native push (FCM HTTP v1) for the Android shell. Both optional: when
+   *  either is unset, native push is disabled gracefully (log once, no
+   *  crash) and /api/health reports nativePush: "disabled".
+   *  FCM_SERVICE_ACCOUNT_PATH is a FILE PATH — the JSON key itself is never
+   *  in the repo. Names only here; values live on the production host. */
+  FCM_PROJECT_ID: z.string().default(""),
+  FCM_SERVICE_ACCOUNT_PATH: z.string().default(""),
 });
 
 export type AppConfig = z.infer<typeof EnvSchema>;

@@ -130,12 +130,16 @@ async function createOffers(ctx: AppCtx, jobId: string, businessId: string, ride
     // or fails the broadcast/rebroadcast response — PushService already swallows
     // per-subscription send errors internally.
     void ctx.push
-      .sendToRider(offer.riderId, {
-        title: "New delivery offer",
-        body: [offer.job.pickupAddressText, offer.job.zone?.name ?? offer.job.addressText].filter(Boolean).join(" → ") || "Open the app to view details",
-        tag: `offer-${offer.id}`,
-        url: "/",
-      })
+      .sendToRider(
+        offer.riderId,
+        {
+          title: "New delivery offer",
+          body: [offer.job.pickupAddressText, offer.job.zone?.name ?? offer.job.addressText].filter(Boolean).join(" → ") || "Open the app to view details",
+          tag: `offer-${offer.id}`,
+          url: "/",
+        },
+        { kind: "offer" },
+      )
       .catch((err) => ctx.log.error({ err: String(err), offerId: offer.id }, "offer push notification failed"));
   }
   return offers;

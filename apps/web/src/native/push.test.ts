@@ -7,6 +7,8 @@ import {
   NATIVE_CHANNEL_ACTIVE_DELIVERY,
   NATIVE_CHANNEL_JOB_OFFERS,
   NATIVE_CHANNEL_MESSAGES,
+  registerNativeTokenWithApi,
+  unregisterNativeTokenOnLogout,
 } from "./push.js";
 
 const listeners: Record<string, (arg: unknown) => void> = {};
@@ -28,6 +30,18 @@ vi.mock("@capacitor/local-notifications", () => ({
   LocalNotifications: {
     createChannel: vi.fn(() => Promise.resolve()),
   },
+}));
+
+vi.mock("@capacitor/app", () => ({
+  App: { getInfo: vi.fn(() => Promise.resolve({ version: "3" })) },
+}));
+
+vi.mock("@capacitor/preferences", () => ({
+  Preferences: { get: vi.fn(), set: vi.fn(), remove: vi.fn() },
+}));
+
+vi.mock("../lib/api.js", () => ({
+  apiFetch: vi.fn(() => Promise.resolve({})),
 }));
 
 async function pushPlugin() {
@@ -102,6 +116,41 @@ describe("native push adapter", () => {
     expect(onToken).toHaveBeenCalledWith("fcm-token-1");
     // Permission now granted and this session registered.
     expect(await getNativePushStatus()).toBe("on");
+  });
+
+  it("registers the token server-side and remembers it for logout, unregisters on logout", async () => {
+    setNative(true);
+    const { apiFetch } = await import("../lib/api.js");
+    const { Preferences } = await import("@capacitor/preferences");
+    (Preferences.get as ReturnType<typeof vi.fn>).mockResolvedValue({ value: "fcm-token-1" });
+
+    await registerNativeTokenWithApi("fcm-token-1");
+    expect(apiFetch).toHaveBeenCalledWith(
+      "/api/push/native/register",
+      expect.objectContaining({ method: "POST" }),
+    );
+    const firstCall = (apiFetch as ReturnType<typeof vi.fn>).mock.calls[0];
+    if (!firstCall) throw new Error("expected apiFetch to be called");
+    const registerBody = JSON.parse(firstCall[1].body);
+    expect(registerBody).toMatchObject({ token: "fcm-token-1", platform: "android", appVersion: "3" });
+    expect(Preferences.set).toHaveBeenCalledWith({ key: "native-fcm-token", value: "fcm-token-1" });
+
+    vi.clearAllMocks();
+    await unregisterNativeTokenOnLogout();
+    expect(apiFetch).toHaveBeenCalledWith(
+      "/api/push/native/unregister",
+      expect.objectContaining({ method: "POST" }),
+    );
+    expect(Preferences.remove).toHaveBeenCalledWith({ key: "native-fcm-token" });
+  });
+
+  it("token sync is a no-op outside the shell and logout cleanup never throws", async () => {
+    setNative(false);
+    const { apiFetch } = await import("../lib/api.js");
+    vi.clearAllMocks();
+    await registerNativeTokenWithApi("fcm-token-1");
+    expect(apiFetch).not.toHaveBeenCalled();
+    await expect(unregisterNativeTokenOnLogout()).resolves.toBeUndefined();
   });
 
   it("disable tears down listeners and never throws", async () => {

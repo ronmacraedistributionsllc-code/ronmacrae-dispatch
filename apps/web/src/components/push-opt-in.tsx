@@ -4,7 +4,13 @@ import { apiFetch, ApiError } from "../lib/api.js";
 import { unsubscribeThisDeviceFromPush } from "../lib/push.js";
 import { useAuth } from "../lib/auth.js";
 import { isNative, isNativeRider } from "../native/platform.js";
-import { disableNativePush, enableNativePush, getNativePushStatus, type NativePushStatus } from "../native/push.js";
+import {
+  disableNativePush,
+  enableNativePush,
+  getNativePushStatus,
+  registerNativeTokenWithApi,
+  type NativePushStatus,
+} from "../native/push.js";
 
 function urlBase64ToUint8Array(base64String: string): Uint8Array<ArrayBuffer> {
   const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
@@ -136,8 +142,11 @@ function NativePushOptIn(): React.JSX.Element | null {
   async function enable(): Promise<void> {
     setBusy(true);
     try {
-      // Phase 4 persists this with POST /api/push/native/register.
-      const s = await enableNativePush(() => {});
+      // The adapter calls this with the FCM token; it is persisted
+      // server-side so offers fan out to this device.
+      const s = await enableNativePush((token) => {
+        void registerNativeTokenWithApi(token);
+      });
       setStatus(s);
     } finally {
       setBusy(false);

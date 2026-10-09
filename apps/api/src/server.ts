@@ -121,6 +121,7 @@ export async function createApp(ctx: AppCtx): Promise<FastifyInstance> {
     notifications: ctx.notifier.name,
     email: ctx.email.name,
     geo: ctx.geo.name,
+    nativePush: ctx.push.nativePushStatus(),
     web: servingWeb,
     time: new Date().toISOString(),
   }));

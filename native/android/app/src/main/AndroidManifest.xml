@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <application
         android:allowBackup="true"
@@ -39,4 +40,14 @@
     <!-- Permissions -->
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Minimal-permissions rule (decision D6): the app only creates
+         notification channels (never schedules exact alarms) and never
+         reschedules anything at boot, so strip what
+         @capacitor/local-notifications injects for those unused features.
+         Kept: INTERNET, POST_NOTIFICATIONS / location / foreground-service
+         permissions the rider features actually use, plus the standard FCM
+         entries (c2dm RECEIVE, IID's ACCESS_NETWORK_STATE). Deliberately
+         absent: ACCESS_BACKGROUND_LOCATION (see Phase 5). -->
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" tools:node="remove" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" tools:node="remove" />
 </manifest>

@@ -327,6 +327,7 @@ export async function authRoutes(app: FastifyInstance, ctx: AppCtx): Promise<voi
       // account's private alerts. The web app also unsubscribes its own device
       // first, but that is best-effort (offline, closed tab); this is the guarantee.
       await ctx.prisma.pushSubscription.deleteMany({ where: { userId: req.user.sub } });
+      await ctx.push.removeAllNativeTokens(req.user.sub);
     }
     reply.clearCookie(REFRESH_COOKIE, { path: "/api/auth" });
     return { ok: true };

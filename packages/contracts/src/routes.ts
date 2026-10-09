@@ -478,6 +478,11 @@ export const API = {
     publicKey: "/api/push/public-key",
     subscribe: "/api/push/subscribe",
     unsubscribe: "/api/push/unsubscribe",
+    /** Native push (FCM) for the Android shell — one token per device. */
+    native: {
+      register: "/api/push/native/register",
+      unregister: "/api/push/native/unregister",
+    },
   },
 } as const;
 

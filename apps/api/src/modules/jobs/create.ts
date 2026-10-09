@@ -100,7 +100,7 @@ export async function notifyDispatchOfNewOrder(ctx: AppCtx, businessId: string, 
   ctx.hub.broadcast(roomForDispatch(businessId), { type: "job.created", payload: { job } });
   const body = [job.itemSummary, job.merchantName ? `from ${job.merchantName}` : null].filter(Boolean).join(" ") || `Order ${job.jobNumber ?? ""}`.trim();
   void ctx.push
-    .sendToBusinessStaff(businessId, { title: "New order", body, tag: `job-created-${job.id}`, url: "/jobs" }, excludeUserId ?? undefined)
+    .sendToBusinessStaff(businessId, { title: "New order", body, tag: `job-created-${job.id}`, url: "/jobs" }, excludeUserId ?? undefined, { kind: "order" })
     .catch((err) => ctx.log.error({ err: String(err), jobId: job.id }, "new-order push notification failed"));
 }
 

@@ -194,6 +194,7 @@ model User {
   payouts   Payout[]           @relation("payoutApprover")
   recon     ReconDaily[]       @relation("reconResolver")
   pushSubscriptions PushSubscription[]
+  devicePushTokens DevicePushToken[]
   codApprovals Job[]           @relation("codApprover")
   codArchives  Job[]           @relation("codArchiver")
   addressChangeReviews AddressChangeRequest[] @relation("addressChangeReviewer")
@@ -210,6 +211,26 @@ model PushSubscription {
   p256dh    String
   auth      String
   createdAt DateTime @default(now())
+
+  @@index([userId])
+}
+
+/** One Android shell's FCM registration token (native push). A user may
+ *  have several (multiple devices). A token belongs to exactly one user —
+ *  re-registering the same token moves it, mirroring PushSubscription's
+ *  upsert. `lastSeenAt` drives the Web Push de-dupe rule in push.ts: a user
+ *  with a token seen in the last 30 days is reached natively, so the Web
+ *  Push fan-out is skipped for them. */
+model DevicePushToken {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  token       String   @unique
+  platform    String   @default("android")
+  appVersion  String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  lastSeenAt  DateTime @default(now())
 
   @@index([userId])
 }

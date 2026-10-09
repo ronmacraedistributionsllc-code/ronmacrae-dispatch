@@ -234,12 +234,16 @@ async function sendMessage(
   if (kind === "rider_dispatch" && senderRole === "dispatcher" && riderId && !deliveredNow) {
     const job = await ctx.prisma.job.findUnique({ where: { id: jobId }, select: { jobNumber: true } });
     void ctx.push
-      .sendToRider(riderId, {
-        title: "New message from dispatch",
-        body: job?.jobNumber ? `About order ${job.jobNumber} — open the app to reply` : "Open the app to reply",
-        tag: `message-${jobId}`,
-        url: "/",
-      })
+      .sendToRider(
+        riderId,
+        {
+          title: "New message from dispatch",
+          body: job?.jobNumber ? `About order ${job.jobNumber} — open the app to reply` : "Open the app to reply",
+          tag: `message-${jobId}`,
+          url: "/",
+        },
+        { kind: "message" },
+      )
       .catch((err) => ctx.log.error({ err: String(err), jobId }, "message push notification failed"));
   }
   return row;
