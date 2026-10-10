@@ -408,6 +408,14 @@ export async function merchantPortalRoutes(app: FastifyInstance, ctx: AppCtx): P
     const link = await createTrackingLink(ctx, row.id, { role: "merchant", businessId: merchant.businessId });
     await ctx.audit.record({ id: auth.userId, role: "merchant" }, "order.create", "job", row.id, { merchantId: merchant.id, itemCount: items.length });
     void sendDispatchOrderNotification(ctx, row.id).catch((err) => ctx.log.error({ err: String(err), jobId: row.id }, "dispatch order email failed"));
+    // Auto-dispatch: merchant orders go to the same eligible pool (their own
+    // attached/company couriers plus marketplace free-roam if the business
+    // allows it) — the merchant-direct-assign route below stays as the
+    // manual override for picking one specific courier. Awaited so a
+    // follow-up broadcast dedupes instead of duplicating.
+    await import("./offers.js")
+      .then((m) => m.autoBroadcastNewJob(ctx, row.id))
+      .catch((err) => ctx.log.error({ err: String(err), jobId: row.id }, "auto-broadcast failed"));
 
     return { order: toMerchantOrderDto(row), jobId: row.id, tracking: link };
   });

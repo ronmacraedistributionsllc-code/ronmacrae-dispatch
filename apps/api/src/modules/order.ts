@@ -377,6 +377,12 @@ export async function orderRoutes(app: FastifyInstance, ctx: AppCtx): Promise<vo
     // a customer placing this order has no staff "actor" to exclude, so
     // every admin/dispatcher at this business gets it.
     void notifyDispatchOfNewOrder(ctx, resolved.businessId, dto, null);
+    // Auto-dispatch, same as staff-created jobs (see jobs/create.ts) —
+    // deferred import for the same barrel-cycle reason, awaited so a
+    // follow-up broadcast dedupes instead of duplicating.
+    await import("./offers.js")
+      .then((m) => m.autoBroadcastNewJob(ctx, row.id))
+      .catch((err) => ctx.log.error({ err: String(err), jobId: row!.id }, "auto-broadcast failed"));
     return {
       jobId: row.id,
       jobNumber: row.jobNumber,

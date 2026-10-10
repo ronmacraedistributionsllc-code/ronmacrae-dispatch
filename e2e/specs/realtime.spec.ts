@@ -69,8 +69,15 @@ test("a dispatcher's open offers panel updates live when a rider accepts, withou
   const created = await request.post("/api/jobs", { headers: auth, data: { customerId: customer.id, itemSummary: "Realtime accept test parcel" } });
   const job = (await created.json()) as { job: { id: string; jobNumber: string | null } };
   const label = job.job.jobNumber ?? job.job.id.slice(0, 8);
-  const broadcastRes = await request.post(`/api/jobs/${job.job.id}/offers/broadcast`, { headers: auth, data: { riderIds: [rider.id] } });
-  const { offers } = (await broadcastRes.json()) as { offers: { id: string }[] };
+  // Auto-dispatch already offered this job at creation (a follow-up manual
+  // broadcast would correctly create nothing new) — accept the auto offer.
+  let offerId = "";
+  await expect(async () => {
+    const list = await request.get(`/api/jobs/${job.job.id}/offers`, { headers: auth });
+    const { offers } = (await list.json()) as { offers: { id: string; riderId?: string; status: string }[] };
+    offerId = offers.find((o) => o.riderId === rider.id && o.status === "open")?.id ?? "";
+    expect(offerId).not.toBe("");
+  }).toPass();
 
   // Dispatcher opens the Jobs screen and expands this job's offers panel BEFORE
   // the rider accepts.
@@ -90,7 +97,7 @@ test("a dispatcher's open offers panel updates live when a rider accepts, withou
   // live, not re-proving the rider UI).
   const riderLogin = await request.post("/api/auth/login", { data: { identifier: uniquePhone, password: riderPassword } });
   const riderAuth = { authorization: `Bearer ${((await riderLogin.json()) as { accessToken: string }).accessToken}` };
-  const acceptRes = await request.post(`/api/bearer/offers/${offers[0]!.id}/accept`, { headers: riderAuth });
+  const acceptRes = await request.post(`/api/bearer/offers/${offerId}/accept`, { headers: riderAuth });
   expect(acceptRes.ok()).toBe(true);
 
   await expect(offersPanel.getByTestId(`offer-rider-${rider.id}`).getByText("accepted", { exact: true })).toBeVisible({ timeout: 5_000 });

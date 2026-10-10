@@ -61,6 +61,53 @@ export function Settings(): React.JSX.Element {
           </p>
         </div>
 
+        <div className="rounded-lg border border-sky-800/40 bg-sky-950/20 p-3 space-y-3">
+          <div className="flex items-center gap-2">
+            <input
+              id="st-autobroadcast"
+              type="checkbox"
+              disabled={!canEdit}
+              checked={form.autoBroadcastOffers ?? true}
+              onChange={(e) => set({ autoBroadcastOffers: e.target.checked })}
+            />
+            <label className="text-sm font-medium" htmlFor="st-autobroadcast">🤖 Auto-offer new jobs to couriers</label>
+          </div>
+          <p className="-mt-2 text-xs text-zinc-400">
+            Every new job is automatically offered to all eligible couriers — no manual broadcast needed.
+            Turn off to go back to dispatchers picking riders by hand.
+          </p>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div>
+              <label className="label" htmlFor="st-pool">Which couriers</label>
+              <select
+                id="st-pool"
+                className="input"
+                disabled={!canEdit}
+                value={form.courierPool ?? "company"}
+                onChange={(e) => set({ courierPool: e.target.value as BusinessSettings["courierPool"] })}
+              >
+                <option value="company">Company couriers only</option>
+                <option value="free_roam">Free-roam couriers only</option>
+                <option value="both">Both</option>
+              </select>
+              <p className="mt-1 text-xs text-zinc-500">Company = couriers your admins approved. Free-roam = marketplace-approved couriers with no membership here (joining auto-creates it when they accept).</p>
+            </div>
+            <div>
+              <label className="label" htmlFor="st-expiry">Offer expiry (minutes)</label>
+              <input
+                id="st-expiry"
+                type="number"
+                min={1}
+                max={120}
+                className="input"
+                disabled={!canEdit}
+                value={form.offerExpiryMinutes ?? 15}
+                onChange={(e) => set({ offerExpiryMinutes: Number(e.target.value) })}
+              />
+            </div>
+          </div>
+        </div>
+
         <div className="grid gap-3 sm:grid-cols-2">
           <div>
             <label className="label" htmlFor="st-phone">Dispatch phone</label>

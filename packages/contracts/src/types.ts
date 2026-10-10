@@ -656,6 +656,14 @@ export interface JobOfferDto {
   riderName?: string;
 }
 
+/**
+ * One row of the rider's pending-jobs list: an unclaimed `new` job in
+ * their pool they hold no open offer for, as a full JobDto (same
+ * customer-protection as everywhere else riders see jobs). Jobs with a
+ * personal open offer live only in Available jobs, never here.
+ */
+export type PendingJobDto = JobDto;
+
 export interface AssignmentDto {
   id: string;
   jobId: string;
@@ -1093,6 +1101,14 @@ export interface BusinessSettings {
   trackingLinkTtlHours: number;
   /** true = bearer web location is best-effort; native app recommended */
   nativeAppRecommended: boolean;
+  /** Auto-dispatch: new jobs are automatically offered to every eligible
+   *  courier. Off restores the old fully-manual broadcast flow. */
+  autoBroadcastOffers: boolean;
+  /** Which couriers new jobs are offered to: `company` (active members
+   *  only), `free_roam` (marketplace-approved riders only), or `both`. */
+  courierPool: "company" | "free_roam" | "both";
+  /** Default expiry for auto-broadcast offers, in minutes. */
+  offerExpiryMinutes: number;
 }
 
 // ---------- Merchants / catalog / multi-item orders ----------

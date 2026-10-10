@@ -102,14 +102,32 @@ test("a withdrawn offer disappears from the rider's dashboard", async ({ page, r
   const created = await request.post("/api/jobs", { headers: auth, data: { customerId: customer.id, itemSummary: "Withdraw flow test parcel" } });
   const job = (await created.json()) as { job: { id: string; jobNumber: string | null } };
 
-  const broadcastRes = await request.post(`/api/jobs/${job.job.id}/offers/broadcast`, { headers: auth, data: { riderIds: [rider.id] } });
-  expect(broadcastRes.ok()).toBe(true);
-  const { offers } = (await broadcastRes.json()) as { offers: { id: string }[] };
-  expect(offers).toHaveLength(1);
-  const withdrawRes = await request.post(`/api/offers/${offers[0]!.id}/withdraw`, { headers: auth, data: {} });
+  // Auto-dispatch offers the new job without any manual broadcast — wait
+  // for this rider's offer to land, then withdraw it.
+  let offerId = "";
+  await expect(async () => {
+    const list = await request.get(`/api/jobs/${job.job.id}/offers`, { headers: auth });
+    const { offers } = (await list.json()) as { offers: { id: string; riderId?: string }[] };
+    offerId = offers.find((o) => o.riderId === rider.id)?.id ?? "";
+    expect(offerId).not.toBe("");
+  }).toPass();
+  const withdrawRes = await request.post(`/api/offers/${offerId}/withdraw`, { headers: auth, data: {} });
   expect(withdrawRes.ok()).toBe(true);
 
   await login(page, uniquePhone, riderPassword);
   await expect(page.getByRole("heading", { name: "My deliveries" })).toBeVisible();
-  await expect(page.getByText("Withdraw flow test parcel")).not.toBeVisible();
+  // No open offer card anymore — but the job isn't gone: with no open
+  // offer it now waits in Unclaimed jobs, claimable with one tap.
+  await expect(page.getByRole("heading", { name: "Unclaimed jobs" })).toBeVisible();
+  const unclaimedCard = page.locator("section.card").filter({ hasText: "Withdraw flow test parcel" });
+  await expect(unclaimedCard).toBeVisible();
+  await expect(unclaimedCard.getByText("Unclaimed", { exact: true })).toBeVisible();
+  // The shared-DB run leaves other specs' unclaimed jobs on this dashboard
+  // too, so assert exactly-one-fewer Claim button rather than zero.
+  const claimsBefore = await page.getByRole("button", { name: "Claim this job" }).count();
+  await unclaimedCard.getByRole("button", { name: "Claim this job" }).click();
+  // Claimed: this job's Claim button is gone and the job is now the
+  // rider's — visible under "To pick up".
+  await expect(page.getByRole("button", { name: "Claim this job" })).toHaveCount(claimsBefore - 1);
+  await expect(page.getByRole("heading", { name: "To pick up" })).toBeVisible();
 });

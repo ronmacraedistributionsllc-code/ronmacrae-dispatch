@@ -20,7 +20,7 @@ import { ApiError, apiFetch } from "./api.js";
  *   uncertain; the session flow owns that, not the queue).
  */
 
-export type QueuedKind = "accept-offer" | "accept-job" | "transition";
+export type QueuedKind = "accept-offer" | "accept-job" | "transition" | "claim-job";
 
 export interface QueuedAction {
   id: string;

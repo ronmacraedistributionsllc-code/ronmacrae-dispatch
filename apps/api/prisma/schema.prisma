@@ -52,6 +52,22 @@ model Business {
   pinLength            Int      @default(4)
   trackingLinkTtlHours Float    @default(72)
   nativeAppRecommended Boolean  @default(true)
+  /** Auto-dispatch: when true (default), every newly created job is
+   *  automatically offered to all eligible couriers — no manual broadcast
+   *  needed. Dispatchers can still broadcast/rebroadcast manually (e.g. to
+   *  narrow to specific riders), and turning this off restores the old
+   *  fully-manual flow. */
+  autoBroadcastOffers Boolean @default(true)
+  /** Which couriers new jobs are offered to. `company` (default) = only
+   *  riders holding an active membership at this business (today's
+   *  behavior). `free_roam` = only marketplace-approved riders
+   *  (platformStatus approved) without requiring a membership — accepting
+   *  auto-creates their membership. `both` = company members plus
+   *  marketplace-approved free-roam riders. */
+  courierPool        CourierPool @default(company)
+  /** Default expiry for auto-broadcast offers, in minutes. Manual
+   *  broadcasts still take their own expiresInMinutes. */
+  offerExpiryMinutes Int         @default(15)
   createdAt            DateTime @default(now())
   updatedAt            DateTime @updatedAt
 
@@ -564,6 +580,12 @@ enum RiderAttachment {
   freelance
   merchant
   logistics
+}
+
+enum CourierPool {
+  company
+  free_roam
+  both
 }
 
 /**

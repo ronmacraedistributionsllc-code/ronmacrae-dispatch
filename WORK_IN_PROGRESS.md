@@ -4499,3 +4499,34 @@ in `notifications.spec.ts` updated — it checked the old raw
 `"order_confirmed"` key text, which is now a friendly label, same
 treatment the status column next to it already had). Full detail in
 `PHASE3_COURIER_BRANDING_CHECKPOINT.md`.
+
+## Auto-dispatch (2026-10-10, branch `android-native`) — DONE and verified
+
+New jobs are automatically offered to every eligible courier at creation
+(staff, public order form, merchant portal — all three funnels), and
+couriers see an "Unclaimed jobs" list they can claim from with one tap.
+Manual broadcast/rebroadcast/direct-assign all still work as overrides.
+
+- **Model (additive):** `Business.autoBroadcastOffers` (default true),
+  `Business.courierPool` (`company` default = today's behavior,
+  `free_roam`, `both`), `Business.offerExpiryMinutes` (default 15).
+  Company pool = active members only; free-roam = marketplace-approved
+  riders (`platformStatus: approved` by the ultra admin) with no
+  membership needed — accepting auto-creates it (the pool opt-in IS the
+  business's approval). Admin gating itself is unchanged: business admins
+  approve memberships in Team → Pending courier applications
+  (`POST /api/riders/:id/decide`), ultra admin vets marketplace riders
+  (`platformStatus` + attachment).
+- **Shared claim transaction** for offer-accept and pending-claim
+  (single winner, in-tx capacity check, idempotent, withdraws losers).
+  Manual broadcast skips already-offered riders (no stacked duplicates);
+  creation hooks are awaited so a follow-up broadcast dedupes.
+- **Rider UI:** "Unclaimed jobs" section with Claim buttons (offline
+  queue supported via new `claim-job` kind); jobs with a personal open
+  offer live only in Available jobs. Settings page has the three new
+  admin controls. No auto-rebroadcast on expiry by design (no push spam)
+  — expired work falls back to the pending list.
+- **Verification:** typecheck 0 errors; lint 0; API 52 files 395/395
+  (new `auto-dispatch.test.ts`, 11); web 53/53; build clean; e2e 50/50
+  serial (offers + realtime specs updated to the auto world: broadcast
+  returns [] when already offered; withdrawn jobs surface as claimable).

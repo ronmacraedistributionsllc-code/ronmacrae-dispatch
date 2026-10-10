@@ -223,6 +223,16 @@ export async function createJob(
   const returnJobId = await returnJobFor(ctx, row.id);
   const dto = jobToDto(row, viewer, ctx.config.APP_ORIGIN, { returnJobId });
   void notifyDispatchOfNewOrder(ctx, businessId, dto, actor.id);
+  // Auto-dispatch: offer to every eligible courier (company pool and/or
+  // marketplace free-roam, per business settings). Deferred import — offers.ts
+  // imports this module's barrel, so a static import would cycle. Awaited
+  // (not void) on purpose: the writes are just a few indexed rows, and
+  // awaiting means a manual broadcast issued right after creation sees the
+  // auto offers and dedupes instead of stacking duplicates. Failures still
+  // never fail the order — autoBroadcastNewJob catches internally.
+  await import("../offers.js")
+    .then((m) => m.autoBroadcastNewJob(ctx, row.id))
+    .catch((err) => ctx.log.error({ err: String(err), jobId: row.id }, "auto-broadcast failed"));
   return dto;
 }
 

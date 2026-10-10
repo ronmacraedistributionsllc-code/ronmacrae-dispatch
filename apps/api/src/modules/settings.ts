@@ -15,6 +15,9 @@ const BusinessSettingsBody = z.object({
   pinLength: z.number().int().min(4).max(10).default(4),
   trackingLinkTtlHours: z.number().positive().max(720).default(72),
   nativeAppRecommended: z.boolean().default(true),
+  autoBroadcastOffers: z.boolean().default(true),
+  courierPool: z.enum(["company", "free_roam", "both"]).default("company"),
+  offerExpiryMinutes: z.number().int().min(1).max(120).default(15),
 });
 
 /** Business settings now live directly on the Business row (multi-tenancy,
@@ -35,6 +38,9 @@ export async function getBusinessSettings(app: AppCtx, businessId: string): Prom
     pinLength: row.pinLength,
     trackingLinkTtlHours: row.trackingLinkTtlHours,
     nativeAppRecommended: row.nativeAppRecommended,
+    autoBroadcastOffers: row.autoBroadcastOffers,
+    courierPool: row.courierPool as BusinessSettings["courierPool"],
+    offerExpiryMinutes: row.offerExpiryMinutes,
   };
 }
 
@@ -59,6 +65,9 @@ export async function settingsRoutes(app: FastifyInstance, ctx: AppCtx): Promise
         pinLength: body.pinLength,
         trackingLinkTtlHours: body.trackingLinkTtlHours,
         nativeAppRecommended: body.nativeAppRecommended,
+        autoBroadcastOffers: body.autoBroadcastOffers,
+        courierPool: body.courierPool,
+        offerExpiryMinutes: body.offerExpiryMinutes,
       },
     });
     await ctx.audit.record({ id: req.user!.sub, role: req.user!.role }, "settings.business_update", "setting", "business");

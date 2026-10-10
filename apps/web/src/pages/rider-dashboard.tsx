@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import type { DispatchContactDto, JobDto, JobOfferDto, JobStatus, RiderStatus } from "@ronmacrae/contracts";
+import type { DispatchContactDto, JobDto, JobOfferDto, JobStatus, PendingJobDto, RiderStatus } from "@ronmacrae/contracts";
 import { ACTIVE_JOB_STATUSES, API, TERMINAL_JOB_STATUSES } from "@ronmacrae/contracts";
 import { majorOf } from "@ronmacrae/money";
 import { ApiError, apiFetch, formatMoney } from "../lib/api.js";
@@ -137,6 +137,14 @@ export function RiderDashboard(): React.JSX.Element {
     // for a dropped connection and for sweeping expired offers off the list.
     refetchInterval: 20_000,
   });
+  const pendingJobs = useQuery({
+    queryKey: ["bearer-pending-jobs"],
+    queryFn: () => apiFetch<{ jobs: PendingJobDto[] }>(API.bearer.pendingJobs),
+    // Same 20s fallback as offers — plus every offer/job.assigned push
+    // refreshes this too (see refreshOffersAndJobs), so an auto-broadcast
+    // lands here within one poll at most.
+    refetchInterval: 20_000,
+  });
   // A rider can carry several jobs at once — this toggle is the rider's own,
   // explicit "send me more work / don't" choice. It's independent of how many
   // jobs they're already carrying: accepting a job never flips this off, and
@@ -148,6 +156,7 @@ export function RiderDashboard(): React.JSX.Element {
   const refreshOffersAndJobs = () => {
     void qc.invalidateQueries({ queryKey: ["bearer-offers"] });
     void qc.invalidateQueries({ queryKey: ["bearer-jobs"] });
+    void qc.invalidateQueries({ queryKey: ["bearer-pending-jobs"] });
   };
 
   const reorder = useMutation({
@@ -273,6 +282,18 @@ export function RiderDashboard(): React.JSX.Element {
       <p className="text-sm text-zinc-500">No jobs available right now — they'll appear here the moment dispatch offers one.</p>
     ) : (
       <div className="space-y-2">{allOffers.map((offer) => <OfferCard key={offer.id} offer={offer} onChanged={refreshOffersAndJobs} />)}</div>
+    )}
+
+    {/* Unclaimed work: new jobs nobody has taken yet, in this courier's
+      *  pool (their companies' plus marketplace free-roam where allowed).
+      *  Anything with a personal open offer also appears under Available
+      *  jobs above — this list is the fallback offers never needed. */}
+    <SectionHeading label="Unclaimed jobs" count={pendingJobs.data?.jobs.length ?? 0} />
+    {pendingJobs.isLoading ? <p className="text-sm text-zinc-400">Checking for unclaimed jobs…</p> : null}
+    {!pendingJobs.isLoading && (pendingJobs.data?.jobs.length ?? 0) === 0 ? (
+      <p className="text-sm text-zinc-500">Nothing waiting to be claimed — new jobs land here automatically.</p>
+    ) : (
+      <div className="space-y-2">{(pendingJobs.data?.jobs ?? []).map((job) => <PendingJobCard key={job.id} job={job} onChanged={refreshOffersAndJobs} />)}</div>
     )}
 
     {activeJobs.length > 0 ? (
@@ -563,9 +584,58 @@ function OfferCard({ offer, onChanged }: { offer: JobOfferDto; onChanged: () => 
   </section>;
 }
 
+/**
+ * One row of the Unclaimed-jobs list. Claiming uses the same
+ * conditional-claim transaction as accepting an offer (single winner,
+ * capacity-checked, idempotent) — first tap wins, everyone else gets an
+ * honest "already claimed". Offline taps queue like offer accepts.
+ */
+function PendingJobCard({ job, onChanged }: { job: PendingJobDto; onChanged: () => void }): React.JSX.Element {
+  const queued = useQueuedActions();
+  const pending = pendingForJob(queued, job.id).filter((a) => a.state === "pending");
+  const jobLabel = job.jobNumber ?? job.id.slice(0, 8);
+  const claim = useMutation({
+    mutationFn: () => apiFetch(API.bearer.claimPendingJob(job.id), { method: "POST", body: JSON.stringify({}) }),
+    onSuccess: onChanged,
+    onError: (err) => {
+      if (isOfflineError(err)) {
+        void enqueueAction({
+          kind: "claim-job",
+          jobId: job.id,
+          url: API.bearer.claimPendingJob(job.id),
+          body: "{}",
+          label: `Claim job ${jobLabel}`,
+        });
+      }
+    },
+  });
+  const rawError = claim.error;
+  const error = rawError && isOfflineError(rawError) ? null : rawError;
+
+  return <section className="card space-y-2 border border-zinc-700">
+    <div className="flex items-start justify-between gap-3">
+      <div>
+        {job.merchantName ? <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">{job.merchantName}</p> : null}
+        <h2 className="font-semibold">{jobLabel}: {job.pickupAddressText ?? "Pickup TBC"} → {job.addressText ?? "Destination TBC"}</h2>
+        <p className="text-xs text-zinc-400">{job.itemSummary ?? "No item details"}</p>
+      </div>
+      <span className="whitespace-nowrap rounded bg-zinc-800 px-2 py-1 text-xs font-medium text-zinc-400">Unclaimed</span>
+    </div>
+    <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm sm:grid-cols-3">
+      <div><dt className="label !mb-0">Delivery fee</dt><dd className="text-zinc-200">{formatMoney(job.fee)}</dd></div>
+      <div><dt className="label !mb-0">Cash to collect</dt><dd className="text-zinc-200">{formatMoney(job.amountExpected)}</dd></div>
+    </dl>
+    {error ? <p className="text-sm text-red-400">{error instanceof ApiError ? error.message : "Could not claim this job"}</p> : null}
+    {pending.length > 0 ? <p className="text-xs text-sky-300">Pending sync — your claim will send automatically when you&apos;re back online.</p> : null}
+    <div className="flex gap-2">
+      <button className="btn-accent" disabled={claim.isPending} onClick={() => void claim.mutate()}>{claim.isPending ? "Claiming…" : "Claim this job"}</button>
+    </div>
+  </section>;
+}
+
 /** Universal maps deep link — opens the destination in whatever maps app the
  *  device already has (falls back to Google Maps in a browser); we never
- *  claim to know which navigation app is installed, this link format just
+ *  claim to know which navigation app the installed, this link format just
  *  works with all of them. */
 function navigateHref(job: JobDto): string {
   if (job.point) return `https://www.google.com/maps/dir/?api=1&destination=${job.point.lat},${job.point.lng}`;

@@ -452,6 +452,9 @@ export const API = {
     offers: "/api/bearer/offers",
     acceptOffer: (id: string) => `/api/bearer/offers/${id}/accept`,
     declineOffer: (id: string) => `/api/bearer/offers/${id}/decline`,
+    /** Unclaimed new jobs this courier can see (their pool), with `offered` flags. */
+    pendingJobs: "/api/bearer/pending-jobs",
+    claimPendingJob: (id: string) => `/api/bearer/pending-jobs/${id}/claim`,
     /** rider sets their own intended work order for their active jobs (spec 5B) */
     reorder: "/api/bearer/jobs/reorder",
     /** "Contact dispatch" button — spec 5F */
