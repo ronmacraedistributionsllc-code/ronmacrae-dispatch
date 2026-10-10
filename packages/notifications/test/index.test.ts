@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { MemoryProvider, renderTemplate, listTemplates, TwilioProvider, createNotificationProvider } from "../src/index.js";
+import { MemoryProvider, renderTemplate, listTemplates, TwilioProvider, createNotificationProvider, ResendEmailProvider, createEmailProvider } from "../src/index.js";
 
 describe("templates", () => {
   it("renders params and leaves unknown placeholders", () => {
@@ -93,5 +93,61 @@ describe("TwilioProvider", () => {
   it("factory picks memory by default", () => {
     expect(createNotificationProvider({ provider: "memory" }).name).toBe("memory");
     expect(createNotificationProvider({ provider: "twilio", twilio: {} }).name).toBe("twilio");
+  });
+});
+
+describe("ResendEmailProvider", () => {
+  it("fails cleanly without credentials", async () => {
+    const p = new ResendEmailProvider({});
+    const noKey = await p.send({ to: "a@example.com", subject: "s", text: "t" });
+    expect(noKey.status).toBe("failed");
+    expect(noKey.error).toMatch(/API key/);
+    const noFrom = await new ResendEmailProvider({ apiKey: "k" }).send({ to: "a@example.com", subject: "s", text: "t" });
+    expect(noFrom.status).toBe("failed");
+    expect(noFrom.error).toMatch(/EMAIL_FROM/);
+  });
+
+  it("posts the exact Resend shape and surfaces provider rejections verbatim", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ id: "mail_123" }),
+      text: async () => "",
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const p = new ResendEmailProvider({
+      apiKey: "re_test",
+      from: "Ronmacrae Dispatch <orders@ronmacraedistributions.com>",
+      apiBase: "https://api.example.test",
+    });
+    const ok = await p.send({ to: "rider@example.com", subject: "Verify your email", text: "code 123", refId: "c1" });
+    expect(ok).toEqual({ status: "sent", providerRef: "mail_123" });
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("https://api.example.test/emails");
+    expect(init.headers).toMatchObject({ Authorization: "Bearer re_test" });
+    expect(JSON.parse(String((init as { body: string }).body))).toEqual({
+      from: "Ronmacrae Dispatch <orders@ronmacraedistributions.com>",
+      to: "rider@example.com",
+      subject: "Verify your email",
+      text: "code 123",
+    });
+
+    fetchMock.mockResolvedValueOnce({
+      ok: false,
+      status: 403,
+      json: async () => ({}),
+      text: async () => "The domain is not verified",
+    });
+    const rejected = await p.send({ to: "r@example.com", subject: "s", text: "t" });
+    expect(rejected.status).toBe("failed");
+    // The provider's own message is preserved verbatim — it's what tells a
+    // bad key apart from an unverified domain in the production logs.
+    expect(rejected.error).toContain("403");
+    expect(rejected.error).toContain("not verified");
+    vi.unstubAllGlobals();
+  });
+
+  it("email factory picks resend when configured", () => {
+    expect(createEmailProvider({ provider: "resend", resend: {} }).name).toBe("resend");
+    expect(createEmailProvider({ provider: "memory" }).name).toBe("memory");
   });
 });
