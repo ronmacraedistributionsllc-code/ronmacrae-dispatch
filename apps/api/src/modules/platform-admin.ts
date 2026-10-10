@@ -4,6 +4,7 @@ import { httpErrors } from "@fastify/sensible";
 import type { AppCtx } from "../ctx.js";
 import { buildRiderCashProfile } from "./cash-profile.js";
 import { resolveStaffContext, toUserDto } from "./auth.js";
+import { ACTIVE_JOB_STATUSES, TERMINAL_JOB_STATUSES } from "@ronmacrae/contracts";
 
 /**
  * The platform-owner console (spec: "Build or complete the real Platform
@@ -71,6 +72,26 @@ export async function platformAdminRoutes(app: FastifyInstance, ctx: AppCtx): Pr
     const business = await ctx.prisma.business.update({ where: { id: req.params.id }, data: { active: body.active } });
     await ctx.audit.record({ id: req.user!.sub, role: "platform_owner" }, body.active ? "platform.business.reactivate" : "platform.business.disable", "business", business.id);
     return { ok: true, active: business.active };
+  });
+
+  // Master delete (spec: the ultra admin can delete ANY business, merchant,
+  // rider, logistics company, or team member). Deletion here is always
+  // deactivation, never row removal — every historical relation (jobs,
+  // ratings, audit, settlements, memberships) stays intact, and the same
+  // `active` flags the login paths already enforce do the locking:
+  // merchant/logistics portals check their own `active`, staff sessions
+  // die at login/refresh via the business-active filter in
+  // realStaffMemberships, and rider routes require an active membership.
+  // Every delete refuses while live (non-terminal) work still references
+  // the record — finish or cancel the work first, then delete.
+  app.delete<{ Params: { id: string } }>("/api/platform/businesses/:id", { preHandler: owner }, async (req) => {
+    const business = await ctx.prisma.business.findUnique({ where: { id: req.params.id } });
+    if (!business) throw httpErrors.createError(404, "Business not found");
+    const live = await ctx.prisma.job.count({ where: { businessId: business.id, status: { notIn: [...TERMINAL_JOB_STATUSES] }, deletedAt: null } });
+    if (live > 0) throw httpErrors.createError(409, `This business still has ${live} live order${live === 1 ? "" : "s"} — finish or cancel them first.`);
+    await ctx.prisma.business.update({ where: { id: business.id }, data: { active: false } });
+    await ctx.audit.record({ id: req.user!.sub, role: "platform_owner" }, "platform.business.delete", "business", business.id, { name: business.name });
+    return { ok: true };
   });
 
   // ---------------------------------------------------------------------
@@ -143,6 +164,16 @@ export async function platformAdminRoutes(app: FastifyInstance, ctx: AppCtx): Pr
     return { ok: true, active: merchant.active };
   });
 
+  app.delete<{ Params: { id: string } }>("/api/platform/merchants/:id", { preHandler: owner }, async (req) => {
+    const merchant = await ctx.prisma.merchant.findUnique({ where: { id: req.params.id } });
+    if (!merchant) throw httpErrors.createError(404, "Merchant not found");
+    const live = await ctx.prisma.job.count({ where: { merchantId: merchant.id, status: { notIn: [...TERMINAL_JOB_STATUSES] }, deletedAt: null } });
+    if (live > 0) throw httpErrors.createError(409, `This merchant still has ${live} live order${live === 1 ? "" : "s"} — finish or cancel them first.`);
+    await ctx.prisma.merchant.update({ where: { id: merchant.id }, data: { active: false } });
+    await ctx.audit.record({ id: req.user!.sub, role: "platform_owner" }, "platform.merchant.delete", "merchant", merchant.id, { name: merchant.name });
+    return { ok: true };
+  });
+
   // ---------------------------------------------------------------------
   // Logistics companies — across every business, mirrors merchants above.
   // ---------------------------------------------------------------------
@@ -210,6 +241,20 @@ export async function platformAdminRoutes(app: FastifyInstance, ctx: AppCtx): Pr
     return { ok: true, active: company.active };
   });
 
+  app.delete<{ Params: { id: string } }>("/api/platform/logistics-companies/:id", { preHandler: owner }, async (req) => {
+    const company = await ctx.prisma.logisticsCompany.findUnique({ where: { id: req.params.id } });
+    if (!company) throw httpErrors.createError(404, "Logistics company not found");
+    // Attached riders keep their rows (history stays intact) — but nobody
+    // may be mid-delivery for a company being deleted.
+    const carrying = await ctx.prisma.job.count({
+      where: { rider: { attachedLogisticsCompanyId: company.id }, status: { in: [...ACTIVE_JOB_STATUSES] } },
+    });
+    if (carrying > 0) throw httpErrors.createError(409, `This company's couriers are still carrying ${carrying} live job${carrying === 1 ? "" : "s"} — finish or reassign them first.`);
+    await ctx.prisma.logisticsCompany.update({ where: { id: company.id }, data: { active: false } });
+    await ctx.audit.record({ id: req.user!.sub, role: "platform_owner" }, "platform.logistics_company.delete", "logistics_company", company.id, { name: company.name });
+    return { ok: true };
+  });
+
   // ---------------------------------------------------------------------
   // Riders — platform-wide approval/blocking (spec: "Platform Admin
   // controls whether a rider is freelancer/platform-approved... or
@@ -245,6 +290,11 @@ export async function platformAdminRoutes(app: FastifyInstance, ctx: AppCtx): Pr
         accountDeleted: r.user?.deletedAt != null,
         accountActive: r.user?.active ?? null,
         platformStatus: r.platformStatus,
+        // Free-roam input facts: marketplace work needs approved AND
+        // self-signed-up (see Rider.selfSignedUp); createdByBusinessId
+        // tells which company's admin may delete this profile outright.
+        selfSignedUp: r.selfSignedUp,
+        createdByBusinessId: r.createdByBusinessId,
         status: r.status,
         attachment: r.attachment,
         attachedMerchant: r.attachedMerchant ? { id: r.attachedMerchant.id, name: r.attachedMerchant.name } : null,
@@ -285,6 +335,8 @@ export async function platformAdminRoutes(app: FastifyInstance, ctx: AppCtx): Pr
         vehicle: rider.vehicle,
         active: rider.active,
         platformStatus: rider.platformStatus,
+        selfSignedUp: rider.selfSignedUp,
+        createdByBusinessId: rider.createdByBusinessId,
         status: rider.status,
         attachment: rider.attachment,
         attachedMerchant: rider.attachedMerchant ? { id: rider.attachedMerchant.id, name: rider.attachedMerchant.name } : null,
@@ -366,6 +418,24 @@ export async function platformAdminRoutes(app: FastifyInstance, ctx: AppCtx): Pr
       { platformStatus: body.platformStatus, active: body.active, ...attachmentData },
     );
     return { ok: true, platformStatus: rider.platformStatus, active: rider.active, attachment: rider.attachment, attachedMerchantId: rider.attachedMerchantId, attachedLogisticsCompanyId: rider.attachedLogisticsCompanyId };
+  });
+
+  // Master courier delete — deactivation, never row removal (their jobs,
+  // ratings, and audit history stay intact). Refuses while they're
+  // carrying live work; withdraws their open offers and ends every
+  // membership so no business keeps receiving them.
+  app.delete<{ Params: { id: string } }>("/api/platform/riders/:id", { preHandler: owner }, async (req) => {
+    const rider = await ctx.prisma.rider.findUnique({ where: { id: req.params.id } });
+    if (!rider) throw httpErrors.createError(404, "Courier not found");
+    const carrying = await ctx.prisma.job.count({ where: { riderId: rider.id, status: { in: [...ACTIVE_JOB_STATUSES] } } });
+    if (carrying > 0) throw httpErrors.createError(409, `This courier is still carrying ${carrying} live job${carrying === 1 ? "" : "s"} — finish or reassign them first.`);
+    await ctx.prisma.$transaction([
+      ctx.prisma.rider.update({ where: { id: rider.id }, data: { active: false, status: "offline" } }),
+      ctx.prisma.riderMembership.updateMany({ where: { riderId: rider.id }, data: { status: "removed" } }),
+      ctx.prisma.jobOffer.updateMany({ where: { riderId: rider.id, status: "open" }, data: { status: "withdrawn", note: "rider deleted" } }),
+    ]);
+    await ctx.audit.record({ id: req.user!.sub, role: "platform_owner" }, "platform.rider.delete", "rider", rider.id, { name: rider.name, phone: rider.phone });
+    return { ok: true };
   });
 
   // Spec: one rider can belong to more than one merchant (a many-to-many

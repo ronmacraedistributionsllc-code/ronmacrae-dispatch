@@ -35,6 +35,9 @@ interface RiderRow {
   accountDeleted: boolean;
   accountActive: boolean | null;
   platformStatus: "pending" | "approved" | "suspended";
+  /** Free-roam input fact: marketplace work needs approved AND this. */
+  selfSignedUp: boolean;
+  createdByBusinessId: string | null;
   status: string;
   attachment: RiderAttachment;
   attachedMerchant: { id: string; name: string } | null;
@@ -181,6 +184,12 @@ function BusinessesTab(): React.JSX.Element {
     mutationFn: ({ id, active }: { id: string; active: boolean }) => apiFetch(API.platform.updateBusiness(id), { method: "PATCH", body: JSON.stringify({ active }) }),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["platform", "businesses"] }),
   });
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const removeBusiness = useMutation({
+    mutationFn: (id: string) => apiFetch(API.platform.deleteBusiness(id), { method: "DELETE" }),
+    onSuccess: () => { setConfirmDeleteId(null); void qc.invalidateQueries({ queryKey: ["platform", "businesses"] }); },
+    onError: (err) => { setConfirmDeleteId(null); window.alert(err instanceof ApiError ? err.message : "Could not delete this business"); },
+  });
   return (
     <div className="space-y-3">
       <SearchBox value={q} onChange={setQ} />
@@ -197,6 +206,19 @@ function BusinessesTab(): React.JSX.Element {
               <button className="btn !px-3 !py-1 text-xs" disabled={toggle.isPending} onClick={() => void toggle.mutate({ id: b.id, active: !b.active })}>
                 {b.active ? "Disable" : "Reactivate"}
               </button>
+              {confirmDeleteId === b.id ? (
+                <span className="flex items-center gap-2 text-xs">
+                  <span className="text-red-300">Delete {b.name}? Locks all logins; history stays.</span>
+                  <button className="btn !px-3 !py-1 text-xs !border-red-800 !text-red-300" disabled={removeBusiness.isPending} onClick={() => void removeBusiness.mutate(b.id)}>
+                    {removeBusiness.isPending ? "Deleting…" : "Confirm"}
+                  </button>
+                  <button className="btn !px-3 !py-1 text-xs" onClick={() => setConfirmDeleteId(null)}>Keep</button>
+                </span>
+              ) : (
+                <button className="btn !px-3 !py-1 text-xs !text-red-300" onClick={() => setConfirmDeleteId(b.id)}>
+                  Delete
+                </button>
+              )}
             </div>
           </div>
         ))}
@@ -233,8 +255,10 @@ function ApplicationRow({
   onApprove,
   onReject,
   onToggleActive,
+  onDelete,
   reviewPending,
   togglePending,
+  deletePending,
 }: {
   name: string;
   email: string | null;
@@ -247,11 +271,14 @@ function ApplicationRow({
   onApprove: () => void;
   onReject: (reason: string) => void;
   onToggleActive: () => void;
+  onDelete: () => void;
   reviewPending: boolean;
   togglePending: boolean;
+  deletePending: boolean;
 }): React.JSX.Element {
   const [rejecting, setRejecting] = useState(false);
   const [reason, setReason] = useState("");
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
   return (
     <div className="card space-y-2">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -276,6 +303,19 @@ function ApplicationRow({
               <button className="btn !px-3 !py-1 text-xs" disabled={togglePending} onClick={onToggleActive}>
                 {active ? "Disable" : "Reactivate"}
               </button>
+              {confirmingDelete ? (
+                <span className="flex items-center gap-2 text-xs">
+                  <span className="text-red-300">Delete {name}? Logins stop; history stays.</span>
+                  <button className="btn !px-3 !py-1 text-xs !border-red-800 !text-red-300" disabled={deletePending} onClick={() => { onDelete(); setConfirmingDelete(false); }}>
+                    {deletePending ? "Deleting…" : "Confirm"}
+                  </button>
+                  <button className="btn !px-3 !py-1 text-xs" onClick={() => setConfirmingDelete(false)}>Keep</button>
+                </span>
+              ) : (
+                <button className="btn !px-3 !py-1 text-xs !text-red-300" onClick={() => setConfirmingDelete(true)}>
+                  Delete
+                </button>
+              )}
             </>
           )}
         </div>
@@ -316,6 +356,11 @@ function MerchantsTab(): React.JSX.Element {
       apiFetch(API.platform.reviewMerchant(id), { method: "POST", body: JSON.stringify({ decision, reason }) }),
     onSuccess: invalidate,
   });
+  const removeMerchant = useMutation({
+    mutationFn: (id: string) => apiFetch(API.platform.deleteMerchant(id), { method: "DELETE" }),
+    onSuccess: invalidate,
+    onError: (err) => window.alert(err instanceof ApiError ? err.message : "Could not delete this merchant"),
+  });
   return (
     <div className="space-y-3">
       <SearchBox value={q} onChange={setQ} />
@@ -335,8 +380,10 @@ function MerchantsTab(): React.JSX.Element {
             onApprove={() => void review.mutate({ id: m.id, decision: "approve" })}
             onReject={(reason) => void review.mutate({ id: m.id, decision: "reject", reason })}
             onToggleActive={() => void toggle.mutate({ id: m.id, active: !m.active })}
+            onDelete={() => void removeMerchant.mutate(m.id)}
             reviewPending={review.isPending}
             togglePending={toggle.isPending}
+            deletePending={removeMerchant.isPending}
           />
         ))}
       </div>
@@ -358,6 +405,11 @@ function LogisticsTab(): React.JSX.Element {
       apiFetch(API.platform.reviewLogisticsCompany(id), { method: "POST", body: JSON.stringify({ decision, reason }) }),
     onSuccess: invalidate,
   });
+  const removeCompany = useMutation({
+    mutationFn: (id: string) => apiFetch(API.platform.deleteLogisticsCompany(id), { method: "DELETE" }),
+    onSuccess: invalidate,
+    onError: (err) => window.alert(err instanceof ApiError ? err.message : "Could not delete this company"),
+  });
   return (
     <div className="space-y-3">
       <SearchBox value={q} onChange={setQ} />
@@ -377,8 +429,10 @@ function LogisticsTab(): React.JSX.Element {
             onApprove={() => void review.mutate({ id: c.id, decision: "approve" })}
             onReject={(reason) => void review.mutate({ id: c.id, decision: "reject", reason })}
             onToggleActive={() => void toggle.mutate({ id: c.id, active: !c.active })}
+            onDelete={() => void removeCompany.mutate(c.id)}
             reviewPending={review.isPending}
             togglePending={toggle.isPending}
+            deletePending={removeCompany.isPending}
           />
         ))}
       </div>
@@ -416,6 +470,16 @@ function RidersTab(): React.JSX.Element {
     },
     onError: (err) => window.alert(err instanceof ApiError ? err.message : "Could not update merchant assignment"),
   });
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const deleteRider = useMutation({
+    mutationFn: (id: string) => apiFetch(API.platform.deleteRider(id), { method: "DELETE" }),
+    onSuccess: () => {
+      setConfirmDeleteId(null);
+      void qc.invalidateQueries({ queryKey: ["platform", "riders"] });
+      void qc.invalidateQueries({ queryKey: ["platform", "rider"] });
+    },
+    onError: (err) => { setConfirmDeleteId(null); window.alert(err instanceof ApiError ? err.message : "Could not delete this courier"); },
+  });
   return (
     <div className="space-y-3">
       <SearchBox value={q} onChange={setQ} />
@@ -435,6 +499,10 @@ function RidersTab(): React.JSX.Element {
               </div>
             </div>
             <p className="text-xs text-zinc-500">{r.phone}{r.email ? ` · ${r.email}` : ""} · {r.vehicle} · member of {r.memberships.map((m) => m.businessName).join(", ") || "no business yet"}</p>
+            <p className="text-xs text-zinc-500">
+              {r.selfSignedUp ? "Signed up independently" : "Added by a company"}
+              {r.platformStatus === "approved" && r.selfSignedUp ? " · free-roam eligible" : null}
+            </p>
             <div className="flex flex-wrap gap-2">
               {r.platformStatus !== "approved" ? (
                 <button className="btn !px-3 !py-1 text-xs !border-emerald-700 !text-emerald-300" disabled={update.isPending} onClick={() => void update.mutate({ id: r.id, platformStatus: "approved" })}>
@@ -449,6 +517,19 @@ function RidersTab(): React.JSX.Element {
               <button className="btn !px-3 !py-1 text-xs" disabled={update.isPending} onClick={() => void update.mutate({ id: r.id, active: !r.active })}>
                 {r.active ? "Disable login" : "Re-enable login"}
               </button>
+              {confirmDeleteId === r.id ? (
+                <span className="flex items-center gap-2 text-xs">
+                  <span className="text-red-300">Delete {r.name}? Memberships end; jobs and history stay.</span>
+                  <button className="btn !px-3 !py-1 text-xs !border-red-800 !text-red-300" disabled={deleteRider.isPending} onClick={() => void deleteRider.mutate(r.id)}>
+                    {deleteRider.isPending ? "Deleting…" : "Confirm"}
+                  </button>
+                  <button className="btn !px-3 !py-1 text-xs" onClick={() => setConfirmDeleteId(null)}>Keep</button>
+                </span>
+              ) : (
+                <button className="btn !px-3 !py-1 text-xs !text-red-300" onClick={() => setConfirmDeleteId(r.id)}>
+                  Delete
+                </button>
+              )}
               {r.userId && !r.accountDeleted ? (
                 <AccountActions userId={r.userId} name={r.name} onDeleted={() => void qc.invalidateQueries({ queryKey: ["platform", "riders"] })} />
               ) : r.accountDeleted ? (

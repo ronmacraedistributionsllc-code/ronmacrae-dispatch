@@ -81,9 +81,15 @@ function CreateForm({ onDone }: { onDone: () => void }): React.JSX.Element {
 
 function CompanyRow({ company, canEdit, onChanged }: { company: LogisticsCompanyDto; canEdit: boolean; onChanged: () => void }): React.JSX.Element {
   const [showPortalForm, setShowPortalForm] = useState(false);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
   const toggleActive = useMutation({
     mutationFn: () => apiFetch(API.logisticsCompanies.update(company.id), { method: "PATCH", body: JSON.stringify({ active: !company.active }) }),
     onSuccess: onChanged,
+  });
+  const removeCompany = useMutation({
+    mutationFn: () => apiFetch(API.logisticsCompanies.removeCompany(company.id), { method: "DELETE" }),
+    onSuccess: onChanged,
+    onError: () => setConfirmingDelete(false),
   });
 
   return (
@@ -108,7 +114,23 @@ function CompanyRow({ company, canEdit, onChanged }: { company: LogisticsCompany
             {showPortalForm ? "Cancel" : "Portal access"}
           </button>
         ) : null}
+        {canEdit ? (
+          confirmingDelete ? (
+            <span className="flex items-center gap-2 text-xs">
+              <span className="text-red-300">Delete {company.name}? Portal logins stop; couriers and history stay.</span>
+              <button type="button" className="btn !border-red-800 !px-3 !py-1 text-xs !text-red-300" disabled={removeCompany.isPending} onClick={() => void removeCompany.mutate()}>
+                {removeCompany.isPending ? "Deleting…" : "Confirm delete"}
+              </button>
+              <button type="button" className="btn !px-3 !py-1 text-xs" onClick={() => setConfirmingDelete(false)}>Keep</button>
+            </span>
+          ) : (
+            <button type="button" className="btn !px-3 !py-1 text-xs !text-red-300" onClick={() => setConfirmingDelete(true)}>
+              Delete
+            </button>
+          )
+        ) : null}
       </div>
+      {removeCompany.error ? <p className="text-sm text-red-400">{removeCompany.error instanceof ApiError ? removeCompany.error.message : "Could not delete this company"}</p> : null}
       {showPortalForm ? <GrantPortalAccessForm companyId={company.id} onDone={() => setShowPortalForm(false)} /> : null}
     </section>
   );

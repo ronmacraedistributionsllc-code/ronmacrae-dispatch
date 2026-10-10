@@ -4,6 +4,7 @@ import { httpErrors } from "@fastify/sensible";
 import type { AppCtx } from "../ctx.js";
 import { minorOf, money } from "@ronmacrae/money";
 import type { MerchantDto, MerchantPublicDto, ProductDto, ProductVariantDto } from "@ronmacrae/contracts";
+import { TERMINAL_JOB_STATUSES } from "@ronmacrae/contracts";
 import { pointFromJson, pointToJson } from "../geo-mappers.js";
 import { hashPassword } from "../lib/password.js";
 import { sendEmailCode, consumeEmailCode } from "./customer-account.js";
@@ -336,6 +337,23 @@ export async function merchantRoutes(app: FastifyInstance, ctx: AppCtx): Promise
     });
     await ctx.audit.record({ id: req.user!.sub, role: req.user!.role }, "merchant.update", "merchant", merchant.id);
     return { merchant: merchantToDto(merchant, ctx.config.APP_ORIGIN) };
+  });
+
+  // Business-admin delete: own company's merchants only (scoped by
+  // businessId — another company's merchant is "not found", never
+  // "forbidden"). Deactivation, never row removal: portal logins check
+  // merchant.active, while every historical order keeps its link.
+  // Refuses while live (non-terminal) orders still reference the
+  // merchant — finish or cancel those first.
+  app.delete<{ Params: { id: string } }>("/api/merchants/:id", { preHandler: owner }, async (req) => {
+    const businessId = req.user!.businessId!;
+    const existing = await ctx.prisma.merchant.findFirst({ where: { id: req.params.id, businessId } });
+    if (!existing) throw httpErrors.createError(404, "Merchant not found");
+    const live = await ctx.prisma.job.count({ where: { merchantId: existing.id, businessId, status: { notIn: [...TERMINAL_JOB_STATUSES] }, deletedAt: null } });
+    if (live > 0) throw httpErrors.createError(409, `This merchant still has ${live} live order${live === 1 ? "" : "s"} — finish or cancel them first.`);
+    await ctx.prisma.merchant.update({ where: { id: existing.id }, data: { active: false } });
+    await ctx.audit.record({ id: req.user!.sub, role: req.user!.role }, "merchant.delete", "merchant", existing.id, { name: existing.name });
+    return { ok: true };
   });
 
   // Grants (or updates the password for) this merchant's own portal login

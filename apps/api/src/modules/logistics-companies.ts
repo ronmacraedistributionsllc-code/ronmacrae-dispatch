@@ -3,6 +3,7 @@ import { z } from "zod";
 import { httpErrors } from "@fastify/sensible";
 import type { AppCtx } from "../ctx.js";
 import type { LogisticsCompanyDto } from "@ronmacrae/contracts";
+import { ACTIVE_JOB_STATUSES } from "@ronmacrae/contracts";
 import { hashPassword } from "../lib/password.js";
 import { sendEmailCode, consumeEmailCode } from "./customer-account.js";
 import { DEFAULT_PUBLIC_BUSINESS_SLUG } from "./order.js";
@@ -221,6 +222,24 @@ export async function logisticsCompanyRoutes(app: FastifyInstance, ctx: AppCtx):
     });
     await ctx.audit.record({ id: req.user!.sub, role: req.user!.role }, "logistics_company.update", "logistics_company", company.id);
     return { logisticsCompany: toDto(company) };
+  });
+
+  // Business-admin delete: own company's companies only (scoped by
+  // businessId, same as the PATCH above). Deactivation, never row
+  // removal: the portal login checks company.active, while attached
+  // riders and history keep their rows. Refuses while attached riders
+  // are still carrying live work.
+  app.delete<{ Params: { id: string } }>("/api/logistics-companies/:id", { preHandler: owner }, async (req) => {
+    const businessId = req.user!.businessId!;
+    const existing = await ctx.prisma.logisticsCompany.findFirst({ where: { id: req.params.id, businessId } });
+    if (!existing) throw httpErrors.createError(404, "Logistics company not found");
+    const carrying = await ctx.prisma.job.count({
+      where: { businessId, rider: { attachedLogisticsCompanyId: existing.id }, status: { in: [...ACTIVE_JOB_STATUSES] } },
+    });
+    if (carrying > 0) throw httpErrors.createError(409, `This company's couriers are still carrying ${carrying} live job${carrying === 1 ? "" : "s"} — finish or reassign them first.`);
+    await ctx.prisma.logisticsCompany.update({ where: { id: existing.id }, data: { active: false } });
+    await ctx.audit.record({ id: req.user!.sub, role: req.user!.role }, "logistics_company.delete", "logistics_company", existing.id, { name: existing.name });
+    return { ok: true };
   });
 
   // Grants (or updates the password for) this company's own portal login —

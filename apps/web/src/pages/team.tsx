@@ -63,6 +63,27 @@ export function Team(): React.JSX.Element {
       void qc.invalidateQueries({ queryKey: ["riders", "pending"] });
     },
   });
+  const refreshRiders = () => {
+    void qc.invalidateQueries({ queryKey: ["riders"] });
+    void qc.invalidateQueries({ queryKey: ["riders", "pending"] });
+  };
+  // Two-tap confirm target for the destructive row actions below. Remove
+  // ends a membership (works for free-roam couriers too); Delete removes
+  // a company-created courier outright (the server refuses marketplace or
+  // shared couriers with an explanation).
+  const [confirmAction, setConfirmAction] = useState<{ kind: "staff" | "rider-remove" | "rider-delete"; id: string; name: string } | null>(null);
+  const removeMembership = useMutation({
+    mutationFn: (id: string) => apiFetch(API.users.removeMembership(id), { method: "DELETE" }),
+    onSuccess: () => { setConfirmAction(null); void qc.invalidateQueries({ queryKey: ["users"] }); },
+  });
+  const removeRider = useMutation({
+    mutationFn: (id: string) => apiFetch(API.riders.remove(id), { method: "POST", body: JSON.stringify({}) }),
+    onSuccess: () => { setConfirmAction(null); refreshRiders(); },
+  });
+  const deleteRider = useMutation({
+    mutationFn: (id: string) => apiFetch(API.riders.deleteRider(id), { method: "DELETE" }),
+    onSuccess: () => { setConfirmAction(null); refreshRiders(); },
+  });
 
   return (
     <div className="space-y-6">
@@ -119,11 +140,29 @@ export function Team(): React.JSX.Element {
                 <p className="font-medium">{u.name}</p>
                 <p className="text-xs text-zinc-500">{u.email ?? u.phone ?? "—"}</p>
               </div>
-              <span className={`rounded px-2 py-0.5 text-xs font-medium ${u.active ? "bg-emerald-900/50 text-emerald-300" : "bg-zinc-800 text-zinc-500"}`}>
-                {ROLE_LABEL[u.role]}{u.active ? "" : " · disabled"}
-              </span>
+              <div className="flex items-center gap-2">
+                <span className={`rounded px-2 py-0.5 text-xs font-medium ${u.active ? "bg-emerald-900/50 text-emerald-300" : "bg-zinc-800 text-zinc-500"}`}>
+                  {ROLE_LABEL[u.role]}{u.active ? "" : " · disabled"}
+                </span>
+                {canEdit ? (
+                  confirmAction?.kind === "staff" && confirmAction.id === u.id ? (
+                    <span className="flex items-center gap-2 text-xs">
+                      <span className="text-red-300">Remove {u.name} from this business?</span>
+                      <button type="button" className="btn !border-red-800 !px-3 !py-1 text-xs !text-red-300" disabled={removeMembership.isPending} onClick={() => void removeMembership.mutate(u.id)}>
+                        {removeMembership.isPending ? "Removing…" : "Confirm"}
+                      </button>
+                      <button type="button" className="btn !px-3 !py-1 text-xs" onClick={() => setConfirmAction(null)}>Keep</button>
+                    </span>
+                  ) : (
+                    <button type="button" className="btn !px-3 !py-1 text-xs !text-red-300" onClick={() => setConfirmAction({ kind: "staff", id: u.id, name: u.name })}>
+                      Remove
+                    </button>
+                  )
+                ) : null}
+              </div>
             </div>
           ))}
+          {removeMembership.error ? <p className="text-sm text-red-400">{removeMembership.error instanceof ApiError ? removeMembership.error.message : "Could not remove this team member"}</p> : null}
         </div>
         {canEdit && invites.data && invites.data.invites.filter((i) => i.status === "pending").length > 0 ? (
           <div className="space-y-2 pt-2">
@@ -177,11 +216,44 @@ export function Team(): React.JSX.Element {
                 <p className="font-medium">{r.name}</p>
                 <p className="text-xs text-zinc-500">{r.phone} · {r.vehicle}</p>
               </div>
-              <span className={`rounded px-2 py-0.5 text-xs font-medium ${r.active ? "bg-emerald-900/50 text-emerald-300" : "bg-zinc-800 text-zinc-500"}`}>
-                {r.status}{r.active ? "" : " · disabled"}
-              </span>
+              <div className="flex items-center gap-2">
+                <span className={`rounded px-2 py-0.5 text-xs font-medium ${r.active ? "bg-emerald-900/50 text-emerald-300" : "bg-zinc-800 text-zinc-500"}`}>
+                  {r.status}{r.active ? "" : " · disabled"}
+                </span>
+                {canEdit ? (
+                  confirmAction?.id === r.id && (confirmAction.kind === "rider-remove" || confirmAction.kind === "rider-delete") ? (
+                    <span className="flex items-center gap-2 text-xs">
+                      <span className="text-red-300">
+                        {confirmAction.kind === "rider-delete" ? `Delete ${r.name} outright?` : `Remove ${r.name} from this business?`}
+                      </span>
+                      <button
+                        type="button"
+                        className="btn !border-red-800 !px-3 !py-1 text-xs !text-red-300"
+                        disabled={removeRider.isPending || deleteRider.isPending}
+                        onClick={() => void (confirmAction.kind === "rider-delete" ? deleteRider.mutate(r.id) : removeRider.mutate(r.id))}
+                      >
+                        {(removeRider.isPending || deleteRider.isPending) ? "Working…" : "Confirm"}
+                      </button>
+                      <button type="button" className="btn !px-3 !py-1 text-xs" onClick={() => setConfirmAction(null)}>Keep</button>
+                    </span>
+                  ) : (
+                    <>
+                      <button type="button" className="btn !px-3 !py-1 text-xs" title="End their membership here — works for free-roam couriers too" onClick={() => setConfirmAction({ kind: "rider-remove", id: r.id, name: r.name })}>
+                        Remove
+                      </button>
+                      <button type="button" className="btn !px-3 !py-1 text-xs !text-red-300" title="Company-added couriers only — marketplace or shared couriers must be removed, not deleted" onClick={() => setConfirmAction({ kind: "rider-delete", id: r.id, name: r.name })}>
+                        Delete
+                      </button>
+                    </>
+                  )
+                ) : null}
+              </div>
             </div>
           ))}
+          {(() => {
+            const err = removeRider.error ?? deleteRider.error;
+            return err ? <p className="text-sm text-red-400">{err instanceof ApiError ? err.message : "Could not update this courier"}</p> : null;
+          })()}
         </div>
       </section>
     </div>

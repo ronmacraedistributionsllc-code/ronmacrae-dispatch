@@ -72,6 +72,12 @@ export const API = {
     signupResend: "/api/rider-signup/resend",
     pending: "/api/riders/pending",
     decide: (id: string) => `/api/riders/${id}/decide`,
+    /** End an ACTIVE membership (pending ones go through decide) — the
+     *  remove path for free-roam couriers, who can never be deleted. */
+    remove: (id: string) => `/api/riders/${id}/remove`,
+    /** Delete a company-created courier outright (admin only; never
+     *  marketplace-approved or shared riders — remove those instead). */
+    deleteRider: (id: string) => `/api/riders/${id}`,
     locations: "/api/rider-locations",
     locationsFor: (riderId: string) => `/api/rider-locations/${riderId}`,
     report: (riderId: string) => `/api/rider-locations/${riderId}/report`,
@@ -142,6 +148,9 @@ export const API = {
     /** admin-only: grants (or updates the password for) this merchant's
      *  own portal login — see merchantPortal below, the "face" that uses it. */
     grantStaff: (merchantId: string) => `/api/merchants/${merchantId}/staff`,
+    /** admin-only, own business only: deactivates the merchant (portal
+     *  logins stop; history stays). Refuses while live orders exist. */
+    removeMerchant: (id: string) => `/api/merchants/${id}`,
   },
 
   /** A merchant's own login — its own auth "face" (a merchant_portal
@@ -184,6 +193,9 @@ export const API = {
     /** admin-only: grants (or updates the password for) this company's own
      *  portal login — see logisticsPortal below. */
     grantStaff: (id: string) => `/api/logistics-companies/${id}/staff`,
+    /** admin-only, own business only: deactivates the company (portal
+     *  logins stop; attached riders and history stay). */
+    removeCompany: (id: string) => `/api/logistics-companies/${id}`,
   },
 
   /** A logistics company's own login — its own auth "face" (a
@@ -387,6 +399,9 @@ export const API = {
     list: "/api/users",
     create: "/api/users",
     update: (id: string) => `/api/users/${id}`,
+    /** admin-only: end this person's membership at YOUR business only
+     *  (their account and other access are untouched). */
+    removeMembership: (id: string) => `/api/users/${id}/membership`,
   },
 
   /** Real invite/onboarding — see invites.ts. `check`/`accept` are public
@@ -409,17 +424,21 @@ export const API = {
   platform: {
     businesses: "/api/platform/businesses",
     updateBusiness: (id: string) => `/api/platform/businesses/${id}`,
+    deleteBusiness: (id: string) => `/api/platform/businesses/${id}`,
     merchants: "/api/platform/merchants",
     updateMerchant: (id: string) => `/api/platform/merchants/${id}`,
+    deleteMerchant: (id: string) => `/api/platform/merchants/${id}`,
     /** approve/reject a *pending* application only — see updateMerchant
      *  (disable/reactivate) for an already-reviewed merchant. */
     reviewMerchant: (id: string) => `/api/platform/merchants/${id}/review`,
     logisticsCompanies: "/api/platform/logistics-companies",
     updateLogisticsCompany: (id: string) => `/api/platform/logistics-companies/${id}`,
     reviewLogisticsCompany: (id: string) => `/api/platform/logistics-companies/${id}/review`,
+    deleteLogisticsCompany: (id: string) => `/api/platform/logistics-companies/${id}`,
     riders: "/api/platform/riders",
     rider: (id: string) => `/api/platform/riders/${id}`,
     updateRider: (id: string) => `/api/platform/riders/${id}`,
+    deleteRider: (id: string) => `/api/platform/riders/${id}`,
     /** many-to-many rider<->merchant assignment (owner-only) */
     assignRiderToMerchant: (riderId: string) => `/api/platform/riders/${riderId}/merchants`,
     removeRiderFromMerchant: (riderId: string, merchantId: string) => `/api/platform/riders/${riderId}/merchants/${merchantId}`,

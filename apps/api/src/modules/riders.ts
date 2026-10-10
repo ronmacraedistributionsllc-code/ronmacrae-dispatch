@@ -244,6 +244,8 @@ export class RidersService {
         // block the one business that's directly onboarding them right
         // now, who is themselves vouching for this rider by adding them.
         platformStatus: "pending",
+        // Staff-created: company-bound forever, never free-roam.
+        createdByBusinessId: businessId,
       },
       include: { homeZone: { select: { name: true } } },
     });
@@ -321,6 +323,10 @@ export class RidersService {
         dailyCapacity: 5,
         status: "available",
         platformStatus: "pending",
+        // Public self-signup — the ONLY path that may ever lead to
+        // free-roam marketplace work (see Rider.selfSignedUp's doc
+        // comment). Staff-created profiles stay company-bound forever.
+        selfSignedUp: true,
       },
     });
     // Deliberately not wrapped in a transaction with the rider.create above:
@@ -626,6 +632,49 @@ export async function riderRoutes(app: FastifyInstance, ctx: AppCtx): Promise<vo
     const body = ApproveBody.parse(req.body);
     await svc.decideMembership(req.user!.businessId!, req.params.id, body.approve);
     await ctx.audit.record({ id: req.user!.sub, role: req.user!.role }, body.approve ? "rider.approve" : "rider.reject", "rider", req.params.id);
+    return { ok: true };
+  });
+
+  // Removing an ACTIVE membership (pending ones go through decide above):
+  // the courier simply stops delivering for this business. The Rider row
+  // itself is never touched — this is exactly how a business drops a
+  // free-roam courier, who by rule can never be deleted, only removed.
+  app.post<{ Params: { id: string } }>("/api/riders/:id/remove", { preHandler: ctx.requireStaff("admin", "dispatcher") }, async (req) => {
+    const businessId = req.user!.businessId!;
+    const membership = await ctx.prisma.riderMembership.findUnique({ where: { riderId_businessId: { riderId: req.params.id, businessId } } });
+    if (!membership || membership.status !== "active") throw httpErrors.createError(404, "No active membership found for this courier at your business");
+    await ctx.prisma.riderMembership.update({ where: { id: membership.id }, data: { status: "removed" } });
+    await ctx.audit.record({ id: req.user!.sub, role: req.user!.role }, "rider.remove", "rider", req.params.id);
+    return { ok: true };
+  });
+
+  // Business-admin delete: ONLY couriers this company itself added
+  // (`createdByBusinessId`), never marketplace-approved free-roam riders
+  // (remove them instead), never riders shared with other businesses, and
+  // never anyone carrying live work. Same deactivation semantics as the
+  // platform delete — history stays intact, access ends.
+  app.delete<{ Params: { id: string } }>("/api/riders/:id", { preHandler: ctx.requireStaff("admin") }, async (req) => {
+    const businessId = req.user!.businessId!;
+    const rider = await ctx.prisma.rider.findFirst({ where: { id: req.params.id, memberships: { some: { businessId } } } });
+    if (!rider) throw httpErrors.createError(404, "Courier not found");
+    if (rider.platformStatus === "approved") {
+      throw httpErrors.createError(409, "Marketplace couriers can't be deleted — remove them from your business instead, and they simply stop delivering for you.");
+    }
+    if (rider.createdByBusinessId !== businessId) {
+      throw httpErrors.createError(409, "Only the company that added this courier can delete them — remove them from your business instead.");
+    }
+    const elsewhere = await ctx.prisma.riderMembership.count({ where: { riderId: rider.id, businessId: { not: businessId }, status: "active" } });
+    if (elsewhere > 0) {
+      throw httpErrors.createError(409, "This courier also delivers for other businesses — remove them here instead of deleting.");
+    }
+    const carrying = await ctx.prisma.job.count({ where: { riderId: rider.id, status: { in: [...ACTIVE_JOB_STATUSES] } } });
+    if (carrying > 0) throw httpErrors.createError(409, `This courier is still carrying ${carrying} live job${carrying === 1 ? "" : "s"} — finish or reassign them first.`);
+    await ctx.prisma.$transaction([
+      ctx.prisma.rider.update({ where: { id: rider.id }, data: { active: false, status: "offline" } }),
+      ctx.prisma.riderMembership.updateMany({ where: { riderId: rider.id }, data: { status: "removed" } }),
+      ctx.prisma.jobOffer.updateMany({ where: { riderId: rider.id, status: "open" }, data: { status: "withdrawn", note: "rider deleted" } }),
+    ]);
+    await ctx.audit.record({ id: req.user!.sub, role: req.user!.role }, "rider.delete", "rider", rider.id, { name: rider.name, phone: rider.phone });
     return { ok: true };
   });
 

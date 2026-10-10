@@ -118,4 +118,22 @@ export async function userRoutes(app: FastifyInstance, ctx: AppCtx): Promise<voi
     await ctx.audit.record({ id: req.user!.sub, role: req.user!.role }, "user.update", "user", target.id, { changes: Object.keys(body) });
     return { user: toUserDto(user) };
   });
+
+  // Removing a staff member from THIS business: deactivates only their
+  // membership here, never their account (they may work elsewhere — the
+  // platform owner deletes accounts). Guards: not yourself, and never the
+  // last active admin (a business must always keep one).
+  app.delete<{ Params: { id: string } }>("/api/users/:id/membership", { preHandler: ctx.requireStaff("admin") }, async (req) => {
+    const businessId = req.user!.businessId!;
+    if (req.params.id === req.user!.sub) throw httpErrors.createError(400, "You can't remove yourself — ask another admin.");
+    const membership = await ctx.prisma.staffMembership.findUnique({ where: { userId_businessId: { userId: req.params.id, businessId } } });
+    if (!membership || !membership.active) throw httpErrors.createError(404, "No active team member found");
+    if (membership.role === "admin") {
+      const otherAdmins = await ctx.prisma.staffMembership.count({ where: { businessId, role: "admin", active: true, userId: { not: req.params.id } } });
+      if (otherAdmins === 0) throw httpErrors.createError(409, "This is the last admin — promote someone else first.");
+    }
+    await ctx.prisma.staffMembership.update({ where: { id: membership.id }, data: { active: false } });
+    await ctx.audit.record({ id: req.user!.sub, role: req.user!.role }, "staff.remove", "user", req.params.id);
+    return { ok: true };
+  });
 }

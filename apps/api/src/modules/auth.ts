@@ -83,7 +83,13 @@ interface StaffContext {
  *  throws via requireStaffContext below. */
 async function realStaffMemberships(ctx: AppCtx, userId: string) {
   const staffMemberships = await ctx.prisma.staffMembership.findMany({
-    where: { userId, active: true },
+    // A deactivated (deleted) business locks its staff out: no new sessions
+    // (here, via login) and no renewed ones (refresh re-resolves through
+    // this same function), bounded by the access-token TTL. Deliberately
+    // the ONLY business-active check in the auth path — per-request guards
+    // stay token-local, and every staff query below is already
+    // business-scoped to the session's businessId.
+    where: { userId, active: true, business: { active: true } },
     include: { business: { select: { id: true, name: true } } },
   });
   return staffMemberships.map((m) => ({ businessId: m.businessId, businessName: m.business.name, role: m.role }));

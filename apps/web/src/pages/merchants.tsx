@@ -85,9 +85,15 @@ function MerchantRow({ merchant, canEdit, onChanged }: { merchant: MerchantDto; 
   const [copied, setCopied] = useState(false);
   const [showQr, setShowQr] = useState(false);
   const [showPortalForm, setShowPortalForm] = useState(false);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
   const toggleActive = useMutation({
     mutationFn: () => apiFetch(API.merchants.update(merchant.id), { method: "PATCH", body: JSON.stringify({ active: !merchant.active }) }),
     onSuccess: onChanged,
+  });
+  const removeMerchant = useMutation({
+    mutationFn: () => apiFetch(API.merchants.removeMerchant(merchant.id), { method: "DELETE" }),
+    onSuccess: onChanged,
+    onError: () => setConfirmingDelete(false),
   });
   const copyLink = async () => {
     try {
@@ -127,7 +133,23 @@ function MerchantRow({ merchant, canEdit, onChanged }: { merchant: MerchantDto; 
             {showPortalForm ? "Cancel" : "Portal access"}
           </button>
         ) : null}
+        {canEdit ? (
+          confirmingDelete ? (
+            <span className="flex items-center gap-2 text-xs">
+              <span className="text-red-300">Delete {merchant.name}? Portal logins stop; history stays.</span>
+              <button type="button" className="btn !border-red-800 !px-3 !py-1 text-xs !text-red-300" disabled={removeMerchant.isPending} onClick={() => void removeMerchant.mutate()}>
+                {removeMerchant.isPending ? "Deleting…" : "Confirm delete"}
+              </button>
+              <button type="button" className="btn !px-3 !py-1 text-xs" onClick={() => setConfirmingDelete(false)}>Keep</button>
+            </span>
+          ) : (
+            <button type="button" className="btn !px-3 !py-1 text-xs !text-red-300" onClick={() => setConfirmingDelete(true)}>
+              Delete
+            </button>
+          )
+        ) : null}
       </div>
+      {removeMerchant.error ? <p className="text-sm text-red-400">{removeMerchant.error instanceof ApiError ? removeMerchant.error.message : "Could not delete this merchant"}</p> : null}
       {showQr ? (
         <div className="flex flex-col items-start gap-1">
           <img src={qrSrc} alt={`QR code for ${merchant.orderUrl}`} width={220} height={220} className="rounded border border-zinc-700 bg-white p-2" />

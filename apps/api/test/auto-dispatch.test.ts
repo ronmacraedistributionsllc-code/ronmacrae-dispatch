@@ -15,7 +15,7 @@ let harness: TestHarness;
 let seq = 0;
 const uniq = () => `${Date.now()}${++seq}`;
 
-async function makeRider(opts: { platformStatus?: "pending" | "approved" | "suspended"; status?: "available" | "offline"; noMemberships?: boolean } = {}) {
+async function makeRider(opts: { platformStatus?: "pending" | "approved" | "suspended"; status?: "available" | "offline"; noMemberships?: boolean; selfSignedUp?: boolean } = {}) {
   const rider = await harness.prisma.rider.create({
     data: {
       name: "Auto Rider",
@@ -24,6 +24,7 @@ async function makeRider(opts: { platformStatus?: "pending" | "approved" | "susp
       status: opts.status ?? "available",
       dailyCapacity: 5,
       platformStatus: opts.platformStatus ?? "pending",
+      selfSignedUp: opts.selfSignedUp ?? false,
     },
   });
   if (opts.noMemberships) {
@@ -135,7 +136,7 @@ describe("courier pools", () => {
   it("pool=both offers marketplace-approved free-roam riders, and accepting creates their membership", async () => {
     await harness.prisma.business.update({ where: { id: harness.business.id }, data: { courierPool: "both" } });
     try {
-      const free = await makeRider({ platformStatus: "approved", noMemberships: true });
+      const free = await makeRider({ platformStatus: "approved", noMemberships: true, selfSignedUp: true });
       const dispatcher = await makeDispatcher();
       const customer = await makeCustomer();
       const jobId = await createJob(dispatcher, customer.id);
@@ -179,6 +180,27 @@ describe("broadcast idempotency + pending-list exclusion", () => {
     const list = await harness.app.inject({ method: "GET", url: "/api/bearer/pending-jobs", headers: rider.auth });
     const ids = ((list.json() as { jobs: { id: string }[] }).jobs).map((j) => j.id);
     expect(ids).not.toContain(jobId);
+  });
+});
+
+describe("free-roam requires self-signup", () => {
+  it("an approved but company-created rider is never free-roam, even with an open pool", async () => {
+    await harness.prisma.business.update({ where: { id: harness.business.id }, data: { courierPool: "both" } });
+    try {
+      const companyMade = await makeRider({ platformStatus: "approved", selfSignedUp: false });
+      // Membership-free: the ONLY way in is the free-roam override, which
+      // company-created accounts can never use.
+      await harness.prisma.riderMembership.deleteMany({ where: { riderId: companyMade.rider.id } });
+      const dispatcher = await makeDispatcher();
+      const customer = await makeCustomer();
+      const jobId = await createJob(dispatcher, customer.id);
+      await new Promise((r) => setTimeout(r, 100));
+      expect(await offersForRiders(jobId, [companyMade.rider.id])).toHaveLength(0);
+      const list = await harness.app.inject({ method: "GET", url: "/api/bearer/pending-jobs", headers: companyMade.auth });
+      expect((list.json() as { jobs: unknown[] }).jobs).toHaveLength(0);
+    } finally {
+      await harness.prisma.business.update({ where: { id: harness.business.id }, data: { courierPool: "company" } });
+    }
   });
 });
 

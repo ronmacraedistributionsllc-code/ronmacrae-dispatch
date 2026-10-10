@@ -327,6 +327,18 @@ model Rider {
   attachedMerchant            Merchant?         @relation(fields: [attachedMerchantId], references: [id], onDelete: SetNull)
   attachedLogisticsCompanyId  String?
   attachedLogisticsCompany    LogisticsCompany? @relation(fields: [attachedLogisticsCompanyId], references: [id], onDelete: SetNull)
+  /** True only when this rider came through the public self-signup (never
+   *  staff-created). Free-roam marketplace work requires this PLUS
+   *  `platformStatus: approved` — a company-created account can work for
+   *  companies but can never become free-roam. Defaults false so every
+   *  pre-existing row is treated as company-created (the safe direction);
+   *  previously approved riders keep whatever access they already had. */
+  selfSignedUp           Boolean     @default(false)
+  /** Which business's staff created this profile (null = self-signup or
+   *  predates this field). A business admin may delete ONLY riders created
+   *  under their own company — everyone else is remove-membership-only. */
+  createdByBusinessId    String?
+  @@index([createdByBusinessId])
   createdAt          DateTime    @default(now())
   updatedAt          DateTime    @updatedAt
 

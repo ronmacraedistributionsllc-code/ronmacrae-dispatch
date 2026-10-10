@@ -78,11 +78,12 @@ export type CourierPool = "company" | "free_roam" | "both";
  * only ever receives the offers of whichever one actually invited them.
  * The one exception is the business's own courier-pool choice (see the
  * CourierPool doc comment in schema.prisma): when the pool is `free_roam`
- * or `both`, marketplace-approved riders (`platformStatus: approved`,
- * vetted by the Platform Admin) are eligible WITHOUT a membership at
- * this business — accepting auto-creates their membership (see
- * ensureClaimMembership). With the default `company` pool this function
- * behaves exactly as before.
+ * or `both`, marketplace-approved SELF-SIGNED-UP riders (`platformStatus:
+ * approved` plus `selfSignedUp`, vetted by the Platform Admin) are
+ * eligible WITHOUT a membership at this business — accepting auto-creates
+ * their membership (see ensureClaimMembership). Company-created accounts
+ * can never be free-roam, even approved. With the default `company` pool
+ * this function behaves exactly as before.
  *
  * Attachment (spec: Bearer/Logistics companies + merchant-attached riders,
  * see RiderAttachment's doc comment in schema.prisma): `freelance` (the
@@ -110,9 +111,11 @@ async function eligibleRiders(
       status: "available",
       ...(riderIds ? { id: { in: riderIds } } : {}),
       ...(pool === "free_roam"
-        // Free-roam pool: marketplace-approved riders only, membership or
-        // not — the business opted into the open network for this job.
-        ? { platformStatus: "approved" }
+        // Free-roam pool: marketplace-approved SELF-SIGNED-UP riders only,
+        // membership or not — the business opted into the open network for
+        // this job. Company-created accounts can never be free-roam, even
+        // approved (see Rider.selfSignedUp).
+        ? { platformStatus: "approved", selfSignedUp: true }
         : { memberships: { some: { businessId, status: "active" } } }),
     },
   });
@@ -126,6 +129,7 @@ async function eligibleRiders(
             active: true,
             status: "available",
             platformStatus: "approved",
+            selfSignedUp: true,
             ...(riderIds ? { id: { in: riderIds } } : {}),
           },
         })
@@ -137,7 +141,10 @@ async function eligibleRiders(
     // never restricts them; company members follow the attachment rules.
     // (Pure-`company` pools only ever contain members, so skip the lookup.)
     const isFreeRoam =
-      pool !== "company" && rider.platformStatus === "approved" && !(await isActiveMember(ctx, rider.id, businessId));
+      pool !== "company" &&
+      rider.platformStatus === "approved" &&
+      rider.selfSignedUp &&
+      !(await isActiveMember(ctx, rider.id, businessId));
     if (!isFreeRoam && rider.platformStatus !== "approved") {
       if (rider.attachment === "merchant" && rider.attachedMerchantId !== jobMerchantId) continue;
       if (rider.attachment === "logistics" && jobMerchantId !== null) continue;
@@ -171,7 +178,7 @@ async function ensureClaimMembership(
   if (await isActiveMember(ctx, riderId, businessId)) return "member";
   if (pool !== "company") {
     const rider = await ctx.prisma.rider.findUnique({ where: { id: riderId } });
-    if (rider?.active && rider.platformStatus === "approved") {
+    if (rider?.active && rider.platformStatus === "approved" && rider.selfSignedUp) {
       await ctx.prisma.riderMembership.upsert({
         where: { riderId_businessId: { riderId, businessId } },
         create: { riderId, businessId, status: "active", approvedAt: new Date() },
@@ -410,7 +417,9 @@ export async function offerRoutes(app: FastifyInstance, ctx: AppCtx): Promise<vo
     if (!rider || !rider.active) return { jobs: [] };
     const memberships = await ctx.prisma.riderMembership.findMany({ where: { riderId, status: "active" }, select: { businessId: true } });
     let businessIds = memberships.map((m) => m.businessId);
-    if (rider.platformStatus === "approved") {
+    // Free-roam visibility needs approved AND self-signed-up — same rule
+    // as eligibility and claiming (see Rider.selfSignedUp).
+    if (rider.platformStatus === "approved" && rider.selfSignedUp) {
       const open = await ctx.prisma.business.findMany({ where: { active: true, courierPool: { not: "company" } }, select: { id: true } });
       businessIds = [...new Set([...businessIds, ...open.map((b) => b.id)])];
     }
@@ -450,7 +459,7 @@ export async function offerRoutes(app: FastifyInstance, ctx: AppCtx): Promise<vo
       const rider = await ctx.prisma.rider.findUnique({ where: { id: riderId } });
       const visible =
         (await isActiveMember(ctx, riderId, job.businessId)) ||
-        (!!rider?.active && rider.platformStatus === "approved" && pool !== "company");
+        (!!rider?.active && rider.platformStatus === "approved" && rider.selfSignedUp && pool !== "company");
       if (!visible) throw httpErrors.createError(403, "This job isn't in your pool");
       const via = await ensureClaimMembership(ctx, job.businessId, pool, riderId);
       const result = await ctx.prisma.$transaction(async (tx) =>
