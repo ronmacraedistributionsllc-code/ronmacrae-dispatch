@@ -37,6 +37,7 @@ interface RiderRow {
   platformStatus: "pending" | "approved" | "suspended";
   /** Free-roam input fact: marketplace work needs approved AND this. */
   selfSignedUp: boolean;
+  openNetwork: boolean;
   createdByBusinessId: string | null;
   status: string;
   attachment: RiderAttachment;
@@ -459,7 +460,7 @@ function RidersTab(): React.JSX.Element {
   const merchants = useQuery({ queryKey: ["platform", "merchants", ""], queryFn: () => apiFetch<{ merchants: MerchantRow[] }>(API.platform.merchants) });
   const companies = useQuery({ queryKey: ["platform", "logistics-companies", ""], queryFn: () => apiFetch<{ logisticsCompanies: LogisticsCompanyRow[] }>(API.platform.logisticsCompanies) });
   const update = useMutation({
-    mutationFn: ({ id, ...body }: { id: string; platformStatus?: string; active?: boolean; attachment?: RiderAttachment; attachedMerchantId?: string; attachedLogisticsCompanyId?: string }) =>
+    mutationFn: ({ id, ...body }: { id: string; platformStatus?: string; active?: boolean; openNetwork?: boolean; attachment?: RiderAttachment; attachedMerchantId?: string; attachedLogisticsCompanyId?: string }) =>
       apiFetch(API.platform.updateRider(id), { method: "PATCH", body: JSON.stringify(body) }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["platform", "riders"] });
@@ -509,7 +510,8 @@ function RidersTab(): React.JSX.Element {
             <p className="text-xs text-zinc-500">{r.phone}{r.email ? ` · ${r.email}` : ""} · {r.vehicle} · member of {r.memberships.map((m) => m.businessName).join(", ") || "no business yet"}</p>
             <p className="text-xs text-zinc-500">
               {r.selfSignedUp ? "Signed up independently" : "Added by a company"}
-              {r.platformStatus === "approved" && r.selfSignedUp ? " · free-roam eligible" : null}
+              {r.platformStatus === "approved" && r.selfSignedUp && r.openNetwork ? " · free-roam eligible" : null}
+              {r.openNetwork ? " · open-network ON" : null}
             </p>
             <div className="flex flex-wrap gap-2">
               {r.platformStatus !== "approved" ? (
@@ -524,6 +526,14 @@ function RidersTab(): React.JSX.Element {
               ) : null}
               <button className="btn !px-3 !py-1 text-xs" disabled={update.isPending} onClick={() => void update.mutate({ id: r.id, active: !r.active })}>
                 {r.active ? "Disable login" : "Re-enable login"}
+              </button>
+              <button
+                className="btn !px-3 !py-1 text-xs"
+                title="The courier's own marketplace switch — flippable here too, never by business staff."
+                disabled={update.isPending}
+                onClick={() => void update.mutate({ id: r.id, openNetwork: !r.openNetwork })}
+              >
+                {r.openNetwork ? "Close network" : "Open network"}
               </button>
               {confirmDeleteId === r.id ? (
                 <span className="flex items-center gap-2 text-xs">

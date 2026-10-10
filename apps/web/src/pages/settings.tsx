@@ -4,6 +4,7 @@ import { API } from "@ronmacrae/contracts";
 import type { BusinessSettings } from "@ronmacrae/contracts";
 import { ApiError, apiFetch } from "../lib/api.js";
 import { useAuth } from "../lib/auth.js";
+import { OwnerNotice } from "../components/owner-notice.js";
 import { ThemeSwitcher } from "../lib/theme.js";
 
 /**
@@ -13,8 +14,8 @@ import { ThemeSwitcher } from "../lib/theme.js";
  * screen for it, so nobody could actually turn this on.
  */
 export function Settings(): React.JSX.Element {
-  const { user } = useAuth();
-  const canEdit = user?.role === "admin";
+  const { user, businessId } = useAuth();
+  const canEdit = user?.role === "admin" && !!businessId;
   const qc = useQueryClient();
   const { data, isLoading } = useQuery({ queryKey: ["settings", "business"], queryFn: () => apiFetch<{ settings: BusinessSettings }>(API.settings.business) });
   const [form, setForm] = useState<BusinessSettings | null>(null);
@@ -36,6 +37,7 @@ export function Settings(): React.JSX.Element {
       <header>
         <h1 className="text-xl font-bold">Settings</h1>
         <p className="text-sm text-zinc-400">Business contact details and order-alert notifications.</p>
+        <OwnerNotice what="changing settings" />
       </header>
 
       <form className="card space-y-4" onSubmit={(e) => { e.preventDefault(); void save.mutate(); }}>

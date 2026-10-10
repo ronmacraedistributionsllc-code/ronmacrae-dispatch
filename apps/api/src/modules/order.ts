@@ -75,6 +75,10 @@ export const PublicOrderBody = z.object({
   scheduledAt: z.coerce.date().optional().nullable(),
   instructions: z.string().max(500).optional().or(z.literal("")).nullable(),
   consentTracking: z.boolean().default(true),
+  /** "My own courier": the customer names a rider by phone instead of the
+   *  network pool. Validated before the order exists (bad number = honest
+   *  400); offered to exactly that courier after. Omit for network. */
+  courierPhone: z.string().max(20).optional().or(z.literal("")).nullable(),
 });
 
 const PublicQuoteBody = z.object({
@@ -268,6 +272,13 @@ export async function orderRoutes(app: FastifyInstance, ctx: AppCtx): Promise<vo
   async function handleCreate(req: { body: unknown }, merchantSlug: string | null): Promise<PublicOrderResultDto> {
     const body = PublicOrderBody.parse(req.body);
     const resolved = await resolveContext(ctx, merchantSlug);
+    // A named courier fails the whole order here (before anything is
+    // inserted) — see jobs/create.ts for the same rule on that path.
+    let requestedCourier: { id: string; name: string } | null = null;
+    if (body.courierPhone) {
+      const { validateRequestedCourier } = await import("./offers.js");
+      requestedCourier = await validateRequestedCourier(ctx, resolved.businessId, body.courierPhone);
+    }
     const items = await resolveItems(ctx, resolved.merchantId, body.items, resolved.currency);
     const { pricing, feeMinor, zoneId } = await computePricing(ctx, resolved, items, body.point ?? null);
 
@@ -377,12 +388,15 @@ export async function orderRoutes(app: FastifyInstance, ctx: AppCtx): Promise<vo
     // a customer placing this order has no staff "actor" to exclude, so
     // every admin/dispatcher at this business gets it.
     void notifyDispatchOfNewOrder(ctx, resolved.businessId, dto, null);
-    // Auto-dispatch, same as staff-created jobs (see jobs/create.ts) —
-    // deferred import for the same barrel-cycle reason, awaited so a
-    // follow-up broadcast dedupes instead of duplicating.
+    // Dispatch: the named courier when the customer asked for theirs,
+    // otherwise the whole eligible pool (see jobs/create.ts).
     await import("./offers.js")
-      .then((m) => m.autoBroadcastNewJob(ctx, row.id))
-      .catch((err) => ctx.log.error({ err: String(err), jobId: row!.id }, "auto-broadcast failed"));
+      .then((m) =>
+        requestedCourier
+          ? m.offerToRequestedCourier(ctx, row, requestedCourier, "customer")
+          : m.autoBroadcastNewJob(ctx, row.id),
+      )
+      .catch((err) => ctx.log.error({ err: String(err), jobId: row!.id }, "dispatch offers failed"));
     return {
       jobId: row.id,
       jobNumber: row.jobNumber,

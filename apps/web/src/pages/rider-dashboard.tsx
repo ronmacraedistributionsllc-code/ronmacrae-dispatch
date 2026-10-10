@@ -304,6 +304,7 @@ export function RiderDashboard(): React.JSX.Element {
       </section>
     ) : null}
     <MyBusinesses />
+    <DeliverForMore />
     <CashSummary />
     <LocationSharing riderId={rider.id} hasActiveDelivery={activeJobs.length > 0} />
     <LogisticsFleetChat />
@@ -375,6 +376,87 @@ function MyBusinesses(): React.JSX.Element | null {
             Platform Admin has attached you to {attachment.type === "merchant" ? attachment.merchantName : attachment.logisticsCompanyName} for new-job eligibility.
           </p>
         ) : null}
+      </div>
+    </details>
+  );
+}
+
+/**
+ * The other half of the ecosystem loop: couriers find businesses and
+ * apply to deliver for them (the admin approves in Team → Pending
+ * applications). Shows every active business with this courier's own
+ * status — apply where there's no relationship, a waiting note where
+ * pending, nothing to do where already delivering.
+ */
+/**
+ * The courier's own open-network switch: opt in to offers from ANY
+ * opted-in business on the network (still needs ultra-admin approval —
+ * the toggle alone sends no work). Only the courier or Platform Admin
+ * can flip it; business staff never see the control.
+ */
+function OpenNetworkToggle(): React.JSX.Element | null {
+  const qc = useQueryClient();
+  const me = useQuery({ queryKey: ["bearer-me"], queryFn: () => apiFetch<BearerMeDto>(API.bearer.me) });
+  const flip = useMutation({
+    mutationFn: (open: boolean) => apiFetch(API.bearer.openNetwork, { method: "POST", body: JSON.stringify({ open }) }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["bearer-me"] });
+      void qc.invalidateQueries({ queryKey: ["bearer-businesses"] });
+    },
+  });
+  if (me.isLoading || !me.data) return null;
+  const open = me.data.rider.openNetwork;
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-zinc-800 p-2">
+      <div>
+        <p className="text-sm font-medium text-zinc-200">Open-network courier {open ? "· ON" : "· off"}</p>
+        <p className="text-xs text-zinc-500">Any opted-in business can offer you jobs once Platform Admin approves you. Turn off anytime — your company jobs are unaffected.</p>
+      </div>
+      <button className="btn !px-3 !py-1 text-xs" disabled={flip.isPending} onClick={() => void flip.mutate(!open)}>
+        {flip.isPending ? "Saving…" : open ? "Go private" : "Go open-network"}
+      </button>
+      {flip.error ? <p className="text-sm text-red-400">{flip.error instanceof ApiError ? flip.error.message : "Could not save"}</p> : null}
+    </div>
+  );
+}
+
+function DeliverForMore(): React.JSX.Element | null {
+  const qc = useQueryClient();
+  const directory = useQuery({
+    queryKey: ["bearer-businesses"],
+    queryFn: () => apiFetch<{ businesses: { businessId: string; businessName: string; myStatus: string }[] }>(API.bearer.businesses),
+  });
+  const apply = useMutation({
+    mutationFn: (businessId: string) => apiFetch(API.bearer.applyToBusiness(businessId), { method: "POST", body: JSON.stringify({}) }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["bearer-businesses"] });
+      void qc.invalidateQueries({ queryKey: ["bearer-me"] });
+    },
+  });
+  if (directory.isLoading || !directory.data) return null;
+  const options = directory.data.businesses.filter((b) => b.myStatus === "none" || b.myStatus === "removed");
+  const waiting = directory.data.businesses.filter((b) => b.myStatus === "pending");
+  if (options.length === 0 && waiting.length === 0) return null;
+
+  return (
+    <details className="card space-y-2">
+      <summary className="cursor-pointer text-sm font-semibold uppercase tracking-wide text-zinc-400">Deliver for more businesses</summary>
+      <div className="mt-2 space-y-2 text-sm">
+        <OpenNetworkToggle />
+        {waiting.length > 0 ? (
+          <p className="text-xs text-amber-300">
+            Waiting for approval: {waiting.map((b) => b.businessName).join(", ")} — they'll appear under My businesses once approved.
+          </p>
+        ) : null}
+        {options.map((b) => (
+          <div key={b.businessId} className="flex flex-wrap items-center justify-between gap-2">
+            <p className="text-zinc-200">{b.businessName}</p>
+            <button className="btn !px-3 !py-1 text-xs" disabled={apply.isPending} onClick={() => void apply.mutate(b.businessId)}>
+              {apply.isPending ? "Applying…" : b.myStatus === "removed" ? "Apply again" : "Apply to deliver"}
+            </button>
+          </div>
+        ))}
+        {apply.error ? <p className="text-sm text-red-400">{apply.error instanceof ApiError ? apply.error.message : "Could not send your application"}</p> : null}
       </div>
     </details>
   );

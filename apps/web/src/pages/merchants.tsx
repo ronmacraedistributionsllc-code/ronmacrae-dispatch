@@ -4,6 +4,7 @@ import { API } from "@ronmacrae/contracts";
 import type { MerchantDto } from "@ronmacrae/contracts";
 import { ApiError, apiFetch } from "../lib/api.js";
 import { useAuth } from "../lib/auth.js";
+import { OwnerNotice } from "../components/owner-notice.js";
 
 /**
  * Admin console for store/merchant clients (spec section 3/4/49) — create a
@@ -11,8 +12,8 @@ import { useAuth } from "../lib/auth.js";
  * details. Creating/editing is owner(admin)-only; dispatchers can view.
  */
 export function Merchants(): React.JSX.Element {
-  const { user } = useAuth();
-  const canEdit = user?.role === "admin";
+  const { user, businessId } = useAuth();
+  const canEdit = user?.role === "admin" && !!businessId;
   const qc = useQueryClient();
   const [creating, setCreating] = useState(false);
 
@@ -24,6 +25,7 @@ export function Merchants(): React.JSX.Element {
         <div>
           <h1 className="text-xl font-bold">Merchants</h1>
           <p className="text-sm text-zinc-400">Store clients with their own public order link — e.g. "VBR Basics".</p>
+          <OwnerNotice what="deleting merchants" />
         </div>
         {canEdit ? (
           <button className="btn-accent" onClick={() => setCreating((v) => !v)}>{creating ? "Cancel" : "+ New merchant"}</button>

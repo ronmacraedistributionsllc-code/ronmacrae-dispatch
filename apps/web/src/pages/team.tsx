@@ -1,9 +1,11 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { API, STAFF_ROLES } from "@ronmacrae/contracts";
 import type { RiderDto, Role, StaffRole, UserDto } from "@ronmacrae/contracts";
 import { ApiError, apiFetch } from "../lib/api.js";
 import { useAuth } from "../lib/auth.js";
+import { useRealtime } from "../lib/realtime.js";
+import { OwnerNotice } from "../components/owner-notice.js";
 
 const ROLE_LABEL: Record<Role, string> = {
   admin: "Admin",
@@ -31,8 +33,8 @@ interface InviteDto {
  * login except through raw API calls. This is that screen.
  */
 export function Team(): React.JSX.Element {
-  const { user } = useAuth();
-  const canEdit = user?.role === "admin";
+  const { user, businessId } = useAuth();
+  const canEdit = user?.role === "admin" && !!businessId;
   const qc = useQueryClient();
   const [addingStaff, setAddingStaff] = useState(false);
   const [invitingStaff, setInvitingStaff] = useState(false);
@@ -56,6 +58,16 @@ export function Team(): React.JSX.Element {
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["invites"] }),
   });
   const pending = useQuery({ queryKey: ["riders", "pending"], queryFn: () => apiFetch<{ riders: RiderDto[] }>(API.riders.pending) });
+  // A courier applying from their dashboard lands here live — no refresh
+  // needed to see (and approve) the new application.
+  const { subscribe } = useRealtime();
+  useEffect(
+    () => subscribe(["rider.application"], () => {
+      void qc.invalidateQueries({ queryKey: ["riders", "pending"] });
+      void qc.invalidateQueries({ queryKey: ["riders"] });
+    }),
+    [subscribe, qc],
+  );
   const decide = useMutation({
     mutationFn: ({ id, approve }: { id: string; approve: boolean }) => apiFetch(API.riders.decide(id), { method: "POST", body: JSON.stringify({ approve }) }),
     onSuccess: () => {
@@ -67,10 +79,12 @@ export function Team(): React.JSX.Element {
     void qc.invalidateQueries({ queryKey: ["riders"] });
     void qc.invalidateQueries({ queryKey: ["riders", "pending"] });
   };
-  // Two-tap confirm target for the destructive row actions below. Remove
-  // ends a membership (works for free-roam couriers too); Delete removes
-  // a company-created courier outright (the server refuses marketplace or
-  // shared couriers with an explanation).
+  // One button per courier row ("Remove or delete…") opens a choice of
+  // the two real actions. Remove ends the membership here (works for
+  // free-roam couriers too); Delete removes a company-created courier
+  // outright (the server refuses marketplace or shared couriers with an
+  // explanation). Either choice then asks for one explicit confirm.
+  const [courierChoice, setCourierChoice] = useState<{ id: string; name: string } | null>(null);
   const [confirmAction, setConfirmAction] = useState<{ kind: "staff" | "rider-remove" | "rider-delete"; id: string; name: string } | null>(null);
   const removeMembership = useMutation({
     mutationFn: (id: string) => apiFetch(API.users.removeMembership(id), { method: "DELETE" }),
@@ -90,6 +104,7 @@ export function Team(): React.JSX.Element {
       <header>
         <h1 className="text-xl font-bold">Team</h1>
         <p className="text-sm text-zinc-400">Staff logins (dispatcher, accountant, viewer, admin) and courier accounts.</p>
+        <OwnerNotice what="approving, removing, or deleting people" />
       </header>
 
       {canEdit && pending.data && pending.data.riders.length > 0 ? (
@@ -221,10 +236,30 @@ export function Team(): React.JSX.Element {
                   {r.status}{r.active ? "" : " · disabled"}
                 </span>
                 {canEdit ? (
-                  confirmAction?.id === r.id && (confirmAction.kind === "rider-remove" || confirmAction.kind === "rider-delete") ? (
+                  courierChoice?.id === r.id ? (
+                    <span className="flex flex-wrap items-center gap-2 text-xs">
+                      <button
+                        type="button"
+                        className="btn !px-3 !py-1 text-xs"
+                        title="End their membership here — they keep their account and can deliver elsewhere. Works for free-roam couriers too."
+                        onClick={() => { setCourierChoice(null); setConfirmAction({ kind: "rider-remove", id: r.id, name: r.name }); }}
+                      >
+                        Remove from business
+                      </button>
+                      <button
+                        type="button"
+                        className="btn !px-3 !py-1 text-xs !border-red-800 !text-red-300"
+                        title="Company-added couriers only — marketplace or shared couriers must be removed, not deleted."
+                        onClick={() => { setCourierChoice(null); setConfirmAction({ kind: "rider-delete", id: r.id, name: r.name }); }}
+                      >
+                        Delete outright
+                      </button>
+                      <button type="button" className="btn !px-3 !py-1 text-xs" onClick={() => setCourierChoice(null)}>Cancel</button>
+                    </span>
+                  ) : confirmAction?.id === r.id && (confirmAction.kind === "rider-remove" || confirmAction.kind === "rider-delete") ? (
                     <span className="flex items-center gap-2 text-xs">
                       <span className="text-red-300">
-                        {confirmAction.kind === "rider-delete" ? `Delete ${r.name} outright?` : `Remove ${r.name} from this business?`}
+                        {confirmAction.kind === "rider-delete" ? `Delete ${r.name} outright? Their history stays, their access ends.` : `Remove ${r.name} from this business? They keep their account.`}
                       </span>
                       <button
                         type="button"
@@ -237,14 +272,9 @@ export function Team(): React.JSX.Element {
                       <button type="button" className="btn !px-3 !py-1 text-xs" onClick={() => setConfirmAction(null)}>Keep</button>
                     </span>
                   ) : (
-                    <>
-                      <button type="button" className="btn !px-3 !py-1 text-xs" title="End their membership here — works for free-roam couriers too" onClick={() => setConfirmAction({ kind: "rider-remove", id: r.id, name: r.name })}>
-                        Remove
-                      </button>
-                      <button type="button" className="btn !px-3 !py-1 text-xs !text-red-300" title="Company-added couriers only — marketplace or shared couriers must be removed, not deleted" onClick={() => setConfirmAction({ kind: "rider-delete", id: r.id, name: r.name })}>
-                        Delete
-                      </button>
-                    </>
+                    <button type="button" className="btn !px-3 !py-1 text-xs !text-red-300" onClick={() => setCourierChoice({ id: r.id, name: r.name })}>
+                      Remove or delete…
+                    </button>
                   )
                 ) : null}
               </div>

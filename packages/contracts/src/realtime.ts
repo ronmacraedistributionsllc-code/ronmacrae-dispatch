@@ -18,13 +18,14 @@ export type RealtimeMessage =
   | { type: "rider.status"; payload: { riderId: string; status: string } }
   | { type: "job.created"; payload: { job: JobDto } }
   | { type: "job.state"; payload: { job: JobDto; event: JobEventDto } }
-  | { type: "job.assigned"; payload: { job: JobDto; riderId: string; source: "assign" | "offer" } }
+  | { type: "job.assigned"; payload: { job: JobDto; riderId: string; source: "assign" | "offer" | "pending_claim" } }
   | { type: "job.rerouted"; payload: { jobId: string; route: RouteDto } }
   | { type: "job.eta"; payload: { jobId: string; riderId: string; etaAt: string | null } }
   | { type: "bearer.tracking"; payload: { bearerId: string; state: TrackingState; reason: string | null } }
   | { type: "sos"; payload: SosAlertDto }
   | { type: "notification"; payload: OutboundNotificationEvent }
   | { type: "offer"; payload: JobOfferDto }
+  | { type: "rider.application"; payload: { riderId: string; businessId: string } }
   | { type: "delivery_message"; payload: { jobId: string; id: string; senderRole: string } };
 
 /** Server connection-management messages, outside the application message union above. */

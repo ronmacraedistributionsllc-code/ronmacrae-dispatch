@@ -291,9 +291,11 @@ export async function platformAdminRoutes(app: FastifyInstance, ctx: AppCtx): Pr
         accountActive: r.user?.active ?? null,
         platformStatus: r.platformStatus,
         // Free-roam input facts: marketplace work needs approved AND
-        // self-signed-up (see Rider.selfSignedUp); createdByBusinessId
-        // tells which company's admin may delete this profile outright.
+        // self-signed-up AND the courier's own open-network switch (see
+        // Rider.openNetwork); createdByBusinessId tells which company's
+        // admin may delete this profile outright.
         selfSignedUp: r.selfSignedUp,
+        openNetwork: r.openNetwork,
         createdByBusinessId: r.createdByBusinessId,
         status: r.status,
         attachment: r.attachment,
@@ -336,6 +338,7 @@ export async function platformAdminRoutes(app: FastifyInstance, ctx: AppCtx): Pr
         active: rider.active,
         platformStatus: rider.platformStatus,
         selfSignedUp: rider.selfSignedUp,
+        openNetwork: rider.openNetwork,
         createdByBusinessId: rider.createdByBusinessId,
         status: rider.status,
         attachment: rider.attachment,
@@ -382,6 +385,9 @@ export async function platformAdminRoutes(app: FastifyInstance, ctx: AppCtx): Pr
       .object({
         platformStatus: z.enum(["pending", "approved", "suspended"]).optional(),
         active: z.boolean().optional(),
+        // The courier's own opt-in flag, adjustable here too — a business
+        // admin can never touch it (no business route accepts it).
+        openNetwork: z.boolean().optional(),
         attachment: z.enum(["freelance", "merchant", "logistics"]).optional(),
         attachedMerchantId: z.string().optional().nullable(),
         attachedLogisticsCompanyId: z.string().optional().nullable(),
@@ -408,7 +414,7 @@ export async function platformAdminRoutes(app: FastifyInstance, ctx: AppCtx): Pr
 
     const rider = await ctx.prisma.rider.update({
       where: { id: req.params.id },
-      data: { platformStatus: body.platformStatus, active: body.active, ...attachmentData },
+      data: { platformStatus: body.platformStatus, active: body.active, openNetwork: body.openNetwork, ...attachmentData },
     });
     await ctx.audit.record(
       { id: req.user!.sub, role: "platform_owner" },
@@ -417,7 +423,7 @@ export async function platformAdminRoutes(app: FastifyInstance, ctx: AppCtx): Pr
       rider.id,
       { platformStatus: body.platformStatus, active: body.active, ...attachmentData },
     );
-    return { ok: true, platformStatus: rider.platformStatus, active: rider.active, attachment: rider.attachment, attachedMerchantId: rider.attachedMerchantId, attachedLogisticsCompanyId: rider.attachedLogisticsCompanyId };
+    return { ok: true, platformStatus: rider.platformStatus, active: rider.active, openNetwork: rider.openNetwork, attachment: rider.attachment, attachedMerchantId: rider.attachedMerchantId, attachedLogisticsCompanyId: rider.attachedLogisticsCompanyId };
   });
 
   // Master courier delete — deactivation, never row removal (their jobs,

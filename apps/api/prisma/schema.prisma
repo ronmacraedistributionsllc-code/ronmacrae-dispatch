@@ -339,6 +339,15 @@ model Rider {
    *  under their own company — everyone else is remove-membership-only. */
   createdByBusinessId    String?
   @@index([createdByBusinessId])
+  /** The courier's own opt-in to marketplace work: "I'm an open-network
+   *  courier, any opted-in business may send me offers." Set only by the
+   *  courier themselves (POST /api/bearer/profile/open-network) or the
+   *  Platform Admin — never by a business admin, who must not be able to
+   *  volunteer someone else's courier to the network. Free-roam
+   *  eligibility needs this PLUS approved PLUS self-signed-up; the
+   *  approvals stay exactly where they were (ultra admin vets the
+   *  person, each business opts into the pool). */
+  openNetwork            Boolean     @default(false)
   createdAt          DateTime    @default(now())
   updatedAt          DateTime    @updatedAt
 

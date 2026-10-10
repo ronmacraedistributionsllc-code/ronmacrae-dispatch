@@ -18,7 +18,7 @@ async function adminAuth(request: APIRequestContext): Promise<Record<string, str
  *  any account type works since delete/impersonate act on the shared User
  *  row, and this one is quick to create with a known password via the
  *  existing admin-only staff-grant endpoint). Shows up in Platform Admin's
- *  Staff tab because its role is "viewer", not "rider". */
+ *  Accounts tab because its role is "viewer", not "rider". */
 async function makeDisposableStaffAccount(request: APIRequestContext): Promise<{ email: string; password: string; name: string }> {
   const auth = await adminAuth(request);
   const stamp = Date.now();
@@ -39,7 +39,7 @@ test("platform owner impersonates an account (spec: 'Login As'), sees the impers
   await expect(page.getByRole("heading", { name: /welcome back/i })).toBeVisible();
 
   await page.getByRole("link", { name: "Platform Admin" }).click();
-  await page.getByRole("button", { name: "Staff" }).click();
+  await page.getByRole("button", { name: "Accounts" }).click();
   await page.getByPlaceholder("Search…").fill(target.email);
   const row = page.locator(".card").filter({ hasText: target.name });
   await expect(row).toBeVisible();
@@ -67,7 +67,7 @@ test("platform owner deletes an account (spec: master admin global delete) with 
 
   await login(page, "owner@ronmacrae.example", "owner1234");
   await page.getByRole("link", { name: "Platform Admin" }).click();
-  await page.getByRole("button", { name: "Staff" }).click();
+  await page.getByRole("button", { name: "Accounts" }).click();
   await page.getByPlaceholder("Search…").fill(target.email);
   const row = page.locator(".card").filter({ hasText: target.name });
   await expect(row).toBeVisible();

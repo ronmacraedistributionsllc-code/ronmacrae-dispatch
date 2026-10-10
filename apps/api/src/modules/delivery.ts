@@ -36,8 +36,11 @@ export const DeliveryRequestBody = z.object({
   fee: MoneyMajor.optional().nullable(),
   paymentMethod: z.enum(["cod", "online"]).default("cod"),
   scheduledAt: z.coerce.date().optional().nullable(),
-  instructions: z.string().max(500).optional().or(z.literal("")).nullable().default(""),
+  instructions: z.string().max(500).optional().or(z.literal("")).nullable(),
   consentTracking: z.boolean().default(true),
+  /** "My own courier": rider phone instead of the network pool — same
+   *  rule as PublicOrderBody.courierPhone (validated pre-insert). */
+  courierPhone: z.string().max(20).optional().or(z.literal("")).nullable(),
 });
 
 /** Public delivery request: upserts the customer, books the job, returns the tracking link. */
@@ -73,6 +76,7 @@ export async function deliveryRequestRoutes(app: FastifyInstance, ctx: AppCtx): 
       paymentMethod: body.paymentMethod,
       scheduledAt: body.scheduledAt ? new Date(body.scheduledAt) : undefined,
       instructions: body.instructions,
+      preferredCourierPhone: body.courierPhone || undefined,
     });
     const actor = { id: null, name: body.name, role: "customer", businessId: business.id };
     const job = await createJob(ctx, jobBody, actor, { role: "anonymous", riderId: null, businessId: business.id });

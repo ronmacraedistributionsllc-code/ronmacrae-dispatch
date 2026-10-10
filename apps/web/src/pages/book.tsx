@@ -31,6 +31,8 @@ export function Book(): React.JSX.Element {
     requestedTime: defaultRequestedTime(),
     instructions: "",
     consent: true,
+    courierChoice: "network" as "network" | "own",
+    courierPhone: "",
   });
   const set = (patch: Partial<typeof form>) => setForm((f) => ({ ...f, ...patch }));
   const [busy, setBusy] = useState(false);
@@ -40,6 +42,10 @@ export function Book(): React.JSX.Element {
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
+    if (form.courierChoice === "own" && form.courierPhone.replace(/[^\d]/g, "").length < 7) {
+      setError("Enter your courier's phone number, or choose a network courier.");
+      return;
+    }
     setBusy(true);
     try {
       const money = (raw: string) => {
@@ -188,6 +194,24 @@ export function Book(): React.JSX.Element {
             <textarea id="bk-instructions" className="input min-h-20" rows={3} maxLength={500} value={form.instructions} onChange={(e) => set({ instructions: e.target.value })} />
           </div>
 
+          <div className="space-y-2">
+            <span className="label">Who delivers it?</span>
+            <label className="flex items-start gap-2 text-sm text-zinc-200">
+              <input type="radio" className="mt-1 size-4 accent-emerald-500" checked={form.courierChoice === "network"} onChange={() => set({ courierChoice: "network" })} />
+              <span><span className="font-medium">A courier on the network</span> <span className="text-zinc-500">(fastest)</span></span>
+            </label>
+            <label className="flex items-start gap-2 text-sm text-zinc-200">
+              <input type="radio" className="mt-1 size-4 accent-emerald-500" checked={form.courierChoice === "own"} onChange={() => set({ courierChoice: "own" })} />
+              <span><span className="font-medium">My own courier</span> <span className="text-zinc-500">(by phone number)</span></span>
+            </label>
+            {form.courierChoice === "own" ? (
+              <div>
+                <label className="label" htmlFor="bk-courier">Courier&apos;s phone number</label>
+                <input id="bk-courier" className="input" inputMode="tel" placeholder="876 555 1234" value={form.courierPhone} onChange={(e) => set({ courierPhone: e.target.value })} />
+              </div>
+            ) : null}
+          </div>
+
           <label className="flex items-center gap-2 text-sm text-zinc-300">
             <input type="checkbox" className="size-4 accent-emerald-500" checked={form.consent} onChange={(e) => set({ consent: e.target.checked })} />
             I'm happy to receive delivery updates for this order
@@ -220,6 +244,8 @@ async function fetchDeliveries(form: {
   requestedTime: string | null;
   instructions: string | null;
   consent: boolean;
+  courierChoice: "network" | "own";
+  courierPhone: string;
 }) {
   const res = await fetch("/api/delivery-requests", {
     method: "POST",
@@ -240,6 +266,7 @@ async function fetchDeliveries(form: {
       scheduledAt: form.requestedTime,
       instructions: form.instructions,
       consentTracking: form.consent,
+      courierPhone: form.courierChoice === "own" ? form.courierPhone.trim() || null : null,
     }),
   });
   if (!res.ok) {

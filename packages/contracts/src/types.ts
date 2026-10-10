@@ -86,6 +86,10 @@ export interface RiderDto {
   dailyCapacity: number;
   payRatePerDelivery: Money | null;
   active: boolean;
+  /** Courier's own open-network opt-in — offers from any opted-in
+   *  business, once ultra-admin approved. Set only by the courier or
+   *  Platform Admin, never by business staff. */
+  openNetwork: boolean;
   currentJobId: string | null;
   createdAt: string;
 }

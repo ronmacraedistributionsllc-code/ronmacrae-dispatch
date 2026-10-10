@@ -15,7 +15,7 @@ let harness: TestHarness;
 let seq = 0;
 const uniq = () => `${Date.now()}${++seq}`;
 
-async function makeRider(opts: { platformStatus?: "pending" | "approved" | "suspended"; status?: "available" | "offline"; noMemberships?: boolean; selfSignedUp?: boolean } = {}) {
+async function makeRider(opts: { platformStatus?: "pending" | "approved" | "suspended"; status?: "available" | "offline"; noMemberships?: boolean; selfSignedUp?: boolean; openNetwork?: boolean } = {}) {
   const rider = await harness.prisma.rider.create({
     data: {
       name: "Auto Rider",
@@ -25,6 +25,7 @@ async function makeRider(opts: { platformStatus?: "pending" | "approved" | "susp
       dailyCapacity: 5,
       platformStatus: opts.platformStatus ?? "pending",
       selfSignedUp: opts.selfSignedUp ?? false,
+      openNetwork: opts.openNetwork ?? false,
     },
   });
   if (opts.noMemberships) {
@@ -136,7 +137,7 @@ describe("courier pools", () => {
   it("pool=both offers marketplace-approved free-roam riders, and accepting creates their membership", async () => {
     await harness.prisma.business.update({ where: { id: harness.business.id }, data: { courierPool: "both" } });
     try {
-      const free = await makeRider({ platformStatus: "approved", noMemberships: true, selfSignedUp: true });
+      const free = await makeRider({ platformStatus: "approved", noMemberships: true, selfSignedUp: true, openNetwork: true });
       const dispatcher = await makeDispatcher();
       const customer = await makeCustomer();
       const jobId = await createJob(dispatcher, customer.id);

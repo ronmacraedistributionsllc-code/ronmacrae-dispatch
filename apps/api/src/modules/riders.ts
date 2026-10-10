@@ -36,6 +36,7 @@ export function riderToDto(
     dailyCapacity: r.dailyCapacity,
     payRatePerDelivery: moneyField(r.payRate, r.payCurrency),
     active: r.active,
+    openNetwork: r.openNetwork,
     currentJobId: extra?.currentJobId ?? null,
     createdAt: r.createdAt.toISOString(),
   };

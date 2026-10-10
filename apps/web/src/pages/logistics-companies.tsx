@@ -4,6 +4,7 @@ import { API } from "@ronmacrae/contracts";
 import type { LogisticsCompanyDto } from "@ronmacrae/contracts";
 import { ApiError, apiFetch } from "../lib/api.js";
 import { useAuth } from "../lib/auth.js";
+import { OwnerNotice } from "../components/owner-notice.js";
 
 /**
  * Admin console for fleet-supplier clients (spec: "Bearer/Logistics
@@ -15,8 +16,8 @@ import { useAuth } from "../lib/auth.js";
  * (see platform-admin.tsx's rider attachment controls), not set here.
  */
 export function LogisticsCompanies(): React.JSX.Element {
-  const { user } = useAuth();
-  const canEdit = user?.role === "admin";
+  const { user, businessId } = useAuth();
+  const canEdit = user?.role === "admin" && !!businessId;
   const qc = useQueryClient();
   const [creating, setCreating] = useState(false);
 
@@ -28,6 +29,7 @@ export function LogisticsCompanies(): React.JSX.Element {
         <div>
           <h1 className="text-xl font-bold">Logistics companies</h1>
           <p className="text-sm text-zinc-400">Fleet operators who supply their own couriers — the other side of the marketplace from merchants.</p>
+          <OwnerNotice what="deleting companies" />
         </div>
         {canEdit ? (
           <button className="btn-accent" onClick={() => setCreating((v) => !v)}>{creating ? "Cancel" : "+ New logistics company"}</button>

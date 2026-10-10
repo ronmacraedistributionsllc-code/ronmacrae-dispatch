@@ -477,6 +477,13 @@ export const API = {
     /** Unclaimed new jobs this courier can see (their pool), with `offered` flags. */
     pendingJobs: "/api/bearer/pending-jobs",
     claimPendingJob: (id: string) => `/api/bearer/pending-jobs/${id}/claim`,
+    /** Businesses this courier could deliver for, each with their own
+     *  membership status — the directory behind "apply to deliver". */
+    businesses: "/api/bearer/businesses",
+    /** The courier's own open-network switch (opt in/out of marketplace
+     *  offers from any opted-in business). */
+    openNetwork: "/api/bearer/profile/open-network",
+    applyToBusiness: (id: string) => `/api/bearer/businesses/${id}/apply`,
     /** rider sets their own intended work order for their active jobs (spec 5B) */
     reorder: "/api/bearer/jobs/reorder",
     /** "Contact dispatch" button — spec 5F */

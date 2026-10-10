@@ -90,6 +90,8 @@ export function PublicOrder(): React.JSX.Element {
   const [apartmentUnit, setApartmentUnit] = useState("");
   const [items, setItems] = useState<ItemRow[]>([emptyRow()]);
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("cod");
+  const [courierChoice, setCourierChoice] = useState<"network" | "own">("network");
+  const [courierPhone, setCourierPhone] = useState("");
   const [requestedDate, setRequestedDate] = useState(todayLocalDate);
   const [requestedTime, setRequestedTime] = useState("12:00");
   const [instructions, setInstructions] = useState("");
@@ -170,7 +172,8 @@ export function PublicOrder(): React.JSX.Element {
     };
   }, [JSON.stringify(items.map((r) => [r.productVariantId, r.productId, r.name, r.quantity, r.unitPrice])), destination?.point.lat, destination?.point.lng, merchantSlug]);
 
-  const canSubmit = name.trim().length > 0 && phone.replace(/[^\d]/g, "").length >= 7 && destination != null && items.some((r) => toItemInput(r) != null) && !busy && !quoteError;
+  const canSubmit = name.trim().length > 0 && phone.replace(/[^\d]/g, "").length >= 7 && destination != null && items.some((r) => toItemInput(r) != null) && !busy && !quoteError &&
+    (courierChoice === "network" || courierPhone.replace(/[^\d]/g, "").length >= 7);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -198,6 +201,7 @@ export function PublicOrder(): React.JSX.Element {
           scheduledAt: new Date(`${requestedDate}T${requestedTime || "12:00"}:00`).toISOString(),
           instructions: instructions.trim() || null,
           consentTracking: consent,
+          courierPhone: courierChoice === "own" ? courierPhone.trim() || null : null,
         }),
       });
       setResult(body);
@@ -440,6 +444,23 @@ export function PublicOrder(): React.JSX.Element {
                 <option key={m} value={m}>{PAYMENT_METHOD_LABELS[m]}</option>
               ))}
             </select>
+          </div>
+          <div className="mt-3 space-y-2">
+            <span className="label">Who delivers it?</span>
+            <label className="flex items-start gap-2 text-sm text-zinc-200">
+              <input type="radio" className="mt-1 size-4 accent-emerald-500" checked={courierChoice === "network"} onChange={() => setCourierChoice("network")} />
+              <span><span className="font-medium">A courier on the network</span> <span className="text-zinc-500">(fastest — offered to every available courier)</span></span>
+            </label>
+            <label className="flex items-start gap-2 text-sm text-zinc-200">
+              <input type="radio" className="mt-1 size-4 accent-emerald-500" checked={courierChoice === "own"} onChange={() => setCourierChoice("own")} />
+              <span><span className="font-medium">My own courier</span> <span className="text-zinc-500">(by phone number — they must deliver for this business)</span></span>
+            </label>
+            {courierChoice === "own" ? (
+              <div>
+                <label className="label" htmlFor="po-courier">Courier&apos;s phone number</label>
+                <input id="po-courier" className="input" inputMode="tel" placeholder="876 555 1234" value={courierPhone} onChange={(e) => setCourierPhone(e.target.value)} />
+              </div>
+            ) : null}
           </div>
         </section>
 

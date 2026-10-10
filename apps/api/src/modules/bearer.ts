@@ -3,7 +3,7 @@ import { z } from "zod";
 import { httpErrors } from "@fastify/sensible";
 import type { AppCtx } from "../ctx.js";
 import { idempotencyKeyFrom, withIdempotency } from "../lib/idempotency.js";
-import { ACTIVE_JOB_STATUSES } from "@ronmacrae/contracts";
+import { ACTIVE_JOB_STATUSES, roomForDispatch } from "@ronmacrae/contracts";
 import type { DispatchContactDto } from "@ronmacrae/contracts";
 import { getBusinessSettings } from "./settings.js";
 import { jobToDto, listJobs, recordRiderStage, transitionJob, TransitionBody, type Actor, type Viewer } from "./jobs/index.js";
@@ -60,6 +60,67 @@ export async function bearerRoutes(app: FastifyInstance, ctx: AppCtx): Promise<v
       },
     };
     return dto;
+  });
+
+  /**
+   * Business directory for couriers who want more work: every active
+   * business, each tagged with THIS rider's relationship to it
+   * (active/pending/suspended/removed/none) — derived from their own
+   * token, never a parameter. The list is names only (no staff, no
+   * stats): enough to choose where to apply, nothing sensitive.
+   */
+  app.get("/api/bearer/businesses", { preHandler: ctx.requireRider }, async (req) => {
+    const riderId = req.user!.riderId!;
+    const [businesses, memberships] = await Promise.all([
+      ctx.prisma.business.findMany({ where: { active: true }, select: { id: true, name: true }, orderBy: { name: "asc" } }),
+      ctx.prisma.riderMembership.findMany({ where: { riderId }, select: { businessId: true, status: true } }),
+    ]);
+    const statusByBusiness = new Map(memberships.map((m) => [m.businessId, m.status]));
+    return {
+      businesses: businesses.map((b) => ({ businessId: b.id, businessName: b.name, myStatus: statusByBusiness.get(b.id) ?? "none" })),
+    };
+  });
+
+  /**
+   * Apply to deliver for a business: creates a `pending` membership the
+   * business's own admin approves in Team → Pending applications
+   * (POST /api/riders/:id/decide — unchanged). Re-applying after a
+   * removal resets to pending; an active membership, a pending
+   * application, or a suspension all refuse with an explaining 409
+   * (a suspension is an admin decision — applying again must not
+   * silently undo it).
+   */
+  app.post<{ Params: { id: string } }>("/api/bearer/businesses/:id/apply", { preHandler: ctx.requireRider, config: { rateLimit: { max: 10, timeWindow: "1 minute" } } }, async (req) => {
+    const riderId = req.user!.riderId!;
+    const business = await ctx.prisma.business.findUnique({ where: { id: req.params.id } });
+    if (!business || !business.active) throw httpErrors.createError(404, "Business not found");
+    const existing = await ctx.prisma.riderMembership.findUnique({ where: { riderId_businessId: { riderId, businessId: business.id } } });
+    if (existing?.status === "active") throw httpErrors.createError(409, "You're already delivering for this business");
+    if (existing?.status === "pending") throw httpErrors.createError(409, "Your application is already waiting for their approval");
+    if (existing?.status === "suspended") throw httpErrors.createError(409, "Your access was suspended — contact their dispatch instead of re-applying");
+    if (existing) {
+      await ctx.prisma.riderMembership.update({ where: { id: existing.id }, data: { status: "pending", approvedAt: null } });
+    } else {
+      await ctx.prisma.riderMembership.create({ data: { riderId, businessId: business.id, status: "pending" } });
+    }
+    await ctx.audit.record(actorFor(req), "rider.apply", "business", business.id);
+    // Live ping so an open Team screen can show the application without a refresh.
+    ctx.hub.broadcast(roomForDispatch(business.id), { type: "rider.application", payload: { riderId, businessId: business.id } });
+    return { ok: true, status: "pending" as const };
+  });
+
+  /**
+   * The courier's own open-network switch: "I'm available to carry for
+   * any business on the network." Only the courier themselves (this
+   * token's own rider row — never another rider's, never by business
+   * staff) or the Platform Admin can flip it; free-roam offers still
+   * need ultra-admin approval AND each business's pool opt-in on top.
+   */
+  app.post("/api/bearer/profile/open-network", { preHandler: ctx.requireRider }, async (req) => {
+    const body = z.object({ open: z.boolean() }).parse(req.body);
+    const rider = await ctx.prisma.rider.update({ where: { id: req.user!.riderId! }, data: { openNetwork: body.open } });
+    await ctx.audit.record(actorFor(req), body.open ? "rider.open_network.on" : "rider.open_network.off", "rider", rider.id);
+    return { ok: true, openNetwork: rider.openNetwork };
   });
 
   app.get("/api/bearer/jobs", { preHandler: ctx.requireRider }, async (req) => {

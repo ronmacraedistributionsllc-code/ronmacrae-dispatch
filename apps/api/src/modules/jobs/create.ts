@@ -53,6 +53,10 @@ export const CreateJobBody = z.object({
   pin: z.string().regex(/^\d{4,10}$/).optional(),
   scheduledAt: z.coerce.date().optional(),
   promisedAt: z.coerce.date().optional(),
+  /** "My own courier": a rider phone number the customer (or staff) asked
+   *  for by name. Validated before the job exists (bad number = honest
+   *  400, never a stranded job); offered to exactly that courier after. */
+  preferredCourierPhone: z.string().max(20).optional().nullable(),
 });
 
 export const UpdateJobBody = z.object({
@@ -147,6 +151,15 @@ export async function createJob(
   const subtotal = fareMinor != null || feeMinor != null ? (fareMinor ?? 0) + (feeMinor ?? 0) : null;
   const cod = body.paymentMethod === "cod";
 
+  // A named courier is validated BEFORE anything is inserted — an
+  // unknown/unavailable number fails the whole booking with a 400 here,
+  // never a job nobody was offered.
+  let requestedCourier: { id: string; name: string } | null = null;
+  if (body.preferredCourierPhone) {
+    const { validateRequestedCourier } = await import("../offers.js");
+    requestedCourier = await validateRequestedCourier(ctx, businessId, body.preferredCourierPhone);
+  }
+
   const zones = new ZonesService(ctx);
   const zone = body.point ? await zones.detect(businessId, body.point as GeoPoint) : { zoneId: null, zoneName: null };
 
@@ -223,16 +236,20 @@ export async function createJob(
   const returnJobId = await returnJobFor(ctx, row.id);
   const dto = jobToDto(row, viewer, ctx.config.APP_ORIGIN, { returnJobId });
   void notifyDispatchOfNewOrder(ctx, businessId, dto, actor.id);
-  // Auto-dispatch: offer to every eligible courier (company pool and/or
-  // marketplace free-roam, per business settings). Deferred import — offers.ts
-  // imports this module's barrel, so a static import would cycle. Awaited
-  // (not void) on purpose: the writes are just a few indexed rows, and
-  // awaiting means a manual broadcast issued right after creation sees the
-  // auto offers and dedupes instead of stacking duplicates. Failures still
-  // never fail the order — autoBroadcastNewJob catches internally.
+  // Dispatch: exactly one named courier when the customer (or staff)
+  // asked for theirs by phone, otherwise the whole eligible pool.
+  // Deferred import — offers.ts imports this module's barrel, so a static
+  // import would cycle. Awaited (not void) on purpose: the writes are just
+  // a few indexed rows, and awaiting means a manual broadcast issued right
+  // after creation sees the offers and dedupes instead of stacking
+  // duplicates. Failures still never fail the order.
   await import("../offers.js")
-    .then((m) => m.autoBroadcastNewJob(ctx, row.id))
-    .catch((err) => ctx.log.error({ err: String(err), jobId: row.id }, "auto-broadcast failed"));
+    .then((m) =>
+      requestedCourier
+        ? m.offerToRequestedCourier(ctx, row, requestedCourier, actor.role ?? "customer")
+        : m.autoBroadcastNewJob(ctx, row.id),
+    )
+    .catch((err) => ctx.log.error({ err: String(err), jobId: row.id }, "dispatch offers failed"));
   return dto;
 }
 
