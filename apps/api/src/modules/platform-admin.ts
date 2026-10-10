@@ -299,6 +299,7 @@ export async function platformAdminRoutes(app: FastifyInstance, ctx: AppCtx): Pr
         // admin may delete this profile outright.
         selfSignedUp: r.selfSignedUp,
         openNetwork: r.openNetwork,
+        verified: r.verified,
         createdByBusinessId: r.createdByBusinessId,
         status: r.status,
         attachment: r.attachment,
@@ -342,6 +343,7 @@ export async function platformAdminRoutes(app: FastifyInstance, ctx: AppCtx): Pr
         platformStatus: rider.platformStatus,
         selfSignedUp: rider.selfSignedUp,
         openNetwork: rider.openNetwork,
+        verified: rider.verified,
         createdByBusinessId: rider.createdByBusinessId,
         status: rider.status,
         attachment: rider.attachment,
@@ -391,6 +393,10 @@ export async function platformAdminRoutes(app: FastifyInstance, ctx: AppCtx): Pr
         // The courier's own opt-in flag, adjustable here too — a business
         // admin can never touch it (no business route accepts it).
         openNetwork: z.boolean().optional(),
+        // Platform verification ("I know this courier won't steal") —
+        // owner ONLY, never managers (field-level: this whole route is
+        // mgr-gated, but verification stays with the master account).
+        verified: z.boolean().optional(),
         attachment: z.enum(["freelance", "merchant", "logistics"]).optional(),
         attachedMerchantId: z.string().optional().nullable(),
         attachedLogisticsCompanyId: z.string().optional().nullable(),
@@ -415,18 +421,29 @@ export async function platformAdminRoutes(app: FastifyInstance, ctx: AppCtx): Pr
       }
     }
 
+    if (body.verified !== undefined && req.user!.platformRole !== "owner") {
+      throw httpErrors.createError(403, "Only the master account can verify couriers");
+    }
     const rider = await ctx.prisma.rider.update({
       where: { id: req.params.id },
-      data: { platformStatus: body.platformStatus, active: body.active, openNetwork: body.openNetwork, ...attachmentData },
+      data: {
+        platformStatus: body.platformStatus,
+        active: body.active,
+        openNetwork: body.openNetwork,
+        ...(body.verified !== undefined
+          ? { verified: body.verified, verifiedAt: body.verified ? new Date() : null, verifiedById: body.verified ? req.user!.sub : null }
+          : {}),
+        ...attachmentData,
+      },
     });
     await ctx.audit.record(
       { id: req.user!.sub, role: "platform_owner" },
-      "platform.rider.update",
+      body.verified !== undefined ? (body.verified ? "platform.rider.verify" : "platform.rider.unverify") : "platform.rider.update",
       "rider",
       rider.id,
-      { platformStatus: body.platformStatus, active: body.active, ...attachmentData },
+      { platformStatus: body.platformStatus, active: body.active, verified: body.verified, ...attachmentData },
     );
-    return { ok: true, platformStatus: rider.platformStatus, active: rider.active, openNetwork: rider.openNetwork, attachment: rider.attachment, attachedMerchantId: rider.attachedMerchantId, attachedLogisticsCompanyId: rider.attachedLogisticsCompanyId };
+    return { ok: true, platformStatus: rider.platformStatus, active: rider.active, openNetwork: rider.openNetwork, verified: rider.verified, attachment: rider.attachment, attachedMerchantId: rider.attachedMerchantId, attachedLogisticsCompanyId: rider.attachedLogisticsCompanyId };
   });
 
   // Master courier delete — the app owner's ultimate power: ANY courier

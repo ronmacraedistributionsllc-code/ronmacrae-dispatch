@@ -24,6 +24,7 @@ import { pushRoutes } from "./modules/push.js";
 import { geoRoutes } from "./modules/geo.js";
 import { jobRoutes } from "./modules/jobs/index.js";
 import { codRoutes } from "./modules/cod.js";
+import { moneyTransferRoutes } from "./modules/money-transfers.js";
 import { opsBoardRoutes } from "./modules/ops-board.js";
 import { reportRoutes } from "./modules/reports.js";
 import { deliveryMessageRoutes } from "./modules/delivery-messages.js";
@@ -138,6 +139,7 @@ export async function createApp(ctx: AppCtx): Promise<FastifyInstance> {
   await geoRoutes(app, ctx);
   await jobRoutes(app, ctx);
   await codRoutes(app, ctx);
+  await moneyTransferRoutes(app, ctx);
   await opsBoardRoutes(app, ctx);
   await reportRoutes(app, ctx);
   await deliveryMessageRoutes(app, ctx);

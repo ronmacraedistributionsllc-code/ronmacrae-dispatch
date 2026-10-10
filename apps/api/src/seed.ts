@@ -123,8 +123,9 @@ async function seedRider(prisma: PrismaClient, businessId: string): Promise<stri
       dailyCapacity: 15,
       active: true,
       platformStatus: "approved",
+      verified: true,
     },
-    update: { userId: user.id, name: user.name, active: true, platformStatus: "approved" },
+    update: { userId: user.id, name: user.name, active: true, platformStatus: "approved", verified: true },
   });
   await prisma.riderMembership.upsert({
     where: { riderId_businessId: { riderId: rider.id, businessId } },

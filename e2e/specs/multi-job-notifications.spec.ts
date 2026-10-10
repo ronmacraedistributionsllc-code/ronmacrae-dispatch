@@ -22,6 +22,10 @@ async function makeRider(request: APIRequestContext, auth: Record<string, string
   const rider = ((await res.json()) as { rider: { id: string } }).rider;
   const statusRes = await request.patch(`/api/riders/${rider.id}/status`, { headers: auth, data: { status: "available" } });
   expect(statusRes.ok()).toBe(true);
+  // Cash (COD) jobs only flow to verified couriers — the platform owner vouches here.
+  const ownerLogin = await request.post("/api/auth/login", { data: { identifier: "owner@ronmacrae.example", password: "owner1234" } });
+  const ownerAuth = { authorization: `Bearer ${((await ownerLogin.json()) as { accessToken: string }).accessToken}` };
+  await request.patch(`/api/platform/riders/${rider.id}`, { headers: ownerAuth, data: { verified: true } });
   return { id: rider.id, phone, password };
 }
 

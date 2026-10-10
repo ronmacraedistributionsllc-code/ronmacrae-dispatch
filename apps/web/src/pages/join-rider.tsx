@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { API } from "@ronmacrae/contracts";
 import { ApiError, apiFetch } from "../lib/api.js";
 
@@ -25,8 +25,22 @@ export function JoinRider(): React.JSX.Element {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [resent, setResent] = useState(false);
+  // Onboarding choice: join a company (needs their approval) or go
+  // independent (platform vets you for the open network instead).
+  const [choice, setChoice] = useState<"company" | "independent">("company");
+  const [companies, setCompanies] = useState<{ id: string; name: string }[]>([]);
+  const [companyId, setCompanyId] = useState("");
 
-  const canSubmit = name.trim().length > 0 && phone.replace(/[^\d]/g, "").length >= 7 && /\S+@\S+\.\S+/.test(email) && password.length >= 8;
+  useEffect(() => {
+    let cancelled = false;
+    apiFetch<{ companies: { id: string; name: string }[] }>(API.riders.signupCompanies)
+      .then((r) => { if (!cancelled) { setCompanies(r.companies); if (r.companies.length === 1) setCompanyId(r.companies[0]!.id); } })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+
+  const canSubmit = name.trim().length > 0 && phone.replace(/[^\d]/g, "").length >= 7 && /\S+@\S+\.\S+/.test(email) && password.length >= 8 &&
+    (choice === "independent" || companyId !== "");
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -35,7 +49,10 @@ export function JoinRider(): React.JSX.Element {
     try {
       const res = await apiFetch<{ status: "pending" | "active" }>(API.riders.signup, {
         method: "POST",
-        body: JSON.stringify({ name, phone, email, vehicle, plate: plate || undefined, password }),
+        body: JSON.stringify({
+          name, phone, email, vehicle, plate: plate || undefined, password,
+          ...(choice === "independent" ? { independent: true } : { businessId: companyId }),
+        }),
       });
       setStatus(res.status);
       setStep("verify");
@@ -90,7 +107,9 @@ export function JoinRider(): React.JSX.Element {
           <p className="text-sm text-zinc-300">
             {status === "active"
               ? "You're already approved and ready to go — sign in with your email and password."
-              : "A dispatcher will review your application shortly. You'll be able to sign in once approved."}
+              : choice === "independent"
+                ? "The platform team will review and verify you for open-network work. You can sign in right away and apply to companies from inside the app meanwhile."
+                : "That company will review your application shortly. You can sign in right away — your dashboard shows what's waiting."}
           </p>
           <a href="/" className="btn-accent mt-2 inline-block">Back to sign-in</a>
         </div>
@@ -151,6 +170,26 @@ export function JoinRider(): React.JSX.Element {
         <div>
           <label className="label" htmlFor="jr-plate">License plate (optional)</label>
           <input id="jr-plate" className="input" value={plate} onChange={(e) => setPlate(e.target.value)} />
+        </div>
+        <div className="space-y-2">
+          <span className="label">How do you want to work?</span>
+          <label className="flex items-start gap-2 text-sm text-zinc-200">
+            <input type="radio" className="mt-1 size-4 accent-emerald-500" checked={choice === "company"} onChange={() => setChoice("company")} />
+            <span><span className="font-medium">Join a company</span> <span className="text-zinc-500">(they approve your application, you deliver for them)</span></span>
+          </label>
+          <label className="flex items-start gap-2 text-sm text-zinc-200">
+            <input type="radio" className="mt-1 size-4 accent-emerald-500" checked={choice === "independent"} onChange={() => setChoice("independent")} />
+            <span><span className="font-medium">Independent courier</span> <span className="text-zinc-500">(the platform verifies you for open-network work)</span></span>
+          </label>
+          {choice === "company" ? (
+            <div>
+              <label className="label" htmlFor="jr-company">Company</label>
+              <select id="jr-company" className="input" value={companyId} onChange={(e) => setCompanyId(e.target.value)} required>
+                <option value="">Choose a company…</option>
+                {companies.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </select>
+            </div>
+          ) : null}
         </div>
         <div>
           <label className="label" htmlFor="jr-password">Choose a password</label>

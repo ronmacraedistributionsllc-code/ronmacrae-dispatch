@@ -553,6 +553,7 @@ export function registerAuthHook(app: FastifyInstance, ctx: AppCtx): void {
     if (url.startsWith("/api/merchants/public/") && method === "GET") return true;
     // Public rider application — no login (this IS how a rider gets one).
     if (url === "/api/rider-signup" && method === "POST") return true;
+    if (url === "/api/rider-signup/companies" && method === "GET") return true;
     if ((url === "/api/rider-signup/verify" || url === "/api/rider-signup/resend") && method === "POST") return true;
     if ((url === "/api/merchant-signup" || url === "/api/merchant-signup/verify" || url === "/api/merchant-signup/resend") && method === "POST") return true;
     // Public Bearer/Logistics Company application — the spec's fourth

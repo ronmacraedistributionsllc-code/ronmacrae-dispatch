@@ -34,7 +34,7 @@ async function pickAddress(container: Locator, query: string): Promise<void> {
     // The offline geocoder is allowed to return no match. The production flow
     // explicitly supports this honest fallback and lets the user confirm a
     // draggable island pin without changing the typed address.
-    await container.getByRole("button", { name: "Use this address" }).click();
+    await container.getByRole("button", { name: "Find on map" }).click();
   }
   await container.getByRole("button", { name: "Confirm location" }).click();
 }

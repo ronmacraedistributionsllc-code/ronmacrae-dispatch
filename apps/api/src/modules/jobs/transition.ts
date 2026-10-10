@@ -277,6 +277,11 @@ export async function transitionJob(
           meta: { amountCollectedMajor: cashDefault, currency: row.currency } as object,
         },
       });
+      // The money trail starts here: rider collected cash, owes the
+      // business. Both confirmations land later (hand-in = paid,
+      // approve = received) — see money-transfers.ts.
+      const { ensureCodHandoverTransfer } = await import("../money-transfers.js");
+      await ensureCodHandoverTransfer(tx, { id: jobId, businessId: row.businessId, riderId: row.riderId, amountCollected: cash?.amountCollected ?? 0, currency: row.currency });
     }
     const job = await tx.job.findUniqueOrThrow({ where: { id: jobId }, include: jobInclude });
     const event = await tx.jobEvent.create({

@@ -21,6 +21,10 @@ test("accountant filters the operating report by rider and sees an honest rider-
   const riderRes = await request.post("/api/riders", { headers: auth, data: { name: "Report E2E Rider", phone: uniquePhone } });
   const rider = ((await riderRes.json()) as { rider: { id: string } }).rider;
   await request.patch(`/api/riders/${rider.id}/status`, { headers: auth, data: { status: "available" } });
+  // Cash (COD) jobs only flow to verified couriers — the platform owner vouches here.
+  const ownerLogin = await request.post("/api/auth/login", { data: { identifier: "owner@ronmacrae.example", password: "owner1234" } });
+  const ownerAuth = { authorization: `Bearer ${((await ownerLogin.json()) as { accessToken: string }).accessToken}` };
+  await request.patch(`/api/platform/riders/${rider.id}`, { headers: ownerAuth, data: { verified: true } });
 
   const customers = ((await (await request.get("/api/customers", { headers: auth })).json()) as { customers: { id: string; phone: string }[] }).customers;
   const customer = customers.find((c) => c.phone === "+8765551234")!;

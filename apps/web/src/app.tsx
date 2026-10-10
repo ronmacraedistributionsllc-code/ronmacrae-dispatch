@@ -34,6 +34,7 @@ import { Team } from "./pages/team.js";
 import { Settings } from "./pages/settings.js";
 import { ThemePreview } from "./pages/theme-preview.js";
 import { Settlements } from "./pages/settlements.js";
+import { Money } from "./pages/money.js";
 import { Notifications } from "./pages/notifications.js";
 import { Messages } from "./pages/messages.js";
 import { OpsBoard } from "./pages/ops-board.js";
@@ -307,6 +308,14 @@ export default function App(): React.JSX.Element {
                 element={
                   <Protected>
                     <Settlements />
+                  </Protected>
+                }
+              />
+              <Route
+                path="/money"
+                element={
+                  <Protected>
+                    <Money />
                   </Protected>
                 }
               />

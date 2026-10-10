@@ -157,7 +157,7 @@ export async function createJob(
   let requestedCourier: { id: string; name: string } | null = null;
   if (body.preferredCourierPhone) {
     const { validateRequestedCourier } = await import("../offers.js");
-    requestedCourier = await validateRequestedCourier(ctx, businessId, body.preferredCourierPhone);
+    requestedCourier = await validateRequestedCourier(ctx, businessId, body.preferredCourierPhone, body.paymentMethod ?? "cod");
   }
 
   const zones = new ZonesService(ctx);

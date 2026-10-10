@@ -26,7 +26,7 @@ async function pickAddress(container: Locator, query: string): Promise<void> {
     await expect(firstSuggestion).toBeVisible({ timeout: 15_000 });
     await firstSuggestion.click();
   } catch {
-    await container.getByRole("button", { name: "Use this address" }).click();
+    await container.getByRole("button", { name: "Find on map" }).click();
   }
   await container.getByRole("button", { name: "Confirm location" }).click();
 }
@@ -97,6 +97,8 @@ test("a logistics company sees its own attached courier's real deliveries on its
   const riderRes = await request.post("/api/riders", { headers: admin, data: { name: `Fleet Courier ${stamp}`, phone: `+1876${stamp.toString().slice(-7)}` } });
   const rider = ((await riderRes.json()) as { rider: { id: string } }).rider;
   await request.patch(`/api/platform/riders/${rider.id}`, { headers: owner, data: { attachment: "logistics", attachedLogisticsCompanyId: company.id } });
+  // Cash (COD) jobs only flow to verified couriers — the platform owner vouches here.
+  await request.patch(`/api/platform/riders/${rider.id}`, { headers: owner, data: { verified: true } });
 
   const customerRes = await request.get("/api/customers", { headers: admin });
   const customers = ((await customerRes.json()) as { customers: { id: string }[] }).customers;

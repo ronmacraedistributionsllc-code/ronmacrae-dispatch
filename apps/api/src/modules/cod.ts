@@ -164,6 +164,9 @@ export async function codRoutes(app: FastifyInstance, ctx: AppCtx): Promise<void
           meta: { amountHandedInMajor: body.amountHandedIn, currency: row.currency },
         },
       });
+      // Payer half of the money trail: whoever hands cash in says "I paid".
+      const { markCodHandoverPaid } = await import("./money-transfers.js");
+      await markCodHandoverPaid(tx, { id: req.params.id, businessId: row.businessId, riderId: fresh.riderId, amount: amountMinor, currency: row.currency }, actor.id!);
       return tx.job.findUniqueOrThrow({ where: { id: req.params.id }, include: jobInclude });
     });
     await ctx.audit.record(actor, "cod.hand_in", "job", req.params.id, { amountHandedInMajor: body.amountHandedIn });
@@ -196,6 +199,9 @@ export async function codRoutes(app: FastifyInstance, ctx: AppCtx): Promise<void
       await tx.codEvent.create({
         data: { jobId: req.params.id, from: fresh.codStatus as CodStatus, to: "approved", actorType: actorType(actor.role), actorId: actor.id, actorName: actor.name, note: body.note || null },
       });
+      // Receiver half: the office confirming receipt completes the trail.
+      const { markCodHandoverReceived } = await import("./money-transfers.js");
+      await markCodHandoverReceived(tx, req.params.id, actor.id!);
       return tx.job.findUniqueOrThrow({ where: { id: req.params.id }, include: jobInclude });
     });
     await ctx.audit.record(actor, "cod.approve", "job", req.params.id, { note: body.note || null });
@@ -215,6 +221,8 @@ export async function codRoutes(app: FastifyInstance, ctx: AppCtx): Promise<void
         where: { id: req.params.id, codStatus: fresh.codStatus },
         data: { codStatus: "disputed", codAccountantNote: body.note, codDisputeType: body.type },
       });
+      const { disputeCodTransfer } = await import("./money-transfers.js");
+      await disputeCodTransfer(tx, req.params.id);
       if (claimed.count !== 1) throw httpErrors.createError(409, "This entry just changed — refresh and try again");
       await tx.codEvent.create({
         data: { jobId: req.params.id, from: fresh.codStatus as CodStatus, to: "disputed", actorType: actorType(actor.role), actorId: actor.id, actorName: actor.name, note: body.note, meta: { type: body.type } },

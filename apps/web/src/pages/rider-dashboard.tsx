@@ -1,7 +1,7 @@
 import React, { Suspense, useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import type { DispatchContactDto, GeoSuggestionDto, JobDto, JobOfferDto, JobStatus, PendingJobDto, RiderStatus } from "@ronmacrae/contracts";
-import { ACTIVE_JOB_STATUSES, API, TERMINAL_JOB_STATUSES } from "@ronmacrae/contracts";
+import type { DispatchContactDto, GeoSuggestionDto, JobDto, JobOfferDto, JobStatus, MoneyTransferDto, PendingJobDto, RiderStatus } from "@ronmacrae/contracts";
+import { ACTIVE_JOB_STATUSES, API, MONEY_TRANSFER_LABELS, TERMINAL_JOB_STATUSES } from "@ronmacrae/contracts";
 import { majorOf } from "@ronmacrae/money";
 import { ApiError, apiFetch, formatMoney } from "../lib/api.js";
 import { useAuth } from "../lib/auth.js";
@@ -307,6 +307,7 @@ export function RiderDashboard(): React.JSX.Element {
     ) : null}
     <MyBusinesses />
     <DeliverForMore />
+    <MyMoney />
     <CashSummary />
     <LocationSharing riderId={rider.id} hasActiveDelivery={activeJobs.length > 0} />
     <LogisticsFleetChat />
@@ -460,6 +461,60 @@ function DeliverForMore(): React.JSX.Element | null {
           </div>
         ))}
         {apply.error ? <p className="text-sm text-red-400">{apply.error instanceof ApiError ? apply.error.message : "Could not send your application"}</p> : null}
+      </div>
+    </details>
+  );
+}
+
+/**
+ * The courier's own money view: what they owe (cash in hand), what's owed
+ * to them (payouts), and what's waiting on THEIR tap ("I paid" / "I
+ * received"). Anything confirmed by both sides shows done; disputes show
+ * frozen with the note. Same confirm endpoints as the staff page — the
+ * server decides which half is yours.
+ */
+function MyMoney(): React.JSX.Element | null {
+  const qc = useQueryClient();
+  const list = useQuery({
+    queryKey: ["bearer-money"],
+    queryFn: () => apiFetch<{ transfers: MoneyTransferDto[] }>(API.money.mine),
+  });
+  const act = useMutation({
+    mutationFn: ({ id, side }: { id: string; side: "paid" | "received" }) =>
+      apiFetch(API.money.confirm(id), { method: "POST", body: JSON.stringify({ side }) }),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["bearer-money"] }),
+  });
+  const pending = (list.data?.transfers ?? []).filter((t) => t.status === "pending" || t.status === "awaiting_other_side");
+  const done = (list.data?.transfers ?? []).filter((t) => t.status === "confirmed" || t.status === "disputed");
+  if (list.isLoading || (!pending.length && !done.length)) return null;
+  return (
+    <details className="card space-y-2" open={pending.length > 0}>
+      <summary className="cursor-pointer text-sm font-semibold uppercase tracking-wide text-zinc-400">
+        My money{pending.length > 0 ? ` (${pending.length} waiting)` : ""}
+      </summary>
+      <div className="mt-2 space-y-2 text-sm">
+        {pending.map((t) => (
+          <div key={t.id} className="rounded-lg border border-amber-800/40 p-2">
+            <p className="text-zinc-200">{MONEY_TRANSFER_LABELS[t.kind]} · {(t.amount / 100).toFixed(2)} {t.currency}</p>
+            <p className="text-xs text-zinc-500">
+              {t.status === "pending" ? "Nobody confirmed yet." : t.payerConfirmedAt ? "Paid — waiting on receipt confirmation." : "Received — waiting on payment confirmation."}
+            </p>
+            <div className="mt-1 flex gap-2">
+              {!t.payerConfirmedAt ? (
+                <button className="btn !px-3 !py-1 text-xs" disabled={act.isPending} onClick={() => void act.mutate({ id: t.id, side: "paid" })}>I paid</button>
+              ) : null}
+              {!t.receiverConfirmedAt ? (
+                <button className="btn !px-3 !py-1 text-xs" disabled={act.isPending} onClick={() => void act.mutate({ id: t.id, side: "received" })}>I received</button>
+              ) : null}
+            </div>
+          </div>
+        ))}
+        {done.slice(0, 5).map((t) => (
+          <p key={t.id} className="text-xs text-zinc-500">
+            {MONEY_TRANSFER_LABELS[t.kind]} · {(t.amount / 100).toFixed(2)} — {t.status === "confirmed" ? "paid + received ✓" : "disputed"}
+          </p>
+        ))}
+        {act.error ? <p className="text-sm text-red-400">{act.error instanceof ApiError ? act.error.message : "Could not confirm"}</p> : null}
       </div>
     </details>
   );

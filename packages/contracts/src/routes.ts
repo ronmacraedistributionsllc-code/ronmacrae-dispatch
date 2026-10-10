@@ -70,6 +70,8 @@ export const API = {
     signup: "/api/rider-signup",
     signupVerify: "/api/rider-signup/verify",
     signupResend: "/api/rider-signup/resend",
+    /** Public company directory for the signup form (id + name only). */
+    signupCompanies: "/api/rider-signup/companies",
     pending: "/api/riders/pending",
     decide: (id: string) => `/api/riders/${id}/decide`,
     /** End an ACTIVE membership (pending ones go through decide) — the
@@ -244,6 +246,20 @@ export const API = {
     list: "/api/settlements",
     create: "/api/settlements",
     outstanding: (riderId: string) => `/api/riders/${riderId}/settlements/outstanding`,
+  },
+
+  /** Dual-confirmation money ledger — who owes what, both sides agreeing. */
+  money: {
+    /** Staff view: this business's ledger, filterable. */
+    list: "/api/money-transfers",
+    /** Staff creates payouts/settlements (business is the payer). */
+    create: "/api/money-transfers",
+    /** Rider view: only transfers they're a party to. */
+    mine: "/api/bearer/money-transfers",
+    /** Either side confirms their half ("paid" or "received"). */
+    confirm: (id: string) => `/api/money-transfers/${id}/confirm`,
+    /** Either side disputes with a reason — freezes until resolved. */
+    dispute: (id: string) => `/api/money-transfers/${id}/dispute`,
   },
 
   /** public geocoding (rate limited); simulated fallback when no map provider */

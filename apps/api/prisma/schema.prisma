@@ -85,6 +85,7 @@ model Business {
   merchants        Merchant[]
   logisticsCompanies LogisticsCompany[]
   settlements      Settlement[]
+  transfers        MoneyTransfer[]
 }
 
 /** A staff member's role at one specific business. A User is the global
@@ -353,11 +354,22 @@ model Rider {
    *  approvals stay exactly where they were (ultra admin vets the
    *  person, each business opts into the pool). */
   openNetwork            Boolean     @default(false)
+  /** Platform verification — the "I know this courier won't steal" flag.
+   *  Set ONLY by the platform owner (never managers, never businesses).
+   *  Verified couriers may carry cash (COD) jobs anywhere; unverified
+   *  couriers are non-cash only, enforced on every dispatch path. This is
+   *  separate from `platformStatus` (marketplace eligibility) and from
+   *  company membership approval — all three gates stay independent. */
+  verified               Boolean     @default(false)
+  verifiedAt             DateTime?
+  verifiedById           String?
   createdAt          DateTime    @default(now())
   updatedAt          DateTime    @updatedAt
 
   jobs        Job[]
   assignments RiderAssignment[]
+  transfersFrom MoneyTransfer[] @relation("TransferFrom")
+  transfersTo   MoneyTransfer[] @relation("TransferTo")
   locations   RiderLocation[]
   routes      Route[]
   recon       ReconDaily[]
@@ -1139,6 +1151,7 @@ model Job {
   items JobItem[]
   settlementLines SettlementLine[]
   ratings Rating[]
+  transfers MoneyTransfer[]
 
   @@unique([businessId, jobNumber])
   @@unique([businessId, externalRef])
@@ -1657,6 +1670,69 @@ model PayoutLine {
 enum SettlementType {
   full
   partial
+}
+
+enum MoneyTransferKind {
+  /** Rider hands collected cash to the business (auto-created on COD delivery). */
+  cod_handover
+  /** Business pays a courier (delivery fees/bonuses). Created by staff. */
+  courier_payout
+  /** Business settles with a merchant/store. Created by staff. */
+  merchant_settlement
+}
+
+enum MoneyTransferStatus {
+  /** Created, nobody confirmed yet. */
+  pending
+  /** Payer said "I paid", receiver hasn't confirmed. */
+  awaiting_other_side
+  /** Both sides confirmed — money trail complete. */
+  confirmed
+  /** Either side disputed — needs human resolution, never auto-completes. */
+  disputed
+}
+
+/**
+ * Dual-confirmation money ledger — the "who owes what, and did both
+ * sides agree" record. A transfer is NEVER complete until the payer
+ * confirms "I paid" AND the receiver confirms "I received". One-sided
+ * states stay visible in the reconciliation queue; disputes freeze the
+ * transfer until resolved. Complements (never replaces) the COD
+ * collected/handed_in/approved flow in cod.ts, which feeds this ledger:
+ * recording a handover marks payer-confirmed, approving it marks
+ * receiver-confirmed. Amounts here are minor units + currency, matching
+ * the rest of the app's money handling.
+ */
+model MoneyTransfer {
+  id         String              @id @default(cuid())
+  businessId String
+  business   Business            @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  jobId      String?
+  job        Job?                @relation(fields: [jobId], references: [id], onDelete: SetNull)
+  kind       MoneyTransferKind
+  amount     Int
+  currency   String              @default("JMD")
+  /** "rider" | "business" | "merchant" on each side. */
+  fromKind   String
+  fromRiderId String?
+  fromRider  Rider?              @relation("TransferFrom", fields: [fromRiderId], references: [id], onDelete: SetNull)
+  fromMerchantId String?
+  toKind     String
+  toRiderId  String?
+  toRider    Rider?              @relation("TransferTo", fields: [toRiderId], references: [id], onDelete: SetNull)
+  toMerchantId String?
+  payerConfirmedAt   DateTime?
+  payerConfirmedById String?
+  receiverConfirmedAt   DateTime?
+  receiverConfirmedById String?
+  status     MoneyTransferStatus @default(pending)
+  note       String?
+  createdAt  DateTime            @default(now())
+
+  @@index([businessId, status])
+  @@index([jobId])
+  @@index([toRiderId])
+  @@index([fromRiderId])
 }
 
 /**

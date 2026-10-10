@@ -33,6 +33,11 @@ test("direct assignment alerts and bumps unread only for the assigned rider, not
   const otherRes = await request.post("/api/riders", { headers: auth, data: { name: "Uninvolved Rider", phone: otherPhone, password } });
   const assignedRider = ((await assignedRes.json()) as { rider: { id: string } }).rider;
   const otherRider = ((await otherRes.json()) as { rider: { id: string } }).rider;
+  // Cash (COD) jobs only flow to verified couriers — the platform owner vouches here.
+  const ownerLogin = await request.post("/api/auth/login", { data: { identifier: "owner@ronmacrae.example", password: "owner1234" } });
+  const ownerAuth = { authorization: `Bearer ${((await ownerLogin.json()) as { accessToken: string }).accessToken}` };
+  await request.patch(`/api/platform/riders/${assignedRider.id}`, { headers: ownerAuth, data: { verified: true } });
+  await request.patch(`/api/platform/riders/${otherRider.id}`, { headers: ownerAuth, data: { verified: true } });
   // RidersService.create() sets every new rider to status "available" — so without
   // this, "Uninvolved Rider" would be eligible for any *other*, concurrently-running
   // spec's unscoped "broadcast to all eligible riders" (e.g. offers.spec.ts's UI

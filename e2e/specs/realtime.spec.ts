@@ -27,6 +27,10 @@ test("a rider's already-open dashboard shows a new offer live, without a page re
   expect(riderRes.ok()).toBe(true);
   const rider = ((await riderRes.json()) as { rider: { id: string } }).rider;
   await request.patch(`/api/riders/${rider.id}/status`, { headers: auth, data: { status: "available" } });
+  // Cash (COD) jobs only flow to verified couriers — the platform owner vouches here.
+  const ownerLogin = await request.post("/api/auth/login", { data: { identifier: "owner@ronmacrae.example", password: "owner1234" } });
+  const ownerAuth = { authorization: `Bearer ${((await ownerLogin.json()) as { accessToken: string }).accessToken}` };
+  await request.patch(`/api/platform/riders/${rider.id}`, { headers: ownerAuth, data: { verified: true } });
 
   // Open the rider's dashboard FIRST, well before any offer exists.
   await page.goto("/login");
@@ -63,6 +67,10 @@ test("a dispatcher's open offers panel updates live when a rider accepts, withou
   });
   const rider = ((await riderRes.json()) as { rider: { id: string } }).rider;
   await request.patch(`/api/riders/${rider.id}/status`, { headers: auth, data: { status: "available" } });
+  // Cash (COD) jobs only flow to verified couriers — the platform owner vouches here.
+  const ownerLogin = await request.post("/api/auth/login", { data: { identifier: "owner@ronmacrae.example", password: "owner1234" } });
+  const ownerAuth = { authorization: `Bearer ${((await ownerLogin.json()) as { accessToken: string }).accessToken}` };
+  await request.patch(`/api/platform/riders/${rider.id}`, { headers: ownerAuth, data: { verified: true } });
 
   const customers = ((await (await request.get("/api/customers", { headers: auth })).json()) as { customers: { id: string; phone: string }[] }).customers;
   const customer = customers.find((c) => c.phone === "+8765551234")!;

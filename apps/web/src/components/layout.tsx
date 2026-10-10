@@ -24,6 +24,7 @@ const TABS = [
   { to: "/map", label: "Map", icon: "🗺️" },
   { to: "/zones", label: "Zones & Fares", icon: "📍" },
   { to: "/cod", label: "COD", icon: "💵" },
+  { to: "/money", label: "Money", icon: "🤝" },
   { to: "/settlements", label: "Settlements", icon: "🧾" },
   { to: "/reports", label: "Reports", icon: "📊" },
   { to: "/trash", label: "Trash", icon: "🗑️" },
@@ -38,7 +39,7 @@ const TABS = [
  *  gated at the route (app.tsx's OwnerOnly) — a non-owner should never
  *  even see the tab exists. */
 const OWNER_ONLY_TABS = new Set(["/platform-admin"]);
-const STAFF_ONLY_TABS = new Set(["/ops", "/jobs", "/jobs/new", "/merchants", "/logistics-companies", "/team", "/settings", "/map", "/zones", "/cod", "/settlements", "/reports", "/trash"]);
+const STAFF_ONLY_TABS = new Set(["/ops", "/jobs", "/jobs/new", "/merchants", "/logistics-companies", "/team", "/settings", "/map", "/zones", "/cod", "/settlements", "/money", "/reports", "/trash"]);
 /** Owner/accountant only — matches the backend's own gating on /api/reports/*. */
 const ADMIN_ACCOUNTANT_ONLY_TABS = new Set(["/reports"]);
 /** Primary bottom-nav slots on mobile (thumb-reachable, at most 4 so a 5th

@@ -221,6 +221,13 @@ export async function bearerRoutes(app: FastifyInstance, ctx: AppCtx): Promise<v
   app.post<{ Params: { id: string } }>("/api/bearer/jobs/:id/accept", { preHandler: ctx.requireRider }, async (req, reply) => {
     const key = idempotencyKeyFrom(req);
     const { status, body } = await withIdempotency(ctx, req.user!.sub, key, async () => {
+      // Cash check before the transition — an unverified rider handed a
+      // cash job by direct assignment can't launder it through accept.
+      const assigned = await ctx.prisma.job.findUnique({ where: { id: req.params.id }, select: { id: true, jobNumber: true, paymentMethod: true } });
+      if (assigned) {
+        const { assertMayCarryCod } = await import("./offers.js");
+        await assertMayCarryCod(ctx, req.user!.riderId!, assigned);
+      }
       const job = await transitionJob(ctx, req.params.id, { to: "accepted" }, actorFor(req), viewerFor(req));
       await ctx.audit.record(actorFor(req), "job.accepted", "job", job.id);
       return { status: 200, body: { job } };

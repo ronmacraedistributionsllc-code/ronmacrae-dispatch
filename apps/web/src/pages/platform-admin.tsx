@@ -38,6 +38,8 @@ interface RiderRow {
   /** Free-roam input fact: marketplace work needs approved AND this. */
   selfSignedUp: boolean;
   openNetwork: boolean;
+  /** Cash trust: master-owner vouched — unlocks COD jobs. */
+  verified: boolean;
   createdByBusinessId: string | null;
   status: string;
   attachment: RiderAttachment;
@@ -463,7 +465,7 @@ function RidersTab(): React.JSX.Element {
   const merchants = useQuery({ queryKey: ["platform", "merchants", ""], queryFn: () => apiFetch<{ merchants: MerchantRow[] }>(API.platform.merchants) });
   const companies = useQuery({ queryKey: ["platform", "logistics-companies", ""], queryFn: () => apiFetch<{ logisticsCompanies: LogisticsCompanyRow[] }>(API.platform.logisticsCompanies) });
   const update = useMutation({
-    mutationFn: ({ id, ...body }: { id: string; platformStatus?: string; active?: boolean; openNetwork?: boolean; attachment?: RiderAttachment; attachedMerchantId?: string; attachedLogisticsCompanyId?: string }) =>
+    mutationFn: ({ id, ...body }: { id: string; platformStatus?: string; active?: boolean; openNetwork?: boolean; verified?: boolean; attachment?: RiderAttachment; attachedMerchantId?: string; attachedLogisticsCompanyId?: string }) =>
       apiFetch(API.platform.updateRider(id), { method: "PATCH", body: JSON.stringify(body) }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["platform", "riders"] });
@@ -515,11 +517,26 @@ function RidersTab(): React.JSX.Element {
               {r.selfSignedUp ? "Signed up independently" : "Added by a company"}
               {r.platformStatus === "approved" && r.selfSignedUp && r.openNetwork ? " · free-roam eligible" : null}
               {r.openNetwork ? " · open-network ON" : null}
+              {r.verified ? (
+                <span className="ml-1 rounded bg-emerald-900/60 px-1.5 py-0.5 font-semibold text-emerald-300">✓ Verified — cash OK</span>
+              ) : (
+                <span className="ml-1 rounded bg-zinc-800 px-1.5 py-0.5 text-zinc-400">unverified — prepaid only</span>
+              )}
             </p>
             <div className="flex flex-wrap gap-2">
               {r.platformStatus !== "approved" ? (
                 <button className="btn !px-3 !py-1 text-xs !border-emerald-700 !text-emerald-300" disabled={update.isPending} onClick={() => void update.mutate({ id: r.id, platformStatus: "approved" })}>
                   Approve for platform
+                </button>
+              ) : null}
+              {isOwner ? (
+                <button
+                  className="btn !px-3 !py-1 text-xs !border-amber-700 !text-amber-300"
+                  title="Master-owner only: vouch this courier won't steal — unlocks cash (COD) jobs everywhere. Managers can't touch this."
+                  disabled={update.isPending}
+                  onClick={() => void update.mutate({ id: r.id, verified: !r.verified })}
+                >
+                  {r.verified ? "Revoke verification" : "Verify courier"}
                 </button>
               ) : null}
               {r.platformStatus !== "suspended" ? (

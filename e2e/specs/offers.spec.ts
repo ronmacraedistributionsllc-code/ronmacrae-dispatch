@@ -34,6 +34,10 @@ test("dispatcher broadcasts an offer and the rider accepts it from their dashboa
   const customers = ((await (await request.get("/api/customers", { headers: auth })).json()) as { customers: { id: string; phone: string }[] }).customers;
   const customer = customers.find((c) => c.phone === "+8765551234");
   expect(customer).toBeTruthy();
+  // Cash (COD) jobs only flow to verified couriers — the platform owner vouches here.
+  const ownerLogin = await request.post("/api/auth/login", { data: { identifier: "owner@ronmacrae.example", password: "owner1234" } });
+  const ownerAuth = { authorization: `Bearer ${((await ownerLogin.json()) as { accessToken: string }).accessToken}` };
+  await request.patch(`/api/platform/riders/${rider.id}`, { headers: ownerAuth, data: { verified: true } });
   const created = await request.post("/api/jobs", { headers: auth, data: { customerId: customer!.id, itemSummary: "Offer flow test parcel" } });
   expect(created.ok()).toBe(true);
   const job = (await created.json()) as { job: { id: string; jobNumber: string | null } };
@@ -99,6 +103,10 @@ test("a withdrawn offer disappears from the rider's dashboard", async ({ page, r
 
   const customers = ((await (await request.get("/api/customers", { headers: auth })).json()) as { customers: { id: string; phone: string }[] }).customers;
   const customer = customers.find((c) => c.phone === "+8765551234")!;
+  // Cash (COD) jobs only flow to verified couriers — the platform owner vouches here.
+  const ownerLogin = await request.post("/api/auth/login", { data: { identifier: "owner@ronmacrae.example", password: "owner1234" } });
+  const ownerAuth = { authorization: `Bearer ${((await ownerLogin.json()) as { accessToken: string }).accessToken}` };
+  await request.patch(`/api/platform/riders/${rider.id}`, { headers: ownerAuth, data: { verified: true } });
   const created = await request.post("/api/jobs", { headers: auth, data: { customerId: customer.id, itemSummary: "Withdraw flow test parcel" } });
   const job = (await created.json()) as { job: { id: string; jobNumber: string | null } };
 

@@ -551,6 +551,29 @@ export interface LogisticsFleetJobDto {
  *  COD row into an accountable total. Never filtered by archived status —
  *  same "reports never filter this out" rule as everywhere else archived/
  *  deleted financial history is handled in this app. */
+export interface MoneyTransferDto {
+  id: string;
+  businessId: string;
+  jobId: string | null;
+  kind: "cod_handover" | "courier_payout" | "merchant_settlement";
+  amount: number;
+  currency: string;
+  fromKind: string;
+  fromRiderId: string | null;
+  fromMerchantId: string | null;
+  toKind: string;
+  toRiderId: string | null;
+  toMerchantId: string | null;
+  payerConfirmedAt: string | null;
+  receiverConfirmedAt: string | null;
+  status: "pending" | "awaiting_other_side" | "confirmed" | "disputed";
+  note: string | null;
+  createdAt: string;
+  fromRider?: { id: string; name: string } | null;
+  toRider?: { id: string; name: string } | null;
+  job?: { id: string; jobNumber: string | null } | null;
+}
+
 export interface CodSummaryDto {
   shortage: Money;
   shortageCount: number;

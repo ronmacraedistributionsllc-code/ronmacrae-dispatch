@@ -45,6 +45,9 @@ export async function assignJob(
   // separate membership elsewhere.
   const membership = await ctx.prisma.riderMembership.findUnique({ where: { riderId_businessId: { riderId: input.riderId, businessId: row.businessId } } });
   if (membership?.status !== "active") throw httpErrors.createError(404, "Courier not found");
+  // Even a deliberate staff assignment can't put cash in unverified hands.
+  const { assertMayCarryCod } = await import("../offers.js");
+  await assertMayCarryCod(ctx, input.riderId, row);
   if (row.status !== "new" && row.status !== "assigned") {
     throw httpErrors.createError(409, `Only new or unaccepted jobs can be assigned (job is ${row.status})`);
   }

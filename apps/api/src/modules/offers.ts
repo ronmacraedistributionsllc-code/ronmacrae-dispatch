@@ -100,17 +100,26 @@ export type CourierPool = "company" | "free_roam" | "both";
  * logistics company's riders don't automatically also serve merchant
  * orders unless the Platform Admin has approved them for marketplace work.
  */
+/**
+ * Cash rule (theft prevention): a `cod` job may only go to a platform-
+ * VERIFIED courier. Every other payment method is open to any eligible
+ * rider. Pass the job's paymentMethod; unverified riders are filtered
+ * out of cash jobs at the query level, so they never even see them.
+ */
 async function eligibleRiders(
   ctx: AppCtx,
   businessId: string,
   jobMerchantId: string | null,
   riderIds?: string[],
   pool: CourierPool = "company",
+  jobPaymentMethod?: string,
 ) {
+  const cashOnly = jobPaymentMethod === "cod" ? { verified: true } : {};
   const riders = await ctx.prisma.rider.findMany({
     where: {
       active: true,
       status: "available",
+      ...cashOnly,
       ...(riderIds ? { id: { in: riderIds } } : {}),
       ...(pool === "free_roam"
         // Free-roam pool: marketplace-approved SELF-SIGNED-UP riders only,
@@ -133,6 +142,7 @@ async function eligibleRiders(
             platformStatus: "approved",
             selfSignedUp: true,
             openNetwork: true,
+            ...cashOnly,
             ...(riderIds ? { id: { in: riderIds } } : {}),
           },
         })
@@ -173,6 +183,28 @@ async function isActiveMember(ctx: AppCtx, riderId: string, businessId: string):
  * Platform Admin's vetting is the other half). Anything else is the same
  * 409 the accept path always returned.
  */
+/**
+ * Cash gate shared by EVERY path that puts a job in a rider's hands
+ * (offer accept, pending claim, bearer accept, staff/merchant assign,
+ * requested-courier): a `cod` job requires a platform-verified rider,
+ * full stop. Anything else passes. Throws an honest 409 naming the rule
+ * so the UI can explain it instead of showing a dead button.
+ */
+export async function assertMayCarryCod(
+  ctx: AppCtx,
+  riderId: string,
+  job: { paymentMethod: string; jobNumber?: string | null; id: string },
+): Promise<void> {
+  if (job.paymentMethod !== "cod") return;
+  const rider = await ctx.prisma.rider.findUnique({ where: { id: riderId }, select: { verified: true } });
+  if (!rider?.verified) {
+    throw httpErrors.createError(
+      409,
+      `Cash-on-delivery needs a verified courier (${job.jobNumber ?? job.id.slice(0, 8)}) — this rider isn't verified yet, so they can only carry prepaid jobs.`,
+    );
+  }
+}
+
 /** Pure check, no side effects: how (if at all) may this rider serve
  *  this business — as a member, as free-roam, or not at all. */
 async function serveKind(
@@ -332,7 +364,7 @@ export async function autoBroadcastNewJob(ctx: AppCtx, jobId: string): Promise<{
     const { autoBroadcast, pool, expiryMinutes } = await dispatchPool(ctx, job.businessId);
     if (!autoBroadcast) return { offered: 0 };
     await expire(ctx);
-    const eligible = await eligibleRiders(ctx, job.businessId, job.merchantId, undefined, pool);
+    const eligible = await eligibleRiders(ctx, job.businessId, job.merchantId, undefined, pool, job.paymentMethod);
     if (eligible.length === 0) {
       ctx.log.info({ jobId, businessId: job.businessId }, "auto-broadcast: no eligible couriers — job waits in pending list");
       return { offered: 0 };
@@ -359,6 +391,7 @@ export async function validateRequestedCourier(
   ctx: AppCtx,
   businessId: string,
   rawPhone: string,
+  paymentMethod = "cod",
 ): Promise<{ id: string; name: string }> {
   const phone = normalizePhone(rawPhone);
   const rider = phone ? await ctx.prisma.rider.findUnique({ where: { phone } }) : null;
@@ -368,6 +401,9 @@ export async function validateRequestedCourier(
   const { pool } = await dispatchPool(ctx, businessId);
   if ((await serveKind(ctx, businessId, pool, rider.id)) === null) {
     throw httpErrors.createError(400, "That courier doesn't deliver for this business — pick a network courier instead.");
+  }
+  if (paymentMethod === "cod" && !rider.verified) {
+    throw httpErrors.createError(400, "That courier isn't verified for cash orders — pick a network courier instead.");
   }
   const carrying = await ctx.prisma.job.count({ where: { riderId: rider.id, status: { in: [...ACTIVE_JOB_STATUSES] } } });
   if (carrying >= rider.dailyCapacity) {
@@ -454,7 +490,7 @@ export async function offerRoutes(app: FastifyInstance, ctx: AppCtx): Promise<vo
     if (!job || job.businessId !== businessId) throw httpErrors.createError(404, "Job not found");
     if (job.status !== "new" || job.riderId) throw httpErrors.createError(409, "Only unassigned new jobs can be broadcast");
     const { pool } = await dispatchPool(ctx, businessId);
-    const eligible = await eligibleRiders(ctx, businessId, job.merchantId, body.riderIds, pool);
+    const eligible = await eligibleRiders(ctx, businessId, job.merchantId, body.riderIds, pool, job.paymentMethod);
     // A rider holding an open offer for this job keeps it — re-broadcasting
     // must never stack a second open offer on them (auto-broadcast already
     // offered at creation, so a manual broadcast right after would
@@ -496,7 +532,7 @@ export async function offerRoutes(app: FastifyInstance, ctx: AppCtx): Promise<vo
     if (!job || job.businessId !== businessId) throw httpErrors.createError(404, "Job not found");
     if (job.status !== "new" || job.riderId) throw httpErrors.createError(409, "Only unassigned new jobs can be rebroadcast");
     const { pool } = await dispatchPool(ctx, businessId);
-    const eligible = await eligibleRiders(ctx, businessId, job.merchantId, body.riderIds, pool);
+    const eligible = await eligibleRiders(ctx, businessId, job.merchantId, body.riderIds, pool, job.paymentMethod);
     const expiresAt = new Date(Date.now() + body.expiresInMinutes * 60_000);
     const offers = await createOffers(ctx, job.id, businessId, eligible, expiresAt);
     await ctx.audit.record(actorFor(req), "offer.rebroadcast", "job", job.id, { withdrawn: old.count, offered: offers.length });
@@ -538,7 +574,9 @@ export async function offerRoutes(app: FastifyInstance, ctx: AppCtx): Promise<vo
     }
     if (businessIds.length === 0) return { jobs: [] };
     const jobs = await ctx.prisma.job.findMany({
-      where: { businessId: { in: businessIds }, status: "new", riderId: null, deletedAt: null },
+      // Cash jobs are invisible to unverified couriers — they couldn't
+      // claim them anyway (see assertMayCarryCod), so don't tease.
+      where: { businessId: { in: businessIds }, status: "new", riderId: null, deletedAt: null, ...(rider.verified ? {} : { paymentMethod: { not: "cod" } }) },
       orderBy: { createdAt: "desc" },
       take: 50,
       include: jobInclude,
@@ -572,6 +610,7 @@ export async function offerRoutes(app: FastifyInstance, ctx: AppCtx): Promise<vo
       if ((await serveKind(ctx, job.businessId, pool, riderId)) === null) {
         throw httpErrors.createError(403, "This job isn't in your pool");
       }
+      await assertMayCarryCod(ctx, riderId, job);
       const via = await ensureClaimMembership(ctx, job.businessId, pool, riderId);
       const result = await ctx.prisma.$transaction(async (tx) =>
         claimJobTx(tx, ctx, {
@@ -617,6 +656,8 @@ export async function offerRoutes(app: FastifyInstance, ctx: AppCtx): Promise<vo
       // not just when the offer went out. Marketplace-approved riders in a
       // free-roam pool are covered by auto-membership instead.
       const { pool } = await dispatchPool(ctx, offer.businessId);
+      const offeredJob = await ctx.prisma.job.findUnique({ where: { id: offer.jobId }, select: { id: true, jobNumber: true, paymentMethod: true } });
+      if (offeredJob) await assertMayCarryCod(ctx, riderId, offeredJob);
       const via = await ensureClaimMembership(ctx, offer.businessId, pool, riderId);
       const result = await ctx.prisma.$transaction(async (tx) =>
         claimJobTx(tx, ctx, {

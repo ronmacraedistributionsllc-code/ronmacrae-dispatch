@@ -113,6 +113,10 @@ export async function buildTestHarness(dbName: string): Promise<TestHarness> {
       jobOffer: { create: ({ args, query }) => { args.data.businessId ??= business.id; return query(args); } },
       rider: {
         create: async ({ args, query }) => {
+          // Test fixtures are trusted couriers: verified unless the test
+          // says otherwise (the platform cash rule would otherwise filter
+          // every fixture rider out of every COD job in the suite).
+          args.data.verified ??= true;
           const rider = (await query(args)) as { id: string };
           await basePrisma.riderMembership.create({ data: { riderId: rider.id, businessId: business.id, status: "active", approvedAt: new Date() } });
           return rider;

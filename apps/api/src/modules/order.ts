@@ -277,7 +277,7 @@ export async function orderRoutes(app: FastifyInstance, ctx: AppCtx): Promise<vo
     let requestedCourier: { id: string; name: string } | null = null;
     if (body.courierPhone) {
       const { validateRequestedCourier } = await import("./offers.js");
-      requestedCourier = await validateRequestedCourier(ctx, resolved.businessId, body.courierPhone);
+      requestedCourier = await validateRequestedCourier(ctx, resolved.businessId, body.courierPhone, body.paymentMethod ?? "cod");
     }
     const items = await resolveItems(ctx, resolved.merchantId, body.items, resolved.currency);
     const { pricing, feeMinor, zoneId } = await computePricing(ctx, resolved, items, body.point ?? null);

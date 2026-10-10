@@ -88,6 +88,19 @@ export type PaymentStatus = (typeof PAYMENT_STATUSES)[number];
 export const COD_STATUSES = ["pending_collection", "collected", "handed_in", "disputed", "approved"] as const;
 export type CodStatus = (typeof COD_STATUSES)[number];
 
+/** Dual-confirmation money ledger kinds + states — see MoneyTransfer. */
+export const MONEY_TRANSFER_KINDS = ["cod_handover", "courier_payout", "merchant_settlement"] as const;
+export type MoneyTransferKind = (typeof MONEY_TRANSFER_KINDS)[number];
+
+export const MONEY_TRANSFER_STATUSES = ["pending", "awaiting_other_side", "confirmed", "disputed"] as const;
+export type MoneyTransferStatus = (typeof MONEY_TRANSFER_STATUSES)[number];
+
+export const MONEY_TRANSFER_LABELS: Record<MoneyTransferKind, string> = {
+  cod_handover: "Cash handover",
+  courier_payout: "Courier payout",
+  merchant_settlement: "Merchant settlement",
+};
+
 /** An explicit dispute category, set when a dispute is raised — not merely
  *  inferred from the handed-in/collected variance, since a dispute can be
  *  raised as soon as `collected` (before any hand-in, so nothing to

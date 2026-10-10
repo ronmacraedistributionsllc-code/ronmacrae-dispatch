@@ -91,7 +91,7 @@ describe("rule 9 — roles are never client-controlled", () => {
       url: "/api/rider-signup",
       payload: {
         name: "Role Smuggler", phone: `+1876555${uniq().slice(-4)}`, email, password: "riderpass1", vehicle: "car",
-        role: "admin", platformRole: "owner", platformStatus: "approved", status: "active", businessId: "anything",
+        role: "admin", platformRole: "owner", platformStatus: "approved", status: "active",
       },
     });
     expect(res.statusCode).toBe(200);
@@ -99,7 +99,23 @@ describe("rule 9 — roles are never client-controlled", () => {
     expect(user.role).toBe("rider");
     expect(user.platformRole).toBeNull();
     expect(user.rider?.platformStatus).not.toBe("approved");
+    // (verified isn't asserted here — the harness marks every fixture
+    // rider verified; trust-economy.test.ts covers that signup itself
+    // never sets it.)
     expect(await harness.prisma.staffMembership.count({ where: { userId: user.id } })).toBe(0);
+  });
+
+  it("a bogus company id at signup is rejected, not silently rerouted", async () => {
+    const email = `smuggle-biz-${uniq()}@example.com`;
+    const res = await harness.app.inject({
+      method: "POST",
+      url: "/api/rider-signup",
+      payload: {
+        name: "Lost Rider", phone: `+1876555${uniq().slice(-4)}`, email, password: "riderpass1", vehicle: "car",
+        businessId: "does-not-exist",
+      },
+    });
+    expect(res.statusCode).toBe(400);
   });
 
   it("only an admin can create accounts or change roles — a dispatcher is refused", async () => {

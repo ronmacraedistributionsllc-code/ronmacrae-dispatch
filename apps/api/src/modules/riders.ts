@@ -117,6 +117,14 @@ const SignupBody = z.object({
   vehicle: z.enum(["motorcycle", "car"]).default("motorcycle"),
   plate: z.string().max(20).optional().or(z.literal("")).nullable().default(""),
   password: z.string().min(8).max(128),
+  /** Apply to a specific company: pending membership lands THERE for that
+   *  company's admin to approve (not the default business). Omit together
+   *  with `independent` for the legacy behavior (default business).
+   *  `independent: true` means open-network courier: NO membership
+   *  anywhere — the platform owner vets them, and they apply to
+   *  businesses later from inside the app if they want. */
+  businessId: z.string().min(1).max(50).optional(),
+  independent: z.boolean().optional(),
 });
 
 const ApproveBody = z.object({
@@ -269,17 +277,22 @@ export class RidersService {
    * one exception: their membership here can go straight to active, same
    * rule `create()` already uses for a re-adding staff member.
    */
-  async selfSignup(businessId: string, input: z.infer<typeof SignupBody>): Promise<{ status: "pending" | "active"; riderId: string; emailSent: boolean }> {
+  async selfSignup(businessId: string | null, input: z.infer<typeof SignupBody>): Promise<{ status: "pending" | "active"; riderId: string; emailSent: boolean }> {
     const phone = normalizePhone(input.phone);
     const existing = await this.app.prisma.rider.findUnique({ where: { phone }, include: { user: { select: { email: true, emailVerifiedAt: true } } } });
     if (existing) {
-      const existingMembership = await this.app.prisma.riderMembership.findUnique({ where: { riderId_businessId: { riderId: existing.id, businessId } } });
-      if (existingMembership?.status === "active") throw httpErrors.createError(409, "This phone number is already an active courier with us");
-      const status = existing.platformStatus === "approved" ? "active" : "pending";
-      if (existingMembership) {
-        await this.app.prisma.riderMembership.update({ where: { id: existingMembership.id }, data: { status, approvedAt: status === "active" ? new Date() : null } });
-      } else {
-        await this.app.prisma.riderMembership.create({ data: { riderId: existing.id, businessId, status, approvedAt: status === "active" ? new Date() : null } });
+      // Independent signups (businessId null) create no membership at all —
+      // the rider applies to businesses later from inside the app.
+      let status: "pending" | "active" = "pending";
+      if (businessId) {
+        const existingMembership = await this.app.prisma.riderMembership.findUnique({ where: { riderId_businessId: { riderId: existing.id, businessId } } });
+        if (existingMembership?.status === "active") throw httpErrors.createError(409, "This phone number is already an active courier with us");
+        status = existing.platformStatus === "approved" ? "active" : "pending";
+        if (existingMembership) {
+          await this.app.prisma.riderMembership.update({ where: { id: existingMembership.id }, data: { status, approvedAt: status === "active" ? new Date() : null } });
+        } else {
+          await this.app.prisma.riderMembership.create({ data: { riderId: existing.id, businessId, status, approvedAt: status === "active" ? new Date() : null } });
+        }
       }
       // A genuinely new applicant can't reach this branch without a rider
       // row already existing for their phone — the most likely reason is
@@ -330,17 +343,22 @@ export class RidersService {
         selfSignedUp: true,
       },
     });
-    // Deliberately not wrapped in a transaction with the rider.create above:
-    // a self-signup's membership must always end up `pending` regardless of
-    // whatever default a rider-creation hook elsewhere might apply, so this
-    // is an idempotent upsert rather than an insert that could conflict
-    // with one. If the process dies between the two calls, re-submitting
-    // the same phone number safely re-enters this same upsert.
-    await this.app.prisma.riderMembership.upsert({
-      where: { riderId_businessId: { riderId: rider.id, businessId } },
-      create: { riderId: rider.id, businessId, status: "pending" },
-      update: { status: "pending" },
-    });
+    // Company choice only: an independent signup creates NO membership —
+    // the rider applies to businesses later from inside the app, and the
+    // platform owner vets them for the network. Deliberately not wrapped
+    // in a transaction with the rider.create above: a company signup's
+    // membership must always end up `pending` regardless of whatever
+    // default a rider-creation hook elsewhere might apply, so this is an
+    // idempotent upsert rather than an insert that could conflict with
+    // one. If the process dies between the two calls, re-submitting the
+    // same phone number safely re-enters this same upsert.
+    if (businessId) {
+      await this.app.prisma.riderMembership.upsert({
+        where: { riderId_businessId: { riderId: rider.id, businessId } },
+        create: { riderId: rider.id, businessId, status: "pending" },
+        update: { status: "pending" },
+      });
+    }
     // See the existing-rider branch above's comment — signup must not
     // fail because this send did; the rider/membership rows already exist.
     let emailSent = true;
@@ -392,6 +410,17 @@ export class RidersService {
       where: { id: membership.id },
       data: approve ? { status: "active", approvedAt: new Date() } : { status: "removed" },
     });
+    if (approve) {
+      // First approver claims ownership: a self-signed-up rider approved
+      // here becomes THIS company's courier for delete purposes (fixes
+      // "they signed up themselves so nobody can delete them"). Platform-
+      // approved free-roam riders keep createdByBusinessId null — no
+      // business owns them.
+      const rider = await this.app.prisma.rider.findUnique({ where: { id: riderId }, select: { createdByBusinessId: true } });
+      if (rider && !rider.createdByBusinessId) {
+        await this.app.prisma.rider.update({ where: { id: riderId }, data: { createdByBusinessId: businessId } });
+      }
+    }
   }
 
   async update(businessId: string, id: string, input: z.infer<typeof UpdateBody>, currency: string): Promise<RiderDto> {
@@ -591,16 +620,35 @@ export async function riderRoutes(app: FastifyInstance, ctx: AppCtx): Promise<vo
     return { rider };
   });
 
+  /**
+   * Public company directory for the signup form: active businesses by
+   * name only (id + name — nothing sensitive, same visibility as a
+   * merchant's public order link). Lets an applicant pick which company
+   * to ask, instead of landing on a default they never chose.
+   */
+  app.get("/api/rider-signup/companies", async () => {
+    const rows = await ctx.prisma.business.findMany({ where: { active: true }, select: { id: true, name: true }, orderBy: { name: "asc" }, take: 100 });
+    return { companies: rows };
+  });
+
   // Public — no login required, matches order.ts's own public routes.
   app.post(
     "/api/rider-signup",
     { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } },
     async (req) => {
       const body = SignupBody.parse(req.body);
-      const business = await ctx.prisma.business.findUnique({ where: { slug: DEFAULT_PUBLIC_BUSINESS_SLUG } });
-       if (!business) throw httpErrors.createError(503, "Courier sign-up is not available right now");
-      const result = await svc.selfSignup(business.id, body);
-      await ctx.audit.record({ id: null, role: "anonymous" }, "rider.signup", "rider", result.riderId, { status: result.status, emailSent: result.emailSent });
+      // Company choice wins; independent means no membership anywhere;
+      // neither means the legacy default-business application.
+      let businessId: string | null = null;
+      if (!body.independent) {
+        const business = body.businessId
+          ? await ctx.prisma.business.findUnique({ where: { id: body.businessId } })
+          : await ctx.prisma.business.findUnique({ where: { slug: DEFAULT_PUBLIC_BUSINESS_SLUG } });
+        if (!business || !business.active) throw httpErrors.createError(400, "That company isn't accepting applications right now — pick another or sign up as independent.");
+        businessId = business.id;
+      }
+      const result = await svc.selfSignup(businessId, body);
+      await ctx.audit.record({ id: null, role: "anonymous" }, "rider.signup", "rider", result.riderId, { status: result.status, emailSent: result.emailSent, businessId, independent: body.independent ?? false });
       return result;
     },
   );

@@ -84,8 +84,8 @@ async function main(): Promise<void> {
     });
     const rider = await prisma.rider.upsert({
       where: { phone },
-      create: { userId: user.id, name, phone, vehicle: "motorcycle", plate, status: "available", dailyCapacity: 15, active: true, platformStatus: "approved" },
-      update: { userId: user.id, name, active: true, platformStatus: "approved" },
+      create: { userId: user.id, name, phone, vehicle: "motorcycle", plate, status: "available", dailyCapacity: 15, active: true, platformStatus: "approved", verified: true },
+      update: { userId: user.id, name, active: true, platformStatus: "approved", verified: true },
     });
     await prisma.riderMembership.upsert({
       where: { riderId_businessId: { riderId: rider.id, businessId: businessId } },

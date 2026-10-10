@@ -26,6 +26,10 @@ test("a rider's cash summary and the dispatcher's ops-board cash panel both show
   const riderPassword = "e2eCashRider1";
   const riderRes = await request.post("/api/riders", { headers: auth, data: { name: "Cash E2E Rider", phone: uniquePhone, password: riderPassword, dailyCapacity: 5 } });
   const rider = ((await riderRes.json()) as { rider: { id: string; userId: string | null } }).rider;
+  // Cash (COD) jobs only flow to verified couriers — the platform owner vouches here.
+  const ownerLogin = await request.post("/api/auth/login", { data: { identifier: "owner@ronmacrae.example", password: "owner1234" } });
+  const ownerAuth = { authorization: `Bearer ${((await ownerLogin.json()) as { accessToken: string }).accessToken}` };
+  await request.patch(`/api/platform/riders/${rider.id}`, { headers: ownerAuth, data: { verified: true } });
 
   const customers = ((await (await request.get("/api/customers", { headers: auth })).json()) as { customers: { id: string; phone: string }[] }).customers;
   const customer = customers.find((c) => c.phone === "+8765551234")!;
