@@ -220,3 +220,44 @@ describe("platform-admin: rider merchant assignment", () => {
     expect(remove.statusCode).toBe(403);
   });
 });
+
+describe("platform-admin: accounts list", () => {
+  it("lists every login organized — staff, couriers, merchant and fleet logins", async () => {
+    const owner = await ownerToken(harness);
+    const admin = await adminToken(harness);
+    const merchant = await makeMerchant(harness, admin);
+    const rider = await makeRider(harness, admin);
+
+    // Courier login account linked to the rider profile.
+    const courierUser = await harness.prisma.user.create({ data: { name: `Courier Login ${uniq()}`, phone: `+1876555${uniq().slice(-4)}`, passwordHash: "unused", role: "rider" } });
+    await harness.prisma.rider.update({ where: { id: rider.id }, data: { userId: courierUser.id } });
+    // Merchant portal login.
+    const merchantUser = await harness.prisma.user.create({ data: { name: `Merchant Login ${uniq()}`, email: `merchant-login-${uniq()}@example.com`, passwordHash: "unused", role: "viewer" } });
+    await harness.prisma.merchantStaff.create({ data: { userId: merchantUser.id, merchantId: merchant.id } });
+    // Logistics portal login.
+    const company = await harness.prisma.logisticsCompany.create({ data: { businessId: harness.business.id, name: `Fleet ${uniq()}`, slug: `fleet-${uniq()}` } });
+    const fleetUser = await harness.prisma.user.create({ data: { name: `Fleet Login ${uniq()}`, email: `fleet-login-${uniq()}@example.com`, passwordHash: "unused", role: "viewer" } });
+    await harness.prisma.logisticsCompanyStaff.create({ data: { userId: fleetUser.id, logisticsCompanyId: company.id } });
+
+    const res = await harness.app.inject({ method: "GET", url: "/api/platform/accounts", headers: { authorization: `Bearer ${owner}` } });
+    expect(res.statusCode).toBe(200);
+    const byId = Object.fromEntries((res.json() as { accounts: { id: string; staff: unknown[]; rider: unknown | null; merchants: unknown[]; logistics: unknown[] }[] }).accounts.map((a) => [a.id, a]));
+    expect(byId[courierUser.id]?.rider).not.toBeNull();
+    expect(byId[merchantUser.id]?.merchants).toHaveLength(1);
+    expect(byId[fleetUser.id]?.logistics).toHaveLength(1);
+  });
+
+  it("search filters by name/email/phone and non-owners are refused", async () => {
+    const owner = await ownerToken(harness);
+    const admin = await adminToken(harness);
+    const named = await harness.prisma.user.create({ data: { name: `Zebra Searchable ${uniq()}`, email: `zebra-${uniq()}@example.com`, passwordHash: "unused", role: "viewer" } });
+
+    const res = await harness.app.inject({ method: "GET", url: "/api/platform/accounts?q=Zebra%20Searchable", headers: { authorization: `Bearer ${owner}` } });
+    expect(res.statusCode).toBe(200);
+    const ids = ((res.json() as { accounts: { id: string }[] }).accounts).map((a) => a.id);
+    expect(ids).toContain(named.id);
+
+    const refused = await harness.app.inject({ method: "GET", url: "/api/platform/accounts", headers: { authorization: `Bearer ${admin}` } });
+    expect(refused.statusCode).toBe(403);
+  });
+});

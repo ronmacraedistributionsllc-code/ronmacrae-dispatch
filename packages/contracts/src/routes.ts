@@ -443,6 +443,9 @@ export const API = {
     assignRiderToMerchant: (riderId: string) => `/api/platform/riders/${riderId}/merchants`,
     removeRiderFromMerchant: (riderId: string, merchantId: string) => `/api/platform/riders/${riderId}/merchants/${merchantId}`,
     staff: "/api/platform/staff",
+    /** Every login on the platform, organized — staff, couriers, merchant
+     *  and logistics portal logins in one list. */
+    accounts: "/api/platform/accounts",
     updateUser: (id: string) => `/api/platform/users/${id}`,
     /** Master admin global delete (soft: deletedAt + active:false, own
      *  audit action, own login-time message) — see the route's own doc

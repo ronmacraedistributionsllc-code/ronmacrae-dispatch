@@ -503,6 +503,42 @@ export async function platformAdminRoutes(app: FastifyInstance, ctx: AppCtx): Pr
     };
   });
 
+  // Accounts — every login on the platform in one organized list: business
+  // staff (with which business + role), courier logins (with profile
+  // state), merchant-portal logins, and logistics-portal logins. One row
+  // per User; the shared AccountActions delete (platform user delete)
+  // covers all of them. Search matches name/email/phone.
+  app.get("/api/platform/accounts", { preHandler: owner }, async (req) => {
+    const { q } = requireQuery(req.query);
+    const rows = await ctx.prisma.user.findMany({
+      where: q ? { OR: [{ name: { contains: q } }, { email: { contains: q } }, { phone: { contains: q } }] } : undefined,
+      orderBy: { createdAt: "desc" },
+      take: 200,
+      include: {
+        staffMemberships: { include: { business: businessName } },
+        rider: { select: { id: true, active: true, status: true, platformStatus: true } },
+        merchantStaffMemberships: { include: { merchant: { select: { id: true, name: true } } } },
+        logisticsCompanyStaffMemberships: { include: { logisticsCompany: { select: { id: true, name: true } } } },
+      },
+    });
+    return {
+      accounts: rows.map((u) => ({
+        id: u.id,
+        name: u.name,
+        email: u.email,
+        phone: u.phone,
+        active: u.active,
+        deletedAt: u.deletedAt?.toISOString() ?? null,
+        platformRole: u.platformRole,
+        staff: u.staffMemberships.map((m) => ({ businessId: m.businessId, businessName: m.business.name, role: m.role, active: m.active })),
+        rider: u.rider ? { id: u.rider.id, active: u.rider.active, status: u.rider.status, platformStatus: u.rider.platformStatus } : null,
+        merchants: u.merchantStaffMemberships.map((m) => ({ merchantId: m.merchantId, merchantName: m.merchant.name, active: m.active })),
+        logistics: u.logisticsCompanyStaffMemberships.map((m) => ({ companyId: m.logisticsCompanyId, companyName: m.logisticsCompany.name, active: m.active })),
+        createdAt: u.createdAt.toISOString(),
+      })),
+    };
+  });
+
   app.patch<{ Params: { id: string } }>("/api/platform/users/:id", { preHandler: owner }, async (req) => {
     const body = z.object({ active: z.boolean() }).parse(req.body);
     if (req.params.id === req.user!.sub && !body.active) {

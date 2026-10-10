@@ -52,10 +52,18 @@ interface RiderDetail extends RiderRow {
   loginActive: boolean | null;
   jobsByStatus: Record<string, number>;
   cashByBusiness: { businessId: string; businessName: string }[];
-}interface StaffRow { id: string; name: string; email: string | null; phone: string | null; active: boolean; deletedAt: string | null; platformRole: string | null; businesses: { id: string; name: string; role: string; active: boolean }[]; merchants: { id: string; name: string; active: boolean }[]; createdAt: string }
+}interface AccountRow {
+  id: string; name: string; email: string | null; phone: string | null;
+  active: boolean; deletedAt: string | null; platformRole: string | null;
+  staff: { businessId: string; businessName: string; role: string; active: boolean }[];
+  rider: { id: string; active: boolean; status: string; platformStatus: string } | null;
+  merchants: { merchantId: string; merchantName: string; active: boolean }[];
+  logistics: { companyId: string; companyName: string; active: boolean }[];
+  createdAt: string;
+}
 interface AuditRow { id: string; userName: string | null; userEmail: string | null; role: string | null; action: string; entityType: string; entityId: string | null; createdAt: string }
 
-type Tab = "businesses" | "merchants" | "logistics" | "riders" | "staff" | "messages" | "audit";
+type Tab = "businesses" | "merchants" | "logistics" | "riders" | "accounts" | "messages" | "audit";
 
 export function PlatformAdmin(): React.JSX.Element {
   const [tab, setTab] = useState<Tab>("businesses");
@@ -64,7 +72,7 @@ export function PlatformAdmin(): React.JSX.Element {
     { key: "merchants", label: "Merchants" },
     { key: "logistics", label: "Logistics" },
     { key: "riders", label: "Couriers" },
-    { key: "staff", label: "Staff" },
+    { key: "accounts", label: "Accounts" },
     { key: "messages", label: "Messages" },
     { key: "audit", label: "Audit log" },
   ];
@@ -85,7 +93,7 @@ export function PlatformAdmin(): React.JSX.Element {
       {tab === "merchants" ? <MerchantsTab /> : null}
       {tab === "logistics" ? <LogisticsTab /> : null}
       {tab === "riders" ? <RidersTab /> : null}
-      {tab === "staff" ? <StaffTab /> : null}
+      {tab === "accounts" ? <AccountsTab /> : null}
       {tab === "messages" ? <MessagesTab /> : null}
       {tab === "audit" ? <AuditTab /> : null}
     </div>
@@ -105,7 +113,7 @@ function StatusPill({ active, activeLabel = "Active", inactiveLabel = "Disabled"
 }
 
 /** Master admin global delete + "Login As" (spec parts 7/9) — shared by
- *  StaffTab and RidersTab (a courier's own platform account is a User
+ *  AccountsTab and RidersTab (a courier's own platform account is a User
  *  row exactly like anyone else's; one component, one confirmation
  *  pattern, one impersonate flow, for every account type this console
  *  lists). Delete is soft (server-side) and, per spec, requires an
@@ -723,44 +731,57 @@ function RiderDetailPanel({ id }: { id: string }): React.JSX.Element {
   );
 }
 
-function StaffTab(): React.JSX.Element {
+/** Every login on the platform in one organized list — business staff,
+ *  courier logins, merchant and logistics portal logins — each with
+ *  disable/reactivate plus the shared Delete (typed-confirm). Replaces
+ *  the old staff-only tab: riders and portal logins used to be scattered
+ *  across tabs, which is exactly the clutter this removes. */
+function AccountsTab(): React.JSX.Element {
   const [q, setQ] = useState("");
   const qc = useQueryClient();
-  const list = useQuery({ queryKey: ["platform", "staff", q], queryFn: () => apiFetch<{ staff: StaffRow[] }>(`${API.platform.staff}?q=${encodeURIComponent(q)}`) });
+  const list = useQuery({ queryKey: ["platform", "accounts", q], queryFn: () => apiFetch<{ accounts: AccountRow[] }>(`${API.platform.accounts}?q=${encodeURIComponent(q)}`) });
   const toggle = useMutation({
     mutationFn: ({ id, active }: { id: string; active: boolean }) => apiFetch(API.platform.updateUser(id), { method: "PATCH", body: JSON.stringify({ active }) }),
-    onSuccess: () => void qc.invalidateQueries({ queryKey: ["platform", "staff"] }),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["platform", "accounts"] }),
     onError: (err) => window.alert(err instanceof ApiError ? err.message : "Could not update this account"),
   });
   return (
     <div className="space-y-3">
       <SearchBox value={q} onChange={setQ} />
       {list.isLoading ? <p className="text-sm text-zinc-400">Loading…</p> : null}
+      {(list.data?.accounts.length ?? 1) === 0 ? <p className="text-sm text-zinc-500">No accounts match.</p> : null}
       <div className="space-y-2">
-        {list.data?.staff.map((u) => (
-          <div key={u.id} className="card flex flex-wrap items-center justify-between gap-2">
-            <div>
-              <p className="font-medium">{u.name} {u.platformRole === "owner" ? <span className="text-xs text-amber-400">(platform owner)</span> : null}</p>
-              <p className="text-xs text-zinc-500">
-                {u.email ?? u.phone ?? "—"} ·{" "}
-                {[...u.businesses.map((b) => `${b.name} (${b.role})`), ...u.merchants.map((m) => `${m.name} (merchant)`)].join(", ") || "no access yet"}
-              </p>
+        {list.data?.accounts.map((u) => {
+          const access = [
+            ...u.staff.map((b) => `${b.businessName} (${b.role})${b.active ? "" : ", membership off"}`),
+            ...(u.rider ? [`Courier · ${u.rider.status}${u.rider.active ? "" : " (profile off)"} · ${u.rider.platformStatus}`] : []),
+            ...u.merchants.map((m) => `${m.merchantName} (merchant${m.active ? "" : ", off"})`),
+            ...u.logistics.map((c) => `${c.companyName} (fleet${c.active ? "" : ", off"})`),
+          ];
+          return (
+            <div key={u.id} className="card flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <p className="font-medium">{u.name} {u.platformRole === "owner" ? <span className="text-xs text-amber-400">(platform owner)</span> : null}</p>
+                <p className="text-xs text-zinc-500">
+                  {u.email ?? u.phone ?? "—"} · {access.join(", ") || "no access yet"}
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                {u.deletedAt ? (
+                  <span className="rounded bg-red-950 px-2 py-0.5 text-xs font-medium text-red-400">Deleted</span>
+                ) : (
+                  <>
+                    <StatusPill active={u.active} />
+                    <button className="btn !px-3 !py-1 text-xs" disabled={toggle.isPending} onClick={() => void toggle.mutate({ id: u.id, active: !u.active })}>
+                      {u.active ? "Disable" : "Reactivate"}
+                    </button>
+                    <AccountActions userId={u.id} name={u.name} onDeleted={() => void qc.invalidateQueries({ queryKey: ["platform", "accounts"] })} />
+                  </>
+                )}
+              </div>
             </div>
-            <div className="flex flex-wrap items-center gap-2">
-              {u.deletedAt ? (
-                <span className="rounded bg-red-950 px-2 py-0.5 text-xs font-medium text-red-400">Deleted</span>
-              ) : (
-                <>
-                  <StatusPill active={u.active} />
-                  <button className="btn !px-3 !py-1 text-xs" disabled={toggle.isPending} onClick={() => void toggle.mutate({ id: u.id, active: !u.active })}>
-                    {u.active ? "Disable" : "Reactivate"}
-                  </button>
-                  <AccountActions userId={u.id} name={u.name} onDeleted={() => void qc.invalidateQueries({ queryKey: ["platform", "staff"] })} />
-                </>
-              )}
-            </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );

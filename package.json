@@ -19,7 +19,8 @@
     "preview:api": "npm run preview --workspace @ronmacrae/api",
     "preview:web": "npm run preview --workspace @ronmacrae/web",
     "e2e": "npm run test --workspace @ronmacrae/e2e",
-    "db:prepare": "npm run db:prepare --workspace @ronmacrae/api"
+    "db:prepare": "npm run db:prepare --workspace @ronmacrae/api",
+    "ship": "node scripts/ship.mjs"
   },
   "engines": {
     "node": ">=20"

@@ -2,7 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    # This repo deploys from `master` (not `main`) — CI must gate the
+    # branch that actually ships, otherwise it never runs at all.
+    branches: [master]
   pull_request:
 
 jobs:
