@@ -14,6 +14,7 @@ import { Dashboard } from "./pages/dashboard.js";
 import { RiderDashboard } from "./pages/rider-dashboard.js";
 import { Jobs } from "./pages/jobs.js";
 import { Login } from "./pages/login.js";
+import { ResetPassword } from "./pages/reset-password.js";
 import { DownloadApp } from "./pages/download-app.js";
 import { Privacy, Terms, Support, DeleteAccountInfo } from "./pages/legal.js";
 import { Account } from "./pages/account.js";
@@ -126,6 +127,7 @@ export default function App(): React.JSX.Element {
             <NativeShell />
             <Routes>
               <Route path="/login" element={<Login />} />
+              <Route path="/reset-password" element={<ResetPassword />} />
               <Route path="/download-app" element={<DownloadApp />} />
               <Route path="/privacy" element={<Privacy />} />
               <Route path="/terms" element={<Terms />} />

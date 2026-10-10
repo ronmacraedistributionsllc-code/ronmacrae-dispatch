@@ -13,6 +13,8 @@ export const API = {
     totpEnroll: "/api/auth/totp/enroll",
     totpVerify: "/api/auth/totp/verify",
     password: "/api/auth/password",
+    requestPasswordReset: "/api/auth/request-password-reset",
+    resetPassword: "/api/auth/reset-password",
     /** Stage E: persists the caller's chosen theme so it follows them
      *  across devices, not just this browser's localStorage. */
     theme: "/api/auth/theme",

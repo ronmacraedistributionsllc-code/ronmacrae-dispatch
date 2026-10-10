@@ -136,6 +136,9 @@ export function Login(): React.JSX.Element {
           <button className="btn-accent w-full" disabled={busy || loading}>
             {busy ? "Signing in…" : "Sign in"}
           </button>
+          <p className="text-center text-sm">
+            <a className="text-zinc-500 underline hover:text-zinc-300" href="/reset-password">Forgot password?</a>
+          </p>
         </form>
         <div className="mt-4 space-y-2 text-center text-sm text-zinc-400">
           <p><a className="text-brand-accent underline" href="/join/merchant">Sign up as merchant</a> <span className="text-zinc-600">for stores and business owners</span></p>

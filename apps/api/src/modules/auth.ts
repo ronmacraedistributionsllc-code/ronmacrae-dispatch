@@ -3,8 +3,10 @@ import { z } from "zod";
 import { httpErrors } from "@fastify/sensible";
 import type { AppCtx } from "../ctx.js";
 import { hashPassword, verifyPassword } from "../lib/password.js";
+import { normalizeEmail } from "../lib/email.js";
 import { hashToken, newJti } from "../lib/jwt.js";
 import { verifyTotp } from "../lib/totp.js";
+import { consumeEmailCode, sendEmailCode } from "./customer-account.js";
 import type { Role, UserDto } from "@ronmacrae/contracts";
 
 const REFRESH_COOKIE = "rmd_refresh";
@@ -392,6 +394,39 @@ export async function authRoutes(app: FastifyInstance, ctx: AppCtx): Promise<voi
     return { ok: true };
   });
 
+  // ---- Public password reset (shared login has no other way back in) ----
+  // Same email-code mechanics as the customer-account reset, but against
+  // the shared User table and a distinct code purpose ("auth_password_reset")
+  // so a staff reset code can never be redeemed as a customer one or vice
+  // versa. Always returns ok:true — never reveal whether an email has an
+  // account (same anti-enumeration stance as the login route).
+  app.post("/api/auth/request-password-reset", { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } }, async (req) => {
+    const body = z.object({ email: z.string().max(160) }).parse(req.body);
+    const email = normalizeEmail(body.email);
+    if (email) {
+      const user = await ctx.prisma.user.findUnique({ where: { email }, select: { email: true } });
+      if (user) {
+        await sendEmailCode(ctx, email, "auth_password_reset", "Reset your password", (code) => `Your password reset code is ${code}. It expires in 10 minutes. If you didn't request this, ignore this email.`).catch(() => undefined);
+      }
+    }
+    return { ok: true };
+  });
+
+  app.post("/api/auth/reset-password", { config: { rateLimit: { max: 20, timeWindow: "1 minute" } } }, async (req) => {
+    const body = z.object({ email: z.string().max(160), code: z.string(), newPassword: z.string().min(8).max(128) }).parse(req.body);
+    const email = normalizeEmail(body.email);
+    if (!email) throw httpErrors.createError(400, "Enter a valid email address.");
+    await consumeEmailCode(ctx, email, "auth_password_reset", body.code);
+    const user = await ctx.prisma.user.findUnique({ where: { email }, select: { id: true, role: true, active: true } });
+    if (!user || !user.active) throw httpErrors.createError(404, "No account found for this email address.");
+    await ctx.prisma.user.update({ where: { id: user.id }, data: { passwordHash: hashPassword(body.newPassword) } });
+    // A reset means the old credential may be compromised — end every other
+    // session, same as the authenticated password-change route above.
+    await ctx.prisma.session.deleteMany({ where: { userId: user.id } });
+    await ctx.audit.record({ id: user.id, role: user.role }, "auth.password_reset", "user", user.id);
+    return { ok: true };
+  });
+
   // ---- TOTP (privileged accounts) ----
   app.post("/api/auth/totp/enroll", { preHandler: ctx.requireAuth }, async (req) => {
     const { generateTotpSecret, totpUri } = await import("../lib/totp.js");
@@ -483,6 +518,9 @@ export function registerAuthHook(app: FastifyInstance, ctx: AppCtx): void {
     // trailing segment is now a conversation kind, not a fixed suffix.
     if (url.startsWith("/api/tracking/") && method === "POST" && (/\/messages\/[^/]+$/.test(url) || url.endsWith("/address-change") || url.endsWith("/rate") || url.endsWith("/rate-merchant"))) return true;
     if (url === "/api/auth/login" || url === "/api/auth/refresh") return true;
+    // Public password reset — the email code itself is the credential,
+    // same "checked inside the route" convention as /api/customer-account/.
+    if ((url === "/api/auth/request-password-reset" || url === "/api/auth/reset-password") && method === "POST") return true;
     // Cross-business customer package dashboard (spec 4) — no staff/rider
     // login; request-code/verify are phone-gated, and the dashboard list
     // itself is gated inside the route by its own short-lived token (same
