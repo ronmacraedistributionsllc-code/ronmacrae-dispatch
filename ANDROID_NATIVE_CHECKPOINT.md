@@ -74,7 +74,9 @@ decides to retire it.
 
 ## 3. DEVICE-TESTED vs not
 
-- DEVICE-TESTED: nothing (no phone attached during this pass).
+- DEVICE-TESTED (emulator `ronmacrae-test`, API 36 Play Store arm64):
+  install, launch to live login screen, force-stop cold start, zero
+  logcat FATALS, runtime permissions correctly ungranted by default.
 - UNIT-TESTED: everything above.
 - Follow `native/DEVICE_TEST.md` sections A (location, no Firebase
   needed), B (push, needs Firebase), C (offline queue) with a phone.

@@ -9,7 +9,7 @@ Goal: Capacitor shell (`native/`) wrapping https://orders.ronmacraedistributions
 |---|---|---|
 | 0 Safety checkpoint + orientation | done | Branch `android-native`, tag `pre-android-native`; baseline below |
 | 1 Toolchain check | done | `npx cap doctor`: "Android looking great" (see below) |
-| 2 Capacitor shell scaffold | done | `assembleDebug` BUILD SUCCESSFUL; APK installs/loads live site: NOT TESTED (no device) |
+| 2 Capacitor shell scaffold | done | `assembleDebug` BUILD SUCCESSFUL; install + live-site load DEVICE-TESTED on emulator (see below) |
 | 3 Web-side native bridge | done | typecheck/lint/test:unit/build green; bundle evidence below |
 | 4 Native push (FCM) end-to-end | done (UNIT-TESTED; device test blocked on Firebase) | API + client below; debug build green with and without google-services.json |
 | 5 Background location | done (UNIT-TESTED; device test pending a phone) | disclosure + gating + battery hint + DEVICE_TEST.md; e2e rider-dashboard green |
@@ -30,6 +30,23 @@ Goal: Capacitor shell (`native/`) wrapping https://orders.ronmacraedistributions
   - `@ronmacrae/notifications`: 7/7 PASS.
 - `npm run build` — PASS (all workspaces; web PWA precache 23 entries).
 - e2e (Playwright): NOT RUN in this baseline (runs serially with `--workers=1` per HANDOFF; will run at final gate if environment supports it).
+
+## Emulator device test (2026-10-09, no physical phone available)
+
+- AVD `ronmacrae-test` (API 36-ext19 google_apis_playstore arm64, kept
+  for reuse): booted headless in ~45 s, debug APK installed clean.
+- VERIFIED on the emulator: app launches to the live production login
+  screen (TLS + WebView + remote load all good; first launch caught
+  Render's cold-start page, login rendered after wake); force-stop →
+  cold start renders identically; zero FATAL crashes in logcat;
+  POST_NOTIFICATIONS + FINE/COARSE location all `granted=false` by
+  default (OS prompts will appear in-flow as designed).
+- NOT verifiable here: anything past login (no production rider account
+  exists for testing and creating prod data is out of bounds), FCM
+  delivery (no Firebase project), screen-off GPS continuity as Play
+  would judge it (emulator GPS is mocked — indicative only).
+  DEVICE_TEST.md sections A–C still need a real phone; the emulator
+  covered shell packaging/load/stability only.
 
 ## Phase 1 — toolchain (done)
 
