@@ -1,6 +1,6 @@
-import React, { useEffect, useState } from "react";
+import React, { Suspense, useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import type { DispatchContactDto, JobDto, JobOfferDto, JobStatus, PendingJobDto, RiderStatus } from "@ronmacrae/contracts";
+import type { DispatchContactDto, GeoSuggestionDto, JobDto, JobOfferDto, JobStatus, PendingJobDto, RiderStatus } from "@ronmacrae/contracts";
 import { ACTIVE_JOB_STATUSES, API, TERMINAL_JOB_STATUSES } from "@ronmacrae/contracts";
 import { majorOf } from "@ronmacrae/money";
 import { ApiError, apiFetch, formatMoney } from "../lib/api.js";
@@ -19,6 +19,8 @@ import {
   useQueuedActions,
   type QueuedAction,
 } from "../lib/offline-queue.js";
+
+const PinMap = React.lazy(() => import("../components/pin-map.js").then((m) => ({ default: m.PinMap })));
 import { cacheAge, loadJobsCache, loadOffersCache, saveJobsCache, saveOffersCache, type CachedJobs, type CachedOffers } from "../lib/offline-cache.js";
 import { RouteQueue } from "../components/route-queue.js";
 import { ContactDispatch } from "../components/contact-dispatch.js";
@@ -312,6 +314,7 @@ export function RiderDashboard(): React.JSX.Element {
     <SectionHeading label="To pick up" count={toPickUp.length} />
     {jobs.isLoading ? <p className="text-sm text-zinc-400">Loading assigned jobs…</p> : null}
     {!jobs.isLoading && toPickUp.length === 0 ? <p className="text-sm text-zinc-500">Nothing waiting for collection.</p> : null}
+    <BatchPickupButtons jobs={toPickUp} onChanged={() => void qc.invalidateQueries({ queryKey: ["bearer-jobs"] })} />
     <div className="space-y-3">{toPickUp.map((job) => <RiderJobCard key={job.id} job={job} onChanged={() => void qc.invalidateQueries({ queryKey: ["bearer-jobs"] })} />)}</div>
 
     <SectionHeading label="In my possession" count={inPossession.length} />
@@ -725,6 +728,194 @@ function navigateHref(job: JobDto): string {
   return `https://www.google.com/maps/dir/?api=1&destination=${q}`;
 }
 
+/**
+ * Pickup-spot picker for the rider confirming a collection: type nothing,
+ * pick from no list — the job's own pickup address is located on demand
+ * ("Locate this address") and the pin is dragged to the exact spot. The
+ * confirmed point travels with the pickup transition; the address text
+ * itself is never rewritten by the map.
+ */
+function PickupSpotMap({ address, point, onPoint }: {
+  address: string | null;
+  point: { lat: number; lng: number } | null;
+  onPoint: (point: { lat: number; lng: number } | null) => void;
+}): React.JSX.Element {
+  const [locating, setLocating] = useState(false);
+  const [locateError, setLocateError] = useState<string | null>(null);
+
+  async function locate(): Promise<void> {
+    const q = (address ?? "").trim();
+    if (!q) {
+      setLocateError("This job has no pickup address saved — drag the pin to the exact spot instead.");
+      return;
+    }
+    setLocating(true);
+    setLocateError(null);
+    try {
+      // One shot, on demand — deliberately no suggestion list. The rider
+      // typed nothing here; this only positions the pin for THE address.
+      const r = await apiFetch<{ results: GeoSuggestionDto[] }>(API.geo.geocode, {
+        method: "POST",
+        body: JSON.stringify({ query: q, limit: 1 }),
+      });
+      const first = r.results[0];
+      if (first) onPoint(first.point);
+      else setLocateError("Couldn't find that address — drag the pin to the exact spot.");
+    } catch (err) {
+      setLocateError(err instanceof ApiError ? err.message : "Locate failed — drag the pin instead.");
+    } finally {
+      setLocating(false);
+    }
+  }
+
+  return (
+    <div className="space-y-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-xs text-zinc-400">Pickup spot{address ? `: ${address}` : ""}</span>
+        <button type="button" className="btn !px-3 !py-1 text-xs" disabled={locating} onClick={() => void locate()}>
+          {locating ? "Locating…" : point ? "Re-locate from address" : "Locate this address"}
+        </button>
+      </div>
+      {locateError ? <p className="text-xs text-amber-400">{locateError}</p> : null}
+      {point ? (
+        <>
+          <Suspense fallback={<p className="text-sm text-zinc-500">Loading map…</p>}>
+            <PinMap lat={point.lat} lng={point.lng} onMove={onPoint} />
+          </Suspense>
+          <p className="text-xs text-zinc-500">Drag the pin to the exact pickup spot — that point is saved with your confirmation.</p>
+        </>
+      ) : (
+        <p className="text-xs text-zinc-500">No pin yet — locate the address above, or confirm without moving anything to keep the saved spot.</p>
+      )}
+    </div>
+  );
+}
+
+interface BatchResult { jobId: string; ok: boolean; error?: string }
+
+/**
+ * One tap for every package waiting at the same pickup address. The
+ * dashboard renders one of these per shared address with 2+ accepted
+ * jobs; confirming runs the same pickup chain per job and reports each
+ * result honestly (partial success stays visible, never silent). Offline,
+ * each job queues as its own pickup transition and replays in order.
+ */
+function BatchPickupSheet({ jobs, onClose, onChanged }: { jobs: JobDto[]; onClose: () => void; onChanged: () => void }): React.JSX.Element {
+  const address = jobs[0]?.pickupAddressText ?? null;
+  const [point, setPoint] = useState<{ lat: number; lng: number } | null>(jobs.find((j) => j.pickupPoint)?.pickupPoint ?? null);
+  const [note, setNote] = useState("");
+  const [done, setDone] = useState<BatchResult[] | null>(null);
+  const batch = useMutation({
+    mutationFn: async () => {
+      const body = JSON.stringify({ jobIds: jobs.map((j) => j.id), ...(point ? { pickupPoint: point } : {}), ...(note.trim() ? { note: note.trim() } : {}) });
+      try {
+        return await apiFetch<{ results: BatchResult[] }>(API.bearer.pickupBatch, { method: "POST", body });
+      } catch (err) {
+        if (isOfflineError(err)) {
+          for (const j of jobs) {
+            const label = j.jobNumber ?? j.id.slice(0, 8);
+            await enqueueAction({
+              kind: "transition",
+              jobId: j.id,
+              url: API.bearer.transition(j.id),
+              body: JSON.stringify({ to: "picked_up", note: note.trim() || "batch pickup", ...(point ? { pickupPoint: point } : {}) }),
+              label: `Confirm pickup ${label}`,
+            });
+          }
+          throw new OfflineQueued();
+        }
+        throw err;
+      }
+    },
+    onSuccess: (data) => {
+      setDone(data.results);
+      onChanged();
+    },
+  });
+  const failed = done?.filter((r) => !r.ok) ?? [];
+  const allOk = done !== null && failed.length === 0;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 sm:items-center" role="dialog" aria-modal="true" aria-label="Confirm pickup for all packages here" onClick={onClose}>
+      <div className="max-h-[85vh] w-full max-w-md space-y-3 overflow-y-auto rounded-t-2xl bg-zinc-900 p-4 shadow-xl sm:rounded-2xl" onClick={(e) => e.stopPropagation()}>
+        <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">Pickup here · {jobs.length} packages</p>
+        <h3 className="text-lg font-semibold">Confirm pickup for all</h3>
+        <ul className="space-y-1 text-sm text-zinc-300">
+          {jobs.map((j) => (
+            <li key={j.id}>· {(j.jobNumber ?? j.id.slice(0, 8))} — {j.itemSummary ?? "No item details"}</li>
+          ))}
+        </ul>
+        <PickupSpotMap address={address} point={point} onPoint={setPoint} />
+        <div>
+          <label className="label" htmlFor="batch-note">Note (optional)</label>
+          <textarea id="batch-note" className="input min-h-16" value={note} onChange={(e) => setNote(e.target.value)} placeholder="Optional proof or action note" />
+        </div>
+        {batch.error && !(batch.error instanceof OfflineQueued) ? (
+          <p className="text-sm text-red-400">{batch.error instanceof ApiError ? batch.error.message : "Could not confirm pickup"}</p>
+        ) : null}
+        {batch.error instanceof OfflineQueued ? <p className="text-sm text-sky-300">Saved — each pickup will sync when you&apos;re back online.</p> : null}
+        {done !== null && !allOk ? (
+          <div className="rounded-lg border border-amber-800/50 p-2 text-sm">
+            <p className="text-amber-300">Some didn&apos;t go through:</p>
+            <ul className="mt-1 space-y-0.5 text-zinc-300">
+              {failed.map((f) => <li key={f.jobId}>· {f.jobId.slice(0, 8)} — {f.error ?? "failed"}</li>)}
+            </ul>
+          </div>
+        ) : null}
+        {allOk ? <p className="text-sm text-emerald-400">All {jobs.length} picked up — heading out.</p> : null}
+        <div className="flex gap-2">
+          {!allOk ? (
+            <button className="btn-accent flex-1 !py-2.5" disabled={batch.isPending} onClick={() => void batch.mutate()}>
+              {batch.isPending ? "Saving…" : done !== null ? "Retry failed" : `Yes, confirm all ${jobs.length}`}
+            </button>
+          ) : null}
+          <button className="btn !py-2.5" onClick={onClose}>{allOk || done !== null ? "Close" : "Cancel"}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * One "confirm them all" button per shared pickup address with 2+
+ * accepted jobs. Grouping is exact-match on the saved pickup address
+ * text (blank counts as its own group) — the server re-verifies the
+ * grouping and refuses mixed batches, so a stale client group can never
+ * collect the wrong packages.
+ */
+function BatchPickupButtons({ jobs, onChanged }: { jobs: JobDto[]; onChanged: () => void }): React.JSX.Element | null {
+  const [openGroup, setOpenGroup] = useState<string | null>(null);
+  const groups = new Map<string, JobDto[]>();
+  for (const job of jobs) {
+    if (job.status !== "accepted") continue;
+    const key = (job.pickupAddressText ?? "").trim();
+    const list = groups.get(key) ?? [];
+    list.push(job);
+    groups.set(key, list);
+  }
+  const batchable = [...groups.entries()].filter(([, list]) => list.length >= 2);
+  if (batchable.length === 0) return null;
+  const open = openGroup !== null ? (groups.get(openGroup) ?? null) : null;
+  return (
+    <>
+      <div className="space-y-2">
+        {batchable.map(([address, list]) => (
+          <button
+            key={address || "(no address)"}
+            className="btn-accent w-full !py-2 text-sm"
+            onClick={() => setOpenGroup(address)}
+          >
+            Confirm pickup · {list.length} packages{address ? ` · ${address}` : ""}
+          </button>
+        ))}
+      </div>
+      {open !== null ? (
+        <BatchPickupSheet jobs={open} onClose={() => setOpenGroup(null)} onChanged={onChanged} />
+      ) : null}
+    </>
+  );
+}
+
 function RiderJobCard({ job, onChanged }: { job: JobDto; onChanged: () => void }): React.JSX.Element {
   const businessName = useBusinessName(job.id);
   const queued = useQueuedActions();
@@ -735,6 +926,10 @@ function RiderJobCard({ job, onChanged }: { job: JobDto; onChanged: () => void }
   const [amount, setAmount] = useState(() => String(job.amountExpected ? majorOf(job.amountExpected) : ""));
   const [addressText, setAddressText] = useState(job.addressText ?? "");
   const [landmark, setLandmark] = useState(job.landmark ?? "");
+  // The rider-confirmed pickup spot: starts at whatever the job already
+  // has saved (merchant pin or a previous correction), adjustable on the
+  // map in the sheet, sent with the pickup transition. Null = keep saved.
+  const [pickupPoint, setPickupPoint] = useState<{ lat: number; lng: number } | null>(job.pickupPoint ?? null);
   const [showMore, setShowMore] = useState(false);
   const [showChat, setShowChat] = useState(false);
   const jobLabel = job.jobNumber ?? job.id.slice(0, 8);
@@ -757,6 +952,7 @@ function RiderJobCard({ job, onChanged }: { job: JobDto; onChanged: () => void }
                   ...(next.needsPin ? { pin } : {}),
                   ...(next.needsAmount && amount.trim() !== "" ? { amountCollected: Number(amount) } : {}),
                   ...(next.location ? { addressText, landmark } : {}),
+                  ...(next.to === "picked_up" && pickupPoint ? { pickupPoint } : {}),
                   ...(next.failed ? { failureReason: "other", failureNote: note } : {}),
                 }),
                 kind: "transition",
@@ -906,6 +1102,10 @@ function RiderJobCard({ job, onChanged }: { job: JobDto; onChanged: () => void }
         setAddressText={setAddressText}
         landmark={landmark}
         setLandmark={setLandmark}
+        showPickupMap={sheet.to === "picked_up"}
+        pickupAddress={job.pickupAddressText}
+        pickupPoint={pickupPoint}
+        setPickupPoint={setPickupPoint}
         pending={mutation.isPending}
         error={
           mutation.error instanceof OfflineQueued
@@ -953,12 +1153,18 @@ function ActionSheet(props: {
   setAddressText: (v: string) => void;
   landmark: string;
   setLandmark: (v: string) => void;
+  /** Pickup-spot step, shown only for the pickup confirmation: the map pin
+   *  starts at the saved spot (or nothing), the rider drags it exact. */
+  showPickupMap?: boolean;
+  pickupAddress?: string | null;
+  pickupPoint?: { lat: number; lng: number } | null;
+  setPickupPoint?: (v: { lat: number; lng: number } | null) => void;
   pending: boolean;
   error: string | null;
   onConfirm: () => void;
   onDismiss: () => void;
 }): React.JSX.Element {
-  const { job, businessName, action, note, setNote, pin, setPin, amount, setAmount, addressText, setAddressText, landmark, setLandmark, pending, error, onConfirm, onDismiss } = props;
+  const { job, businessName, action, note, setNote, pin, setPin, amount, setAmount, addressText, setAddressText, landmark, setLandmark, showPickupMap, pickupAddress, pickupPoint, setPickupPoint, pending, error, onConfirm, onDismiss } = props;
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onDismiss(); };
     window.addEventListener("keydown", onKey);
@@ -996,6 +1202,11 @@ function ActionSheet(props: {
           <div className="mt-3 space-y-2">
             <div><label className="label" htmlFor={`address-${job.id}`}>New destination</label><input id={`address-${job.id}`} className="input" value={addressText} onChange={(e) => setAddressText(e.target.value)} /></div>
             <div><label className="label" htmlFor={`landmark-${job.id}`}>New landmark</label><input id={`landmark-${job.id}`} className="input" value={landmark} onChange={(e) => setLandmark(e.target.value)} /></div>
+          </div>
+        ) : null}
+        {showPickupMap && setPickupPoint ? (
+          <div className="mt-3">
+            <PickupSpotMap address={pickupAddress ?? null} point={pickupPoint ?? null} onPoint={setPickupPoint} />
           </div>
         ) : null}
         <div className="mt-3">

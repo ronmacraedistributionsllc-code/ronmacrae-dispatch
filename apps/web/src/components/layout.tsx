@@ -177,6 +177,11 @@ export function Layout({ children }: { children: React.ReactNode }): React.JSX.E
         <div className="mt-auto hidden md:block">
           <div className="truncate text-sm text-zinc-200">{user?.name}</div>
           <div className="text-xs text-zinc-500">{user?.role}</div>
+          {user?.platformRole === "owner" ? (
+            <div className="mt-1 inline-block rounded bg-amber-900/60 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-amber-300">
+              App owner
+            </div>
+          ) : null}
           {otherWorkspaces.length > 0 ? (
             <div className="mt-3 space-y-1">
               <div className="text-xs text-zinc-500">Switch workspace</div>

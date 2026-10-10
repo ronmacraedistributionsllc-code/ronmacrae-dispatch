@@ -426,22 +426,24 @@ export async function platformAdminRoutes(app: FastifyInstance, ctx: AppCtx): Pr
     return { ok: true, platformStatus: rider.platformStatus, active: rider.active, openNetwork: rider.openNetwork, attachment: rider.attachment, attachedMerchantId: rider.attachedMerchantId, attachedLogisticsCompanyId: rider.attachedLogisticsCompanyId };
   });
 
-  // Master courier delete — deactivation, never row removal (their jobs,
-  // ratings, and audit history stay intact). Refuses while they're
-  // carrying live work; withdraws their open offers and ends every
-  // membership so no business keeps receiving them.
+  // Master courier delete — the app owner's ultimate power: ANY courier
+  // from ANY company, no exceptions. Deactivation, never row removal
+  // (their jobs, ratings, and audit history stay intact). Live work is
+  // released back to the claim pool rather than blocking the delete —
+  // nothing strands with a deactivated courier. Withdraws their open
+  // offers and ends every membership so no business keeps receiving them.
   app.delete<{ Params: { id: string } }>("/api/platform/riders/:id", { preHandler: owner }, async (req) => {
     const rider = await ctx.prisma.rider.findUnique({ where: { id: req.params.id } });
     if (!rider) throw httpErrors.createError(404, "Courier not found");
-    const carrying = await ctx.prisma.job.count({ where: { riderId: rider.id, status: { in: [...ACTIVE_JOB_STATUSES] } } });
-    if (carrying > 0) throw httpErrors.createError(409, `This courier is still carrying ${carrying} live job${carrying === 1 ? "" : "s"} — finish or reassign them first.`);
+    const { releaseRiderJobs } = await import("./offers.js");
+    const { released } = await releaseRiderJobs(ctx, rider.id, { id: req.user!.sub, name: req.user!.name, role: "platform_owner" }, "rider deleted by platform owner");
     await ctx.prisma.$transaction([
       ctx.prisma.rider.update({ where: { id: rider.id }, data: { active: false, status: "offline" } }),
       ctx.prisma.riderMembership.updateMany({ where: { riderId: rider.id }, data: { status: "removed" } }),
       ctx.prisma.jobOffer.updateMany({ where: { riderId: rider.id, status: "open" }, data: { status: "withdrawn", note: "rider deleted" } }),
     ]);
-    await ctx.audit.record({ id: req.user!.sub, role: "platform_owner" }, "platform.rider.delete", "rider", rider.id, { name: rider.name, phone: rider.phone });
-    return { ok: true };
+    await ctx.audit.record({ id: req.user!.sub, role: "platform_owner" }, "platform.rider.delete", "rider", rider.id, { name: rider.name, phone: rider.phone, jobsReleased: released });
+    return { ok: true, jobsReleased: released };
   });
 
   // Spec: one rider can belong to more than one merchant (a many-to-many

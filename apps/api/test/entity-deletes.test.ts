@@ -136,7 +136,7 @@ describe("ultra-admin deletes", () => {
     expect(await harness.prisma.riderMembership.count({ where: { riderId, status: "active" } })).toBe(0);
   });
 
-  it("refuses a rider carrying live work", async () => {
+  it("releases a carrier's live work back to the claim pool instead of refusing", async () => {
     const owner = await makeUser("admin", "owner");
     const admin = await makeUser("admin");
     const created = await harness.app.inject({
@@ -147,9 +147,14 @@ describe("ultra-admin deletes", () => {
     });
     const riderId = (created.json() as { rider: { id: string } }).rider.id;
     const customer = await makeCustomer();
-    await makeJob(customer.id, { riderId, status: "accepted" });
+    const job = await makeJob(customer.id, { riderId, status: "accepted" });
     const res = await harness.app.inject({ method: "DELETE", url: `/api/platform/riders/${riderId}`, headers: owner.auth });
-    expect(res.statusCode).toBe(409);
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ ok: true, jobsReleased: 1 });
+    const released = await harness.prisma.job.findUniqueOrThrow({ where: { id: job.id } });
+    expect(released.status).toBe("new");
+    expect(released.riderId).toBeNull();
+    expect((await harness.prisma.rider.findUniqueOrThrow({ where: { id: riderId } })).active).toBe(false);
   });
 
   it("a business admin cannot use the platform delete routes", async () => {

@@ -453,7 +453,7 @@ export function PublicOrder(): React.JSX.Element {
             </label>
             <label className="flex items-start gap-2 text-sm text-zinc-200">
               <input type="radio" className="mt-1 size-4 accent-emerald-500" checked={courierChoice === "own"} onChange={() => setCourierChoice("own")} />
-              <span><span className="font-medium">My own courier</span> <span className="text-zinc-500">(by phone number — they must deliver for this business)</span></span>
+              <span><span className="font-medium">My own courier</span> <span className="text-zinc-500">(I&apos;ll enter their number below — they must deliver for this business)</span></span>
             </label>
             {courierChoice === "own" ? (
               <div>

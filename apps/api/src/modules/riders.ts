@@ -643,10 +643,14 @@ export async function riderRoutes(app: FastifyInstance, ctx: AppCtx): Promise<vo
   app.post<{ Params: { id: string } }>("/api/riders/:id/remove", { preHandler: ctx.requireStaff("admin", "dispatcher") }, async (req) => {
     const businessId = req.user!.businessId!;
     const membership = await ctx.prisma.riderMembership.findUnique({ where: { riderId_businessId: { riderId: req.params.id, businessId } } });
-    if (!membership || membership.status !== "active") throw httpErrors.createError(404, "No active membership found for this courier at your business");
+    if (!membership) throw httpErrors.createError(404, "This courier has no relationship with your business");
+    // Idempotent: removing an already-removed (or rejected) membership is
+    // already the desired end state — report it, don't 404. Only an
+    // ACTIVE membership actually transitions (and gets audited).
+    if (membership.status !== "active") return { ok: true, status: membership.status };
     await ctx.prisma.riderMembership.update({ where: { id: membership.id }, data: { status: "removed" } });
     await ctx.audit.record({ id: req.user!.sub, role: req.user!.role }, "rider.remove", "rider", req.params.id);
-    return { ok: true };
+    return { ok: true, status: "removed" as const };
   });
 
   // Business-admin delete: ONLY couriers this company itself added
@@ -668,15 +672,18 @@ export async function riderRoutes(app: FastifyInstance, ctx: AppCtx): Promise<vo
     if (elsewhere > 0) {
       throw httpErrors.createError(409, "This courier also delivers for other businesses — remove them here instead of deleting.");
     }
-    const carrying = await ctx.prisma.job.count({ where: { riderId: rider.id, status: { in: [...ACTIVE_JOB_STATUSES] } } });
-    if (carrying > 0) throw httpErrors.createError(409, `This courier is still carrying ${carrying} live job${carrying === 1 ? "" : "s"} — finish or reassign them first.`);
+    // Live work is released back to the claim pool (not refused) — the
+    // delete always goes through, and no delivery strands with a
+    // deactivated courier. Another courier can claim each released job.
+    const { releaseRiderJobs } = await import("./offers.js");
+    const { released } = await releaseRiderJobs(ctx, rider.id, { id: req.user!.sub, name: req.user!.name, role: req.user!.role }, "rider deleted");
     await ctx.prisma.$transaction([
       ctx.prisma.rider.update({ where: { id: rider.id }, data: { active: false, status: "offline" } }),
       ctx.prisma.riderMembership.updateMany({ where: { riderId: rider.id }, data: { status: "removed" } }),
       ctx.prisma.jobOffer.updateMany({ where: { riderId: rider.id, status: "open" }, data: { status: "withdrawn", note: "rider deleted" } }),
     ]);
-    await ctx.audit.record({ id: req.user!.sub, role: req.user!.role }, "rider.delete", "rider", rider.id, { name: rider.name, phone: rider.phone });
-    return { ok: true };
+    await ctx.audit.record({ id: req.user!.sub, role: req.user!.role }, "rider.delete", "rider", rider.id, { name: rider.name, phone: rider.phone, jobsReleased: released });
+    return { ok: true, jobsReleased: released };
   });
 
   app.patch<{ Params: { id: string } }>("/api/riders/:id", { preHandler: ctx.requireStaff("admin", "dispatcher") }, async (req) => {

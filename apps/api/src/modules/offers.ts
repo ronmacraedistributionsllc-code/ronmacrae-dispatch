@@ -394,6 +394,55 @@ export async function offerToRequestedCourier(
   return { offered: offers.length };
 }
 
+/**
+ * Force-release every live job a rider is carrying back to the unclaimed
+ * pool (`new`, unassigned) — used when an admin deletes a courier who
+ * still holds work, instead of refusing the delete. Each release closes
+ * the open assignment, records an event under the acting admin (never
+ * "system" — the audit trail shows who pulled the job), and broadcasts
+ * the fresh state so dispatch boards and the claim list update live.
+ * Returns the number of jobs released.
+ */
+export async function releaseRiderJobs(
+  ctx: AppCtx,
+  riderId: string,
+  actor: Actor,
+  reason: string,
+): Promise<{ released: number }> {
+  const live = await ctx.prisma.job.findMany({
+    where: { riderId, status: { in: [...ACTIVE_JOB_STATUSES] } },
+    select: { id: true, businessId: true, status: true },
+  });
+  for (const job of live) {
+    const event = await ctx.prisma.$transaction(async (tx) => {
+      await tx.job.update({ where: { id: job.id }, data: { riderId: null, status: "new", stage: "none" } });
+      await tx.riderAssignment.updateMany({
+        where: { jobId: job.id, riderId, status: { in: ["assigned", "accepted"] } },
+        data: { status: "reassigned", reason },
+      });
+      return tx.jobEvent.create({
+        data: {
+          jobId: job.id,
+          from: job.status,
+          to: "new",
+          actorType: actorType(actor.role),
+          actorId: actor.id,
+          actorName: actor.name,
+          note: "released to the claim pool",
+          meta: { reason, riderId },
+        },
+      });
+    });
+    const dto = jobToDto(
+      await ctx.prisma.job.findUniqueOrThrow({ where: { id: job.id }, include: jobInclude }),
+      { role: actor.role, riderId: null },
+      ctx.config.APP_ORIGIN,
+    );
+    ctx.hub.broadcastMany([roomForJob(job.id), roomForDispatch(job.businessId)], { type: "job.state", payload: { job: dto, event: eventToDto(event) } });
+  }
+  return { released: live.length };
+}
+
 export async function offerRoutes(app: FastifyInstance, ctx: AppCtx): Promise<void> {
   const writer = ctx.requireStaff("admin", "dispatcher");
 

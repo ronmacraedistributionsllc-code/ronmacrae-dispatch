@@ -202,7 +202,7 @@ export function Book(): React.JSX.Element {
             </label>
             <label className="flex items-start gap-2 text-sm text-zinc-200">
               <input type="radio" className="mt-1 size-4 accent-emerald-500" checked={form.courierChoice === "own"} onChange={() => set({ courierChoice: "own" })} />
-              <span><span className="font-medium">My own courier</span> <span className="text-zinc-500">(by phone number)</span></span>
+              <span><span className="font-medium">My own courier</span> <span className="text-zinc-500">(I&apos;ll enter their number below)</span></span>
             </label>
             {form.courierChoice === "own" ? (
               <div>

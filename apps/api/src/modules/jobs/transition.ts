@@ -54,6 +54,13 @@ export const TransitionBody = z.object({
     .object({ lat: z.number().gte(-90).lte(90), lng: z.number().gte(-180).lte(180) })
     .optional()
     .nullable(),
+  /** Rider-confirmed pickup spot, set only on `picked_up` (see below).
+   *  Unlike `point` (the dropoff, rewritten only by location_changed),
+   *  the pickup spot is corrected by the courier standing there. */
+  pickupPoint: z
+    .object({ lat: z.number().gte(-90).lte(90), lng: z.number().gte(-180).lte(180) })
+    .optional()
+    .nullable(),
   addressText: z.string().max(200).optional().or(z.literal("")).nullable(),
   landmark: z.string().max(120).optional().or(z.literal("")).nullable(),
   stage: z.enum(RIDER_STAGES).optional(),
@@ -66,6 +73,7 @@ export interface TransitionInput {
   failureReason?: FailureReason | null;
   failureNote?: string | null;
   point?: GeoPoint | null;
+  pickupPoint?: GeoPoint | null;
   addressText?: string | null;
   landmark?: string | null;
   stage?: RiderStage;
@@ -245,6 +253,9 @@ export async function transitionJob(
               ...(input.landmark !== undefined ? { landmark: input.landmark || row.landmark } : {}),
             }
           : {}),
+        // The courier standing at the pickup spot corrects it — saved
+        // only here, never silently by any other transition.
+        ...(to === "picked_up" && input.pickupPoint ? { pickupPoint: pointToJson(input.pickupPoint) ?? Prisma.JsonNull } : {}),
         ...(cash ? { amountCollected: cash.amountCollected, paymentStatus: cash.paymentStatus } : {}),
         ...(codAutoCollect ? { codStatus: "collected", codCollectedAt: new Date() } : {}),
         ...(eta ? { routeEta: eta } : {}),

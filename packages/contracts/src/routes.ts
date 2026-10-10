@@ -477,6 +477,8 @@ export const API = {
     /** Unclaimed new jobs this courier can see (their pool), with `offered` flags. */
     pendingJobs: "/api/bearer/pending-jobs",
     claimPendingJob: (id: string) => `/api/bearer/pending-jobs/${id}/claim`,
+    /** Confirm pickup for several same-spot packages in one tap. */
+    pickupBatch: "/api/bearer/jobs/pickup-batch",
     /** Businesses this courier could deliver for, each with their own
      *  membership status — the directory behind "apply to deliver". */
     businesses: "/api/bearer/businesses",

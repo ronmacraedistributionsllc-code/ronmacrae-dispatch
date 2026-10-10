@@ -123,6 +123,57 @@ export async function bearerRoutes(app: FastifyInstance, ctx: AppCtx): Promise<v
     return { ok: true, openNetwork: rider.openNetwork };
   });
 
+  /**
+   * Confirm pickup for several packages at ONE spot in a single tap: every
+   * listed job must be this rider's, still `accepted`, and share the exact
+   * same pickup address — anything else is an honest 400 naming the odd
+   * ones out (confirm those separately). Each job runs the same
+   * accepted → picked_up → in_transit chain as the single-tap flow
+   * (including the confirmed pickup spot), and the response reports
+   * per-job results: HTTP 200 when all landed, 207 with the failures
+   * spelled out when only some did — never a silent half-batch.
+   */
+  app.post("/api/bearer/jobs/pickup-batch", { preHandler: ctx.requireRider }, async (req, reply) => {
+    const body = z
+      .object({
+        jobIds: z.array(z.string().min(1)).min(1).max(20),
+        pickupPoint: z.object({ lat: z.number().gte(-90).lte(90), lng: z.number().gte(-180).lte(180) }).optional().nullable(),
+        note: z.string().max(300).optional().or(z.literal("")).nullable(),
+      })
+      .parse(req.body);
+    const key = idempotencyKeyFrom(req);
+    const { status, body: out } = await withIdempotency(ctx, req.user!.sub, key, async () => {
+      const riderId = req.user!.riderId!;
+      const actor = actorFor(req);
+      const viewer = viewerFor(req);
+      const uniqueIds = [...new Set(body.jobIds)];
+      const rows = await ctx.prisma.job.findMany({ where: { id: { in: uniqueIds } } });
+      if (rows.length !== uniqueIds.length) throw httpErrors.createError(404, "One of these jobs doesn't exist — refresh and try again");
+      const foreign = rows.filter((j) => j.riderId !== riderId).map((j) => j.jobNumber ?? j.id.slice(0, 8));
+      if (foreign.length > 0) throw httpErrors.createError(403, `Not yours to pick up: ${foreign.join(", ")}`);
+      const notReady = rows.filter((j) => j.status !== "accepted").map((j) => j.jobNumber ?? j.id.slice(0, 8));
+      if (notReady.length > 0) throw httpErrors.createError(409, `Already past pickup: ${notReady.join(", ")} — refresh and confirm the rest one by one`);
+      const addresses = new Set(rows.map((j) => j.pickupAddressText ?? ""));
+      if (addresses.size > 1) throw httpErrors.createError(400, "These jobs have different pickup spots — confirm each address separately");
+      const results: { jobId: string; ok: boolean; error?: string }[] = [];
+      for (const job of rows) {
+        try {
+          await transitionJob(ctx, job.id, { to: "picked_up", note: body.note || "batch pickup", pickupPoint: body.pickupPoint ?? null }, actor, viewer);
+          await transitionJob(ctx, job.id, { to: "in_transit" }, actor, viewer);
+          results.push({ jobId: job.id, ok: true });
+        } catch (err) {
+          // One job losing a race (claimed back, cancelled by dispatch)
+          // must not undo the ones already collected — report it, keep going.
+          results.push({ jobId: job.id, ok: false, error: err instanceof Error ? err.message : "Could not pick up" });
+        }
+      }
+      await ctx.audit.record(actor, "job.pickup_batch", "rider", riderId, { jobIds: uniqueIds, picked: results.filter((r) => r.ok).length });
+      const failed = results.filter((r) => !r.ok);
+      return { status: failed.length > 0 ? 207 : 200, body: { results } };
+    });
+    return reply.code(status).send(out);
+  });
+
   app.get("/api/bearer/jobs", { preHandler: ctx.requireRider }, async (req) => {
     const riderId = req.user!.riderId!;
     const jobs = await listJobs(ctx, { riderId, take: 100, sort: "scheduled" });
