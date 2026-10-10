@@ -53,7 +53,7 @@ export interface TestHarness {
    *  cross-business isolation create a second Business explicitly instead of
    *  relying on this one. */
   business: { id: string; name: string };
-  tokenFor: (user: { id: string; name: string; role: Role; riderId?: string; businessId?: string | null; platformRole?: "owner" }) => Promise<string>;
+  tokenFor: (user: { id: string; name: string; role: Role; riderId?: string; businessId?: string | null; platformRole?: "owner" | "manager" }) => Promise<string>;
   cleanup: () => Promise<void>;
 }
 

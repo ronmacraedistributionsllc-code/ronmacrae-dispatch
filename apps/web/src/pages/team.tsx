@@ -34,7 +34,16 @@ interface InviteDto {
  */
 export function Team(): React.JSX.Element {
   const { user, businessId } = useAuth();
-  const canEdit = user?.role === "admin" && !!businessId;
+  const platformPower = user?.platformRole === "owner" || user?.platformRole === "manager";
+  // Platform sessions (no business workspace) get Delete powers routed
+  // through the platform endpoints below; membership-scoped actions
+  // (Remove) stay hidden for them — there is no membership to remove.
+  const canEdit = (user?.role === "admin" && !!businessId) || platformPower;
+  const canManage = user?.role === "admin" && !!businessId;
+  // Membership-scoped actions (approve/remove staff, invites, creating
+  // people) need a real business workspace — platform sessions must not
+  // see them. Courier Delete keeps canEdit: it routes platform-wide.
+  const platformDelete = platformPower && !businessId;
   const qc = useQueryClient();
   const [addingStaff, setAddingStaff] = useState(false);
   const [invitingStaff, setInvitingStaff] = useState(false);
@@ -95,8 +104,11 @@ export function Team(): React.JSX.Element {
     onSuccess: () => { setConfirmAction(null); refreshRiders(); },
   });
   const deleteRider = useMutation({
-    mutationFn: (id: string) => apiFetch(API.riders.deleteRider(id), { method: "DELETE" }),
-    onSuccess: () => { setConfirmAction(null); refreshRiders(); },
+    mutationFn: (id: string) => apiFetch(
+      platformDelete ? API.platform.deleteRider(id) : API.riders.deleteRider(id),
+      { method: "DELETE" },
+    ),
+    onSuccess: () => { setConfirmAction(null); setCourierChoice(null); refreshRiders(); },
   });
 
   return (
@@ -107,7 +119,7 @@ export function Team(): React.JSX.Element {
         <OwnerNotice what="approving, removing, or deleting people" />
       </header>
 
-      {canEdit && pending.data && pending.data.riders.length > 0 ? (
+      {canManage && pending.data && pending.data.riders.length > 0 ? (
         <section className="space-y-3">
           <h2 className="font-semibold text-amber-400">🔔 Pending courier applications ({pending.data.riders.length})</h2>
           <div className="space-y-2">
@@ -134,7 +146,7 @@ export function Team(): React.JSX.Element {
       <section className="space-y-3">
         <div className="flex items-center justify-between gap-3">
           <h2 className="font-semibold">Staff</h2>
-          {canEdit ? (
+          {canManage ? (
             <div className="flex gap-2">
               <button className="btn !px-3 !py-1.5 text-xs" onClick={() => { setInvitingStaff((v) => !v); setAddingStaff(false); }}>{invitingStaff ? "Cancel" : "✉️ Invite staff"}</button>
               <button className="btn-accent" onClick={() => { setAddingStaff((v) => !v); setInvitingStaff(false); }}>{addingStaff ? "Cancel" : "+ Add staff"}</button>
@@ -159,7 +171,7 @@ export function Team(): React.JSX.Element {
                 <span className={`rounded px-2 py-0.5 text-xs font-medium ${u.active ? "bg-emerald-900/50 text-emerald-300" : "bg-zinc-800 text-zinc-500"}`}>
                   {ROLE_LABEL[u.role]}{u.active ? "" : " · disabled"}
                 </span>
-                {canEdit ? (
+                {canManage ? (
                   confirmAction?.kind === "staff" && confirmAction.id === u.id ? (
                     <span className="flex items-center gap-2 text-xs">
                       <span className="text-red-300">Remove {u.name} from this business?</span>
@@ -179,7 +191,7 @@ export function Team(): React.JSX.Element {
           ))}
           {removeMembership.error ? <p className="text-sm text-red-400">{removeMembership.error instanceof ApiError ? removeMembership.error.message : "Could not remove this team member"}</p> : null}
         </div>
-        {canEdit && invites.data && invites.data.invites.filter((i) => i.status === "pending").length > 0 ? (
+        {canManage && invites.data && invites.data.invites.filter((i) => i.status === "pending").length > 0 ? (
           <div className="space-y-2 pt-2">
             <h3 className="text-xs uppercase tracking-wide text-zinc-500">Pending invites</h3>
             {invites.data.invites.filter((i) => i.status === "pending").map((inv) => (
@@ -203,7 +215,7 @@ export function Team(): React.JSX.Element {
       <section className="space-y-3">
         <div className="flex items-center justify-between gap-3">
           <h2 className="font-semibold">Couriers</h2>
-          {canEdit ? (
+          {canManage ? (
           <button className="btn-accent" onClick={() => setAddingRider((v) => !v)}>{addingRider ? "Cancel" : "+ Add courier"}</button>
           ) : null}
         </div>
@@ -236,7 +248,7 @@ export function Team(): React.JSX.Element {
                   {r.status}{r.active ? "" : " · disabled"}
                 </span>
                 {canEdit ? (
-                  courierChoice?.id === r.id ? (
+                  courierChoice?.id === r.id && !platformDelete ? (
                     <span className="flex flex-wrap items-center gap-2 text-xs">
                       <button
                         type="button"
@@ -271,6 +283,15 @@ export function Team(): React.JSX.Element {
                       </button>
                       <button type="button" className="btn !px-3 !py-1 text-xs" onClick={() => setConfirmAction(null)}>Keep</button>
                     </span>
+                  ) : platformDelete ? (
+                    <button
+                      type="button"
+                      className="btn !px-3 !py-1 text-xs !text-red-300"
+                      title="Platform delete — any courier, any company. Live jobs go back to the claim pool."
+                      onClick={() => setConfirmAction({ kind: "rider-delete", id: r.id, name: r.name })}
+                    >
+                      Delete
+                    </button>
                   ) : (
                     <button type="button" className="btn !px-3 !py-1 text-xs !text-red-300" onClick={() => setCourierChoice({ id: r.id, name: r.name })}>
                       Remove or delete…

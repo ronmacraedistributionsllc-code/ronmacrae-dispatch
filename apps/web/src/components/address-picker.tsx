@@ -1,4 +1,4 @@
-import React, { Suspense, useEffect, useRef, useState } from "react";
+import React, { Suspense, useRef, useState } from "react";
 import { API } from "@ronmacrae/contracts";
 import type { GeoSuggestionDto } from "@ronmacrae/contracts";
 import { ApiError, apiFetch } from "../lib/api.js";
@@ -32,13 +32,13 @@ interface AddressPickerProps {
 
 /**
  * Address-first location picker: the user's typed text is always what gets
- * saved — suggestions and the map pin only ever help pick a *point*, they never
- * silently replace what was typed. Modeled on a Starlink-signup-style address
- * confirmation step, but "confirm" here means "confirm the pin position for the
- * address I typed", not "accept the provider's rewrite of my address".
+ * saved. There is deliberately NO suggestion dropdown — typing only fills
+ * the field, and the "Find on map" button geocodes exactly that text once
+ * to place the pin, which the user then drags exact. The map pin only ever
+ * picks a *point*; it never rewrites what was typed.
  *
  * Handles both documented failure modes explicitly rather than silently:
- *  - Address search unreachable / provider can't find it: "Use this address"
+ *  - Address search unreachable / provider can't find it: "Find on map"
  *    still works — it falls back to the backend's deterministic offline point
  *    (flagged `degraded: true`, shown as a banner) or, failing even that, a
  *    fixed island-center point — either way the user can drag the pin into place
@@ -51,58 +51,17 @@ export function AddressPicker({ title, value, onChange, bias, required }: Addres
   const [query, setQuery] = useState(value?.address ?? "");
   const [point, setPoint] = useState<{ lat: number; lng: number } | null>(value?.point ?? null);
   const [providerAddress, setProviderAddress] = useState<string | null>(value?.providerAddress ?? null);
-  const [suggestions, setSuggestions] = useState<GeoSuggestionDto[]>([]);
   const [degraded, setDegraded] = useState(false);
-  const [searching, setSearching] = useState(false);
   const [resolving, setResolving] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
   const [mapError, setMapError] = useState(false);
   const reverseSeq = useRef(0);
   const geocodeSeq = useRef(0);
 
-  // Suggestions are just a convenience list to find a point quickly — selecting
-  // one never touches the typed text below (see pickSuggestion).
-  useEffect(() => {
-    if (!editing) return;
-    const q = query.trim();
-    if (q.length < 3) {
-      setSuggestions([]);
-      return;
-    }
-    setSearching(true);
-    const t = setTimeout(() => {
-      apiFetch<{ results: GeoSuggestionDto[]; degraded: boolean }>(API.geo.geocode, {
-        method: "POST",
-        body: JSON.stringify({ query: q, limit: 5, ...(bias ? { bias } : {}) }),
-      })
-        .then((r) => {
-          setSuggestions(r.results);
-          setSearchError(null);
-        })
-        .catch((err) => {
-          setSuggestions([]);
-          setSearchError(err instanceof ApiError ? err.message : "Address search is unavailable right now — you can still use the address you typed below.");
-        })
-        .finally(() => setSearching(false));
-    }, 400);
-    return () => clearTimeout(t);
-  }, [query, editing, bias?.lat, bias?.lng]);
-
-  /** Picking a suggestion only sets the pin + the informational provider match —
-   *  it fills the typed field ONLY if the user hadn't typed anything of their own
-   *  yet (a convenience for the empty-input case), and never touches it once
-   *  there's user-authored text in it. */
-  function pickSuggestion(s: GeoSuggestionDto): void {
-    setPoint(s.point);
-    setProviderAddress(s.label);
-    setDegraded(s.provider === "simulated");
-    setQuery((cur) => (cur.trim() === "" ? s.label : cur));
-    setSuggestions([]);
-  }
-
-  /** The explicit "use exactly what I typed" action — resolves *a* point for the
-   *  map (from a suggestion already picked, a fresh geocode, or a last-resort
-   *  fallback) without ever changing the typed text itself. */
+  /** The explicit "locate exactly what I typed" action — one geocode for
+   *  the typed text (or a last-resort fallback) without ever changing the
+   *  typed text itself. No suggestion list exists on purpose: the field
+   *  is free text, full stop. */
   async function useThisAddress(): Promise<void> {
     const typed = query.trim();
     if (!typed) return;
@@ -203,9 +162,8 @@ export function AddressPicker({ title, value, onChange, bias, required }: Addres
         autoComplete="off"
       />
       <p className="text-xs text-zinc-500">
-        This exact text is what gets saved as the address — suggestions below only help place the pin.
+        This exact text is what gets saved as the address — type anything, then find it on the map below.
       </p>
-      {searching ? <p className="text-xs text-zinc-500">Searching…</p> : null}
       {searchError ? <p className="text-xs text-amber-400">{searchError}</p> : null}
       {degraded ? (
         <p className="rounded bg-amber-900/30 px-2 py-1 text-xs text-amber-300">
@@ -213,27 +171,11 @@ export function AddressPicker({ title, value, onChange, bias, required }: Addres
           confirming. Your typed address is kept exactly as entered either way.
         </p>
       ) : null}
-      {suggestions.length > 0 ? (
-        <ul className="divide-y divide-zinc-800 rounded-lg border border-zinc-800">
-          {suggestions.map((s, i) => (
-            <li key={`${s.point.lat},${s.point.lng},${i}`}>
-              <button type="button" className="w-full px-3 py-2 text-left text-sm text-zinc-200 hover:bg-zinc-800" onClick={() => pickSuggestion(s)}>
-                {s.label}
-              </button>
-            </li>
-          ))}
-        </ul>
-      ) : null}
 
       {!point && query.trim().length > 0 ? (
         <button type="button" className="btn" disabled={resolving} onClick={() => void useThisAddress()}>
-          {resolving ? "Placing pin…" : "Use this address"}
+          {resolving ? "Placing pin…" : "Find on map"}
         </button>
-      ) : null}
-      {!point && !searching && suggestions.length === 0 && query.trim().length >= 3 && !searchError ? (
-        <p className="text-sm text-zinc-500">
-          No suggestions matched. That's fine — click "Use this address" above to place a pin you can drag into position.
-        </p>
       ) : null}
 
       {point ? (

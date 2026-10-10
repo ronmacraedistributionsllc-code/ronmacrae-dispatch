@@ -27,6 +27,11 @@ enum Role {
  *  necessarily an admin (or even a member) of any one of them. */
 enum PlatformRole {
   owner
+  /** App-level manager, appointed by the owner: everything the owner can
+   *  do EXCEPT touching owner accounts (delete/disable them, or grant /
+   *  revoke any platform role) and except impersonating anyone. One rung
+   *  below owner, strictly above every business-scoped role. */
+  manager
 }
 
 /** One participating store on the network. Every business-owned resource

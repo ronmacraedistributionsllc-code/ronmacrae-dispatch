@@ -453,6 +453,9 @@ function RidersTab(): React.JSX.Element {
   const [q, setQ] = useState("");
   const [openId, setOpenId] = useState<string | null>(null);
   const qc = useQueryClient();
+  // Delete-login + impersonate stay master-only (server-enforced too).
+  const { user } = useAuth();
+  const isOwner = user?.platformRole === "owner";
   const list = useQuery({ queryKey: ["platform", "riders", q], queryFn: () => apiFetch<{ riders: RiderRow[] }>(`${API.platform.riders}?q=${encodeURIComponent(q)}`) });
   // For the attachment picker below — every merchant/logistics company on
   // the platform, not just the rider's own business (an owner can attach
@@ -548,7 +551,7 @@ function RidersTab(): React.JSX.Element {
                   Delete
                 </button>
               )}
-              {r.userId && !r.accountDeleted ? (
+              {r.userId && !r.accountDeleted && isOwner ? (
                 <AccountActions userId={r.userId} name={r.name} onDeleted={() => void qc.invalidateQueries({ queryKey: ["platform", "riders"] })} />
               ) : r.accountDeleted ? (
                 <span className="rounded bg-red-950 px-2 py-0.5 text-xs font-medium text-red-400">Account deleted</span>
@@ -749,11 +752,22 @@ function RiderDetailPanel({ id }: { id: string }): React.JSX.Element {
 function AccountsTab(): React.JSX.Element {
   const [q, setQ] = useState("");
   const qc = useQueryClient();
+  // Only the master owner sees delete/impersonate and role grants — a
+  // manager sees the same list with disable/reactivate only (the server
+  // enforces the same boundary; this just doesn't offer dead buttons).
+  const { user } = useAuth();
+  const isOwner = user?.platformRole === "owner";
   const list = useQuery({ queryKey: ["platform", "accounts", q], queryFn: () => apiFetch<{ accounts: AccountRow[] }>(`${API.platform.accounts}?q=${encodeURIComponent(q)}`) });
   const toggle = useMutation({
     mutationFn: ({ id, active }: { id: string; active: boolean }) => apiFetch(API.platform.updateUser(id), { method: "PATCH", body: JSON.stringify({ active }) }),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["platform", "accounts"] }),
     onError: (err) => window.alert(err instanceof ApiError ? err.message : "Could not update this account"),
+  });
+  const grant = useMutation({
+    mutationFn: ({ id, platformRole }: { id: string; platformRole: "owner" | "manager" | null }) =>
+      apiFetch(API.platform.updateUser(id), { method: "PATCH", body: JSON.stringify({ platformRole }) }),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["platform", "accounts"] }),
+    onError: (err) => window.alert(err instanceof ApiError ? err.message : "Could not change this role"),
   });
   return (
     <div className="space-y-3">
@@ -771,7 +785,7 @@ function AccountsTab(): React.JSX.Element {
           return (
             <div key={u.id} className="card flex flex-wrap items-center justify-between gap-2">
               <div>
-                <p className="font-medium">{u.name} {u.platformRole === "owner" ? <span className="text-xs text-amber-400">(platform owner)</span> : null}</p>
+                <p className="font-medium">{u.name} {u.platformRole === "owner" ? <span className="text-xs text-amber-400">(platform owner)</span> : u.platformRole === "manager" ? <span className="text-xs text-sky-300">(manager)</span> : null}</p>
                 <p className="text-xs text-zinc-500">
                   {u.email ?? u.phone ?? "—"} · {access.join(", ") || "no access yet"}
                 </p>
@@ -785,7 +799,27 @@ function AccountsTab(): React.JSX.Element {
                     <button className="btn !px-3 !py-1 text-xs" disabled={toggle.isPending} onClick={() => void toggle.mutate({ id: u.id, active: !u.active })}>
                       {u.active ? "Disable" : "Reactivate"}
                     </button>
-                    <AccountActions userId={u.id} name={u.name} onDeleted={() => void qc.invalidateQueries({ queryKey: ["platform", "accounts"] })} />
+                    {isOwner ? (
+                      <select
+                        className="input !w-auto !py-1 text-xs"
+                        aria-label={`Platform role for ${u.name}`}
+                        value={u.platformRole ?? ""}
+                        disabled={grant.isPending}
+                        onChange={(e) => {
+                          const v = e.target.value as "" | "owner" | "manager";
+                          void grant.mutate({ id: u.id, platformRole: v === "" ? null : v });
+                        }}
+                      >
+                        <option value="">No platform role</option>
+                        <option value="manager">Manager</option>
+                        <option value="owner">Owner</option>
+                      </select>
+                    ) : u.platformRole === "manager" ? (
+                      <span className="text-xs text-zinc-500">manager</span>
+                    ) : null}
+                    {isOwner ? (
+                      <AccountActions userId={u.id} name={u.name} onDeleted={() => void qc.invalidateQueries({ queryKey: ["platform", "accounts"] })} />
+                    ) : null}
                   </>
                 )}
               </div>

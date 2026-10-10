@@ -64,7 +64,7 @@ export interface UserDto {
   /** Platform-wide authority (owner.ts, platform-admin.ts) — independent
    *  of, and not implied by, `role`. Absent/null for every ordinary
    *  staff/rider account. */
-  platformRole: "owner" | null;
+  platformRole: "owner" | "manager" | null;
   /** Stage E (spec: theme switcher, "persist per user") — null means the
    *  default theme. A free-text id (not a union of the current theme
    *  list) so an unrecognized value from an older/newer client is just

@@ -11,11 +11,14 @@ import { useAuth } from "../lib/auth.js";
  */
 export function OwnerNotice({ what }: { what: string }): React.JSX.Element | null {
   const { user, businessId } = useAuth();
-  if (user?.platformRole !== "owner" || businessId) return null;
+  const platform = user?.platformRole === "owner" || user?.platformRole === "manager";
+  if (!platform || businessId) return null;
+  const who = user?.platformRole === "manager" ? "app manager" : "platform owner";
   return (
     <p className="card border border-amber-800/40 text-xs text-amber-200">
-      You&apos;re signed in as the platform owner (no business workspace), so {what} here would just fail.
-      Manage it in <a className="underline" href="/platform-admin">Platform Admin</a> instead — every delete lives there too.
+      You&apos;re signed in as {who} (no business workspace), so {what} here needs a business login — but
+      the Delete buttons below work platform-wide regardless. <a className="underline" href="/platform-admin">Platform Admin</a> has
+      everything too.
     </p>
   );
 }

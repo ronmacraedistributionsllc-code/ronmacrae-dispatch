@@ -40,11 +40,14 @@ const ReviewBody = z.object({
 
 export async function platformAdminRoutes(app: FastifyInstance, ctx: AppCtx): Promise<void> {
   const owner = ctx.requireOwner;
+  // App-level manager: everything below except the user-management routes
+  // (PATCH/DELETE users/:id), impersonation, which stay strictly owner-only.
+  const mgr = ctx.requireManager;
 
   // ---------------------------------------------------------------------
   // Businesses
   // ---------------------------------------------------------------------
-  app.get("/api/platform/businesses", { preHandler: owner }, async (req) => {
+  app.get("/api/platform/businesses", { preHandler: mgr }, async (req) => {
     const { q } = requireQuery(req.query);
     const rows = await ctx.prisma.business.findMany({
       where: q ? { name: { contains: q } } : undefined,
@@ -67,7 +70,7 @@ export async function platformAdminRoutes(app: FastifyInstance, ctx: AppCtx): Pr
     };
   });
 
-  app.patch<{ Params: { id: string } }>("/api/platform/businesses/:id", { preHandler: owner }, async (req) => {
+  app.patch<{ Params: { id: string } }>("/api/platform/businesses/:id", { preHandler: mgr }, async (req) => {
     const body = z.object({ active: z.boolean() }).parse(req.body);
     const business = await ctx.prisma.business.update({ where: { id: req.params.id }, data: { active: body.active } });
     await ctx.audit.record({ id: req.user!.sub, role: "platform_owner" }, body.active ? "platform.business.reactivate" : "platform.business.disable", "business", business.id);
@@ -84,7 +87,7 @@ export async function platformAdminRoutes(app: FastifyInstance, ctx: AppCtx): Pr
   // realStaffMemberships, and rider routes require an active membership.
   // Every delete refuses while live (non-terminal) work still references
   // the record — finish or cancel the work first, then delete.
-  app.delete<{ Params: { id: string } }>("/api/platform/businesses/:id", { preHandler: owner }, async (req) => {
+  app.delete<{ Params: { id: string } }>("/api/platform/businesses/:id", { preHandler: mgr }, async (req) => {
     const business = await ctx.prisma.business.findUnique({ where: { id: req.params.id } });
     if (!business) throw httpErrors.createError(404, "Business not found");
     const live = await ctx.prisma.job.count({ where: { businessId: business.id, status: { notIn: [...TERMINAL_JOB_STATUSES] }, deletedAt: null } });
@@ -97,7 +100,7 @@ export async function platformAdminRoutes(app: FastifyInstance, ctx: AppCtx): Pr
   // ---------------------------------------------------------------------
   // Merchants — across every business, not just the caller's own.
   // ---------------------------------------------------------------------
-  app.get("/api/platform/merchants", { preHandler: owner }, async (req) => {
+  app.get("/api/platform/merchants", { preHandler: mgr }, async (req) => {
     const { q } = requireQuery(req.query);
     const rows = await ctx.prisma.merchant.findMany({
       where: q ? { name: { contains: q } } : undefined,
@@ -128,7 +131,7 @@ export async function platformAdminRoutes(app: FastifyInstance, ctx: AppCtx): Pr
   // the plain active-toggle below, which is disable/reactivate for a
   // merchant that's already been through this step (spec: four separate
   // verbs — approve/reject/disable/reactivate — not one boolean).
-  app.post<{ Params: { id: string } }>("/api/platform/merchants/:id/review", { preHandler: owner }, async (req) => {
+  app.post<{ Params: { id: string } }>("/api/platform/merchants/:id/review", { preHandler: mgr }, async (req) => {
     const body = ReviewBody.parse(req.body);
     const existing = await ctx.prisma.merchant.findUnique({ where: { id: req.params.id } });
     if (!existing) throw httpErrors.createError(404, "Merchant not found");
@@ -152,7 +155,7 @@ export async function platformAdminRoutes(app: FastifyInstance, ctx: AppCtx): Pr
     return { ok: true, applicationStatus: merchant.applicationStatus, active: merchant.active };
   });
 
-  app.patch<{ Params: { id: string } }>("/api/platform/merchants/:id", { preHandler: owner }, async (req) => {
+  app.patch<{ Params: { id: string } }>("/api/platform/merchants/:id", { preHandler: mgr }, async (req) => {
     const body = z.object({ active: z.boolean() }).parse(req.body);
     const existing = await ctx.prisma.merchant.findUnique({ where: { id: req.params.id } });
     if (!existing) throw httpErrors.createError(404, "Merchant not found");
@@ -164,7 +167,7 @@ export async function platformAdminRoutes(app: FastifyInstance, ctx: AppCtx): Pr
     return { ok: true, active: merchant.active };
   });
 
-  app.delete<{ Params: { id: string } }>("/api/platform/merchants/:id", { preHandler: owner }, async (req) => {
+  app.delete<{ Params: { id: string } }>("/api/platform/merchants/:id", { preHandler: mgr }, async (req) => {
     const merchant = await ctx.prisma.merchant.findUnique({ where: { id: req.params.id } });
     if (!merchant) throw httpErrors.createError(404, "Merchant not found");
     const live = await ctx.prisma.job.count({ where: { merchantId: merchant.id, status: { notIn: [...TERMINAL_JOB_STATUSES] }, deletedAt: null } });
@@ -177,7 +180,7 @@ export async function platformAdminRoutes(app: FastifyInstance, ctx: AppCtx): Pr
   // ---------------------------------------------------------------------
   // Logistics companies — across every business, mirrors merchants above.
   // ---------------------------------------------------------------------
-  app.get("/api/platform/logistics-companies", { preHandler: owner }, async (req) => {
+  app.get("/api/platform/logistics-companies", { preHandler: mgr }, async (req) => {
     const { q } = requireQuery(req.query);
     const rows = await ctx.prisma.logisticsCompany.findMany({
       where: q ? { name: { contains: q } } : undefined,
@@ -205,7 +208,7 @@ export async function platformAdminRoutes(app: FastifyInstance, ctx: AppCtx): Pr
 
   // Approve or reject a *pending* self-signup application — see the
   // matching merchant endpoint above for the full rationale.
-  app.post<{ Params: { id: string } }>("/api/platform/logistics-companies/:id/review", { preHandler: owner }, async (req) => {
+  app.post<{ Params: { id: string } }>("/api/platform/logistics-companies/:id/review", { preHandler: mgr }, async (req) => {
     const body = ReviewBody.parse(req.body);
     const existing = await ctx.prisma.logisticsCompany.findUnique({ where: { id: req.params.id } });
     if (!existing) throw httpErrors.createError(404, "Logistics company not found");
@@ -229,7 +232,7 @@ export async function platformAdminRoutes(app: FastifyInstance, ctx: AppCtx): Pr
     return { ok: true, applicationStatus: company.applicationStatus, active: company.active };
   });
 
-  app.patch<{ Params: { id: string } }>("/api/platform/logistics-companies/:id", { preHandler: owner }, async (req) => {
+  app.patch<{ Params: { id: string } }>("/api/platform/logistics-companies/:id", { preHandler: mgr }, async (req) => {
     const body = z.object({ active: z.boolean() }).parse(req.body);
     const existing = await ctx.prisma.logisticsCompany.findUnique({ where: { id: req.params.id } });
     if (!existing) throw httpErrors.createError(404, "Logistics company not found");
@@ -241,7 +244,7 @@ export async function platformAdminRoutes(app: FastifyInstance, ctx: AppCtx): Pr
     return { ok: true, active: company.active };
   });
 
-  app.delete<{ Params: { id: string } }>("/api/platform/logistics-companies/:id", { preHandler: owner }, async (req) => {
+  app.delete<{ Params: { id: string } }>("/api/platform/logistics-companies/:id", { preHandler: mgr }, async (req) => {
     const company = await ctx.prisma.logisticsCompany.findUnique({ where: { id: req.params.id } });
     if (!company) throw httpErrors.createError(404, "Logistics company not found");
     // Attached riders keep their rows (history stays intact) — but nobody
@@ -260,7 +263,7 @@ export async function platformAdminRoutes(app: FastifyInstance, ctx: AppCtx): Pr
   // controls whether a rider is freelancer/platform-approved... or
   // disabled/blocked"), across every business a rider is a member of.
   // ---------------------------------------------------------------------
-  app.get("/api/platform/riders", { preHandler: owner }, async (req) => {
+  app.get("/api/platform/riders", { preHandler: mgr }, async (req) => {
     const { q } = requireQuery(req.query);
     const rows = await ctx.prisma.rider.findMany({
       where: q ? { OR: [{ name: { contains: q } }, { phone: { contains: q } }] } : undefined,
@@ -308,7 +311,7 @@ export async function platformAdminRoutes(app: FastifyInstance, ctx: AppCtx): Pr
     };
   });
 
-  app.get<{ Params: { id: string } }>("/api/platform/riders/:id", { preHandler: owner }, async (req) => {
+  app.get<{ Params: { id: string } }>("/api/platform/riders/:id", { preHandler: mgr }, async (req) => {
     const rider = await ctx.prisma.rider.findUnique({
       where: { id: req.params.id },
       include: {
@@ -366,7 +369,7 @@ export async function platformAdminRoutes(app: FastifyInstance, ctx: AppCtx): Pr
   // are excluded from the average/recent list above but never erased —
   // same "correction, not erasure" rule as everywhere else financial/
   // reputational history is handled in this app.
-  app.patch<{ Params: { id: string } }>("/api/platform/ratings/:id", { preHandler: owner }, async (req) => {
+  app.patch<{ Params: { id: string } }>("/api/platform/ratings/:id", { preHandler: mgr }, async (req) => {
     const body = z.object({ hidden: z.boolean() }).parse(req.body);
     const rating = await ctx.prisma.rating.update({ where: { id: req.params.id }, data: { hidden: body.hidden, hiddenAt: body.hidden ? new Date() : null } });
     await ctx.audit.record({ id: req.user!.sub, role: "platform_owner" }, body.hidden ? "platform.rating.hide" : "platform.rating.unhide", "rating", rating.id);
@@ -380,7 +383,7 @@ export async function platformAdminRoutes(app: FastifyInstance, ctx: AppCtx): Pr
   // the eligibility rule this drives. Switching to `merchant`/`logistics`
   // requires the matching id (and clears the other); switching to
   // `freelance` clears both, regardless of what was passed.
-  app.patch<{ Params: { id: string } }>("/api/platform/riders/:id", { preHandler: owner }, async (req) => {
+  app.patch<{ Params: { id: string } }>("/api/platform/riders/:id", { preHandler: mgr }, async (req) => {
     const body = z
       .object({
         platformStatus: z.enum(["pending", "approved", "suspended"]).optional(),
@@ -432,7 +435,7 @@ export async function platformAdminRoutes(app: FastifyInstance, ctx: AppCtx): Pr
   // released back to the claim pool rather than blocking the delete —
   // nothing strands with a deactivated courier. Withdraws their open
   // offers and ends every membership so no business keeps receiving them.
-  app.delete<{ Params: { id: string } }>("/api/platform/riders/:id", { preHandler: owner }, async (req) => {
+  app.delete<{ Params: { id: string } }>("/api/platform/riders/:id", { preHandler: mgr }, async (req) => {
     const rider = await ctx.prisma.rider.findUnique({ where: { id: req.params.id } });
     if (!rider) throw httpErrors.createError(404, "Courier not found");
     const { releaseRiderJobs } = await import("./offers.js");
@@ -451,7 +454,7 @@ export async function platformAdminRoutes(app: FastifyInstance, ctx: AppCtx): Pr
   // cross-merchant assignment controls: attach a rider to a merchant, or
   // detach them — removing the RELATIONSHIP only, never the rider's
   // platform account, never another merchant's relationship with that rider.
-  app.post<{ Params: { id: string } }>("/api/platform/riders/:id/merchants", { preHandler: owner }, async (req) => {
+  app.post<{ Params: { id: string } }>("/api/platform/riders/:id/merchants", { preHandler: mgr }, async (req) => {
     const body = z.object({ merchantId: z.string().min(1) }).parse(req.body);
     const rider = await ctx.prisma.rider.findUnique({ where: { id: req.params.id } });
     if (!rider) throw httpErrors.createError(404, "Courier not found");
@@ -468,7 +471,7 @@ export async function platformAdminRoutes(app: FastifyInstance, ctx: AppCtx): Pr
     return { ok: true, merchantId: merchant.id, merchantName: merchant.name, riderId: rider.id };
   });
 
-  app.delete<{ Params: { id: string; merchantId: string } }>("/api/platform/riders/:id/merchants/:merchantId", { preHandler: owner }, async (req) => {
+  app.delete<{ Params: { id: string; merchantId: string } }>("/api/platform/riders/:id/merchants/:merchantId", { preHandler: mgr }, async (req) => {
     const rider = await ctx.prisma.rider.findUnique({ where: { id: req.params.id } });
     if (!rider) throw httpErrors.createError(404, "Courier not found");
     const rel = await ctx.prisma.merchantRider.findUnique({ where: { merchantId_riderId: { merchantId: req.params.merchantId, riderId: rider.id } } });
@@ -482,7 +485,7 @@ export async function platformAdminRoutes(app: FastifyInstance, ctx: AppCtx): Pr
   // Staff & merchant-staff — every login on the platform, not just one
   // business's own Team screen.
   // ---------------------------------------------------------------------
-  app.get("/api/platform/staff", { preHandler: owner }, async (req) => {
+  app.get("/api/platform/staff", { preHandler: mgr }, async (req) => {
     const { q } = requireQuery(req.query);
     const rows = await ctx.prisma.user.findMany({
       where: {
@@ -516,7 +519,7 @@ export async function platformAdminRoutes(app: FastifyInstance, ctx: AppCtx): Pr
   // state), merchant-portal logins, and logistics-portal logins. One row
   // per User; the shared AccountActions delete (platform user delete)
   // covers all of them. Search matches name/email/phone.
-  app.get("/api/platform/accounts", { preHandler: owner }, async (req) => {
+  app.get("/api/platform/accounts", { preHandler: mgr }, async (req) => {
     const { q } = requireQuery(req.query);
     const rows = await ctx.prisma.user.findMany({
       where: q ? { OR: [{ name: { contains: q } }, { email: { contains: q } }, { phone: { contains: q } }] } : undefined,
@@ -548,16 +551,30 @@ export async function platformAdminRoutes(app: FastifyInstance, ctx: AppCtx): Pr
   });
 
   app.patch<{ Params: { id: string } }>("/api/platform/users/:id", { preHandler: owner }, async (req) => {
-    const body = z.object({ active: z.boolean() }).parse(req.body);
-    if (req.params.id === req.user!.sub && !body.active) {
-      throw httpErrors.createError(400, "You can't disable your own account.");
+    // Owner-only (never manager): granting platform power, and touching
+    // any account at all, stays with the master account. `platformRole`
+    // appoints a manager (or a second owner); null revokes back to a
+    // plain account. Self-demotion is refused — an owner who could
+    // un-owner themselves could lock the platform out with no recourse.
+    const body = z.object({ active: z.boolean().optional(), platformRole: z.enum(["owner", "manager"]).nullable().optional() }).parse(req.body);
+    if (req.params.id === req.user!.sub && (body.active === false || body.platformRole === null || (body.platformRole && body.platformRole !== "owner"))) {
+      throw httpErrors.createError(400, "You can't disable or demote your own account.");
     }
     const existing = await ctx.prisma.user.findUnique({ where: { id: req.params.id } });
     if (!existing) throw httpErrors.createError(404, "User not found");
-    if (existing.deletedAt) throw httpErrors.createError(409, "This account has been deleted — it can no longer be disabled or reactivated.");
-    const user = await ctx.prisma.user.update({ where: { id: req.params.id }, data: { active: body.active } });
-    await ctx.audit.record({ id: req.user!.sub, role: "platform_owner" }, body.active ? "platform.user.reactivate" : "platform.user.disable", "user", user.id);
-    return { ok: true, active: user.active };
+    if (existing.deletedAt) throw httpErrors.createError(409, "This account has been deleted — it can no longer be changed.");
+    const data: { active?: boolean; platformRole?: "owner" | "manager" | null } = {};
+    if (body.active !== undefined) data.active = body.active;
+    if (body.platformRole !== undefined) data.platformRole = body.platformRole;
+    const user = await ctx.prisma.user.update({ where: { id: req.params.id }, data });
+    await ctx.audit.record(
+      { id: req.user!.sub, role: "platform_owner" },
+      body.platformRole !== undefined ? "platform.user.grant_role" : body.active ? "platform.user.reactivate" : "platform.user.disable",
+      "user",
+      user.id,
+      body.platformRole !== undefined ? { platformRole: body.platformRole } : undefined,
+    );
+    return { ok: true, active: user.active, platformRole: user.platformRole };
   });
 
   // Master admin global delete (spec: "MASTER ADMIN MUST BE ABLE TO DELETE
@@ -636,7 +653,7 @@ export async function platformAdminRoutes(app: FastifyInstance, ctx: AppCtx): Pr
   // Platform-wide audit log — every business's, unlike the existing
   // business-scoped GET /api/audit.
   // ---------------------------------------------------------------------
-  app.get("/api/platform/audit", { preHandler: owner }, async (req) => {
+  app.get("/api/platform/audit", { preHandler: mgr }, async (req) => {
     const q = z
       .object({
         take: z.coerce.number().int().min(1).max(200).default(50),

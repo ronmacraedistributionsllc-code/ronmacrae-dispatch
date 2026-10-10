@@ -34,7 +34,7 @@ export function toUserDto(u: {
     totpEnabled: u.totpEnabled,
     lastLoginAt: u.lastLoginAt?.toISOString() ?? null,
     createdAt: u.createdAt.toISOString(),
-    platformRole: u.platformRole === "owner" ? "owner" : null,
+    platformRole: u.platformRole === "owner" || u.platformRole === "manager" ? u.platformRole : null,
     theme: u.theme ?? null,
   };
 }
@@ -64,7 +64,7 @@ const LoginBody = z.object({
 interface StaffContext {
   businessId: string | null;
   role: Role;
-  platformRole: "owner" | null;
+  platformRole: "owner" | "manager" | null;
   memberships: { businessId: string; businessName: string; role: Role }[];
 }
 
@@ -117,8 +117,8 @@ export async function resolveStaffContext(
   user: { id: string; role: Role; platformRole: string | null },
   requestedBusinessId?: string,
 ): Promise<StaffContext | null> {
-  if (user.platformRole === "owner") {
-    return { businessId: null, role: user.role, platformRole: "owner", memberships: [] };
+  if (user.platformRole === "owner" || user.platformRole === "manager") {
+    return { businessId: null, role: user.role, platformRole: user.platformRole, memberships: [] };
   }
   if (user.role === "rider") {
     const memberships = await realStaffMemberships(ctx, user.id);

@@ -17,7 +17,9 @@ import { OwnerNotice } from "../components/owner-notice.js";
  */
 export function LogisticsCompanies(): React.JSX.Element {
   const { user, businessId } = useAuth();
-  const canEdit = user?.role === "admin" && !!businessId;
+  const platformPower = user?.platformRole === "owner" || user?.platformRole === "manager";
+  const canEdit = (user?.role === "admin" && !!businessId) || platformPower;
+  const canManage = user?.role === "admin" && !!businessId;
   const qc = useQueryClient();
   const [creating, setCreating] = useState(false);
 
@@ -31,7 +33,7 @@ export function LogisticsCompanies(): React.JSX.Element {
           <p className="text-sm text-zinc-400">Fleet operators who supply their own couriers — the other side of the marketplace from merchants.</p>
           <OwnerNotice what="deleting companies" />
         </div>
-        {canEdit ? (
+        {canManage ? (
           <button className="btn-accent" onClick={() => setCreating((v) => !v)}>{creating ? "Cancel" : "+ New logistics company"}</button>
         ) : null}
       </header>
@@ -44,7 +46,7 @@ export function LogisticsCompanies(): React.JSX.Element {
       ) : null}
       <div className="space-y-3">
         {list.data?.logisticsCompanies.map((c) => (
-          <CompanyRow key={c.id} company={c} canEdit={canEdit} onChanged={() => void qc.invalidateQueries({ queryKey: ["logisticsCompanies"] })} />
+          <CompanyRow key={c.id} company={c} canEdit={canEdit} canManage={canManage} platformDelete={platformPower && !businessId} onChanged={() => void qc.invalidateQueries({ queryKey: ["logisticsCompanies"] })} />
         ))}
       </div>
     </div>
@@ -81,7 +83,7 @@ function CreateForm({ onDone }: { onDone: () => void }): React.JSX.Element {
   );
 }
 
-function CompanyRow({ company, canEdit, onChanged }: { company: LogisticsCompanyDto; canEdit: boolean; onChanged: () => void }): React.JSX.Element {
+function CompanyRow({ company, canEdit, canManage, platformDelete, onChanged }: { company: LogisticsCompanyDto; canEdit: boolean; canManage: boolean; platformDelete: boolean; onChanged: () => void }): React.JSX.Element {
   const [showPortalForm, setShowPortalForm] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const toggleActive = useMutation({
@@ -89,9 +91,14 @@ function CompanyRow({ company, canEdit, onChanged }: { company: LogisticsCompany
     onSuccess: onChanged,
   });
   const removeCompany = useMutation({
-    mutationFn: () => apiFetch(API.logisticsCompanies.removeCompany(company.id), { method: "DELETE" }),
+    // Owner/manager sessions route through the platform endpoint (any
+    // company); business admins use the scoped one. The dialog stays
+    // open on error so the message is visible instead of vanishing.
+    mutationFn: () => apiFetch(
+      platformDelete ? API.platform.deleteLogisticsCompany(company.id) : API.logisticsCompanies.removeCompany(company.id),
+      { method: "DELETE" },
+    ),
     onSuccess: onChanged,
-    onError: () => setConfirmingDelete(false),
   });
 
   return (
@@ -106,12 +113,12 @@ function CompanyRow({ company, canEdit, onChanged }: { company: LogisticsCompany
         </span>
       </div>
       <div className="flex flex-wrap items-center gap-2">
-        {canEdit ? (
+        {canManage ? (
           <button type="button" className="btn !px-3 !py-1 text-xs" disabled={toggleActive.isPending} onClick={() => void toggleActive.mutate()}>
             {company.active ? "Disable" : "Re-enable"}
           </button>
         ) : null}
-        {canEdit ? (
+        {canManage ? (
           <button type="button" className="btn !px-3 !py-1 text-xs" onClick={() => setShowPortalForm((v) => !v)}>
             {showPortalForm ? "Cancel" : "Portal access"}
           </button>

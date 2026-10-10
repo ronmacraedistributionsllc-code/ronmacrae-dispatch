@@ -181,6 +181,10 @@ export function Layout({ children }: { children: React.ReactNode }): React.JSX.E
             <div className="mt-1 inline-block rounded bg-amber-900/60 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-amber-300">
               App owner
             </div>
+          ) : user?.platformRole === "manager" ? (
+            <div className="mt-1 inline-block rounded bg-sky-900/60 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-sky-300">
+              Manager
+            </div>
           ) : null}
           {otherWorkspaces.length > 0 ? (
             <div className="mt-3 space-y-1">

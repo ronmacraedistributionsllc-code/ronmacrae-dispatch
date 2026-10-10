@@ -36,6 +36,19 @@ export function makeRequireOwner(): preHandlerAsyncHookHandler {
   };
 }
 
+/** App-level manager: everything the owner console does EXCEPT the few
+ *  routes that stay strictly owner-only (user delete/disable, platform
+ *  role grants, impersonation) — those keep `makeRequireOwner` plus
+ *  explicit owner-target guards inside. */
+export function makeRequireManager(): preHandlerAsyncHookHandler {
+  return async (req: FastifyRequest) => {
+    if (!req.user) throw httpErrors.createError(401, "Authentication required");
+    if (req.user.platformRole !== "owner" && req.user.platformRole !== "manager") {
+      throw httpErrors.createError(403, "Platform owner or manager only");
+    }
+  };
+}
+
 /** Gates on `riderId` being present on the token, not on `role === "rider"`.
  *  Those used to be equivalent, but no longer are: a courier who is ALSO a
  *  real dispatcher (roles/memberships — see resolveStaffContext's own doc

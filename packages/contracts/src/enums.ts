@@ -8,7 +8,7 @@ export type StaffRole = (typeof STAFF_ROLES)[number];
 
 /** Platform-wide authority, separate from (and not implying) membership in
  *  any specific business — see Business/StaffMembership/RiderMembership. */
-export const PLATFORM_ROLES = ["owner"] as const;
+export const PLATFORM_ROLES = ["owner", "manager"] as const;
 export type PlatformRole = (typeof PLATFORM_ROLES)[number];
 
 /** Whether a rider may work through the open network at all — a

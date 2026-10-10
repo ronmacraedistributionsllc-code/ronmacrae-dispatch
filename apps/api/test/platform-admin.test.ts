@@ -261,3 +261,53 @@ describe("platform-admin: accounts list", () => {
     expect(refused.statusCode).toBe(403);
   });
 });
+
+describe("platform-admin: manager role", () => {
+  async function managerToken() {
+    const user = await harness.prisma.user.create({ data: { name: `Manager ${uniq()}`, passwordHash: "unused-in-tests", role: "admin", platformRole: "manager" } });
+    return harness.tokenFor({ id: user.id, name: user.name, role: "admin", platformRole: "manager" });
+  }
+
+  it("a manager can delete platform entities but never touch owner accounts or roles", async () => {
+    const manager = await managerToken();
+    const admin = await adminToken(harness);
+    const merchant = await makeMerchant(harness, admin);
+
+    // Manager deletes a merchant — app-level power, works.
+    const del = await harness.app.inject({ method: "DELETE", url: `/api/platform/merchants/${merchant.id}`, headers: { authorization: `Bearer ${manager}` } });
+    expect(del.statusCode).toBe(200);
+
+    // Manager cannot delete users at all (owner-only route).
+    const staff = await harness.prisma.user.create({ data: { name: `Staff ${uniq()}`, passwordHash: "x", role: "viewer" } });
+    const delUser = await harness.app.inject({ method: "DELETE", url: `/api/platform/users/${staff.id}`, headers: { authorization: `Bearer ${manager}` } });
+    expect(delUser.statusCode).toBe(403);
+
+    // Manager cannot grant platform roles either.
+    const grant = await harness.app.inject({ method: "PATCH", url: `/api/platform/users/${staff.id}`, headers: { authorization: `Bearer ${manager}` }, payload: { platformRole: "manager" } });
+    expect(grant.statusCode).toBe(403);
+  });
+
+  it("an owner appoints a manager, who then acts; self-demotion is refused", async () => {
+    const owner = await ownerToken(harness);
+    const candidate = await harness.prisma.user.create({ data: { name: `Candidate ${uniq()}`, passwordHash: "x", role: "admin" } });
+
+    const grant = await harness.app.inject({ method: "PATCH", url: `/api/platform/users/${candidate.id}`, headers: { authorization: `Bearer ${owner}` }, payload: { platformRole: "manager" } });
+    expect(grant.statusCode).toBe(200);
+    expect(grant.json()).toMatchObject({ ok: true, platformRole: "manager" });
+
+    // The new manager's token carries the role into platform routes.
+    const mgrToken = await harness.tokenFor({ id: candidate.id, name: candidate.name, role: "admin", platformRole: "manager" });
+    const list = await harness.app.inject({ method: "GET", url: "/api/platform/businesses", headers: { authorization: `Bearer ${mgrToken}` } });
+    expect(list.statusCode).toBe(200);
+
+    // Revoke works too.
+    const revoke = await harness.app.inject({ method: "PATCH", url: `/api/platform/users/${candidate.id}`, headers: { authorization: `Bearer ${owner}` }, payload: { platformRole: null } });
+    expect(revoke.json()).toMatchObject({ ok: true, platformRole: null });
+
+    // The owner cannot demote themselves (lockout protection).
+    const me = await harness.prisma.user.findFirstOrThrow({ where: { platformRole: "owner" } });
+    const meToken = await harness.tokenFor({ id: me.id, name: me.name, role: "admin", platformRole: "owner" });
+    const selfDemote = await harness.app.inject({ method: "PATCH", url: `/api/platform/users/${me.id}`, headers: { authorization: `Bearer ${meToken}` }, payload: { platformRole: null } });
+    expect(selfDemote.statusCode).toBe(400);
+  });
+});

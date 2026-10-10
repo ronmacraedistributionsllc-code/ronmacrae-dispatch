@@ -34,37 +34,46 @@ describe("AddressPicker", () => {
     apiFetchMock.mockReset();
   });
 
-  // Real timers throughout: the component's 400ms search debounce is short enough
-  // to just wait out for real, and testing-library's async helpers (findBy/waitFor)
-  // rely on real timers internally too.
-  async function typeAddress(text: string) {
+  function typeAddress(text: string) {
     const input = screen.getByPlaceholderText("Type the exact delivery address…");
     fireEvent.change(input, { target: { value: text } });
-    await act(async () => {
-      await new Promise((r) => setTimeout(r, 450));
-    });
     return input as HTMLInputElement;
   }
 
-  it("keeps an exact typed address ('15-17 ...') unchanged when a suggestion is picked", async () => {
-    const typed = "15-17 Half Way Tree Road, Kingston, Jamaica";
-    apiFetchMock.mockResolvedValueOnce(geocodeOk("15-17 Half Way Tree Rd, Kingston 10, Jamaica"));
+  it("never suggests while typing — no request fires until 'Find on map' is clicked", async () => {
     const onChange = vi.fn();
     render(<AddressPicker title="Destination" value={null} onChange={onChange} />);
 
-    const input = await typeAddress(typed);
-    const suggestionBtn = await screen.findByText("15-17 Half Way Tree Rd, Kingston 10, Jamaica");
-    fireEvent.click(suggestionBtn);
+    typeAddress("15 cougar drive");
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 500));
+    });
 
-    // typed text must be untouched by the pick
-    expect(input.value).toBe(typed);
+    expect(apiFetchMock).not.toHaveBeenCalled();
+    expect(screen.queryByText(/Cougar Drive, Meadowvale/)).toBeNull();
+  });
+
+  it("locates exactly the typed text on demand and confirms it unchanged", async () => {
+    const typed = "15 cougar drive";
+    apiFetchMock.mockResolvedValueOnce(geocodeOk("Cougar Drive, Meadowvale, Portmore, Jamaica"));
+    const onChange = vi.fn();
+    render(<AddressPicker title="Destination" value={null} onChange={onChange} />);
+
+    const input = typeAddress(typed);
+    fireEvent.click(screen.getByText("Find on map"));
+
+    // one geocode, for exactly what was typed
+    expect(apiFetchMock).toHaveBeenCalledTimes(1);
+    expect(JSON.parse((apiFetchMock.mock.calls[0]?.[1] as { body: string }).body)).toMatchObject({ query: typed, limit: 1 });
+
     // the provider match is shown only as secondary info, not substituted in
-    expect(screen.getByText(/Provider match:/)).toHaveTextContent("15-17 Half Way Tree Rd, Kingston 10, Jamaica");
+    expect(await screen.findByText(/Provider match:/)).toHaveTextContent("Cougar Drive, Meadowvale, Portmore, Jamaica");
+    expect(input.value).toBe(typed);
 
     fireEvent.click(screen.getByText("Confirm location"));
     expect(onChange).toHaveBeenCalledWith({
       address: typed,
-      providerAddress: "15-17 Half Way Tree Rd, Kingston 10, Jamaica",
+      providerAddress: "Cougar Drive, Meadowvale, Portmore, Jamaica",
       point: { lat: 18.0, lng: -76.8 },
     } satisfies ConfirmedLocation);
   });
@@ -75,8 +84,9 @@ describe("AddressPicker", () => {
     const onChange = vi.fn();
     render(<AddressPicker title="Destination" value={null} onChange={onChange} />);
 
-    const input = await typeAddress(typed);
-    fireEvent.click(await screen.findByText("22 Molynes Rd, Kingston, Jamaica"));
+    const input = typeAddress(typed);
+    fireEvent.click(screen.getByText("Find on map"));
+    await screen.findByTestId("drag-pin");
 
     apiFetchMock.mockResolvedValueOnce({ label: "A Completely Different Reverse-Geocoded Street" });
     fireEvent.click(screen.getByTestId("drag-pin"));
@@ -92,17 +102,14 @@ describe("AddressPicker", () => {
     );
   });
 
-  it("lets 'Use this address' confirm exact typed text even when the provider finds no match", async () => {
+  it("places a draggable fallback pin when the provider finds no match", async () => {
     const typed = "Behind the yellow shop, off Windward Road, no fixed number";
-    apiFetchMock.mockResolvedValueOnce(geocodeEmpty()); // live suggestion search: nothing
+    apiFetchMock.mockResolvedValueOnce(geocodeEmpty());
     const onChange = vi.fn();
     render(<AddressPicker title="Destination" value={null} onChange={onChange} />);
 
-    const input = await typeAddress(typed);
-    expect(screen.getByText(/No suggestions matched/)).toBeInTheDocument();
-
-    apiFetchMock.mockResolvedValueOnce(geocodeEmpty()); // "Use this address" geocode attempt: still nothing
-    fireEvent.click(screen.getByText("Use this address"));
+    const input = typeAddress(typed);
+    fireEvent.click(screen.getByText("Find on map"));
     await act(async () => {
       await Promise.resolve();
       await Promise.resolve();
@@ -115,15 +122,6 @@ describe("AddressPicker", () => {
 
     fireEvent.click(screen.getByText("Confirm location"));
     expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ address: typed, providerAddress: null }));
-  });
-
-  it("does not overwrite already-typed text with a suggestion label when the field wasn't empty", async () => {
-    const onChange = vi.fn();
-    render(<AddressPicker title="Destination" value={null} onChange={onChange} />);
-    apiFetchMock.mockResolvedValueOnce(geocodeOk("Half Way Tree Rd"));
-    const input = await typeAddress("17 Grants Pen Road");
-    fireEvent.click(await screen.findByText("Half Way Tree Rd"));
-    expect(input.value).toBe("17 Grants Pen Road");
   });
 
   it("shows both the typed address and the map pin together once confirmed", async () => {

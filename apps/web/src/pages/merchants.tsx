@@ -13,7 +13,9 @@ import { OwnerNotice } from "../components/owner-notice.js";
  */
 export function Merchants(): React.JSX.Element {
   const { user, businessId } = useAuth();
-  const canEdit = user?.role === "admin" && !!businessId;
+  const platformPower = user?.platformRole === "owner" || user?.platformRole === "manager";
+  const canEdit = (user?.role === "admin" && !!businessId) || platformPower;
+  const canManage = user?.role === "admin" && !!businessId;
   const qc = useQueryClient();
   const [creating, setCreating] = useState(false);
 
@@ -27,7 +29,7 @@ export function Merchants(): React.JSX.Element {
           <p className="text-sm text-zinc-400">Store clients with their own public order link — e.g. "VBR Basics".</p>
           <OwnerNotice what="deleting merchants" />
         </div>
-        {canEdit ? (
+        {canManage ? (
           <button className="btn-accent" onClick={() => setCreating((v) => !v)}>{creating ? "Cancel" : "+ New merchant"}</button>
         ) : null}
       </header>
@@ -40,7 +42,7 @@ export function Merchants(): React.JSX.Element {
       ) : null}
       <div className="space-y-3">
         {list.data?.merchants.map((m) => (
-          <MerchantRow key={m.id} merchant={m} canEdit={canEdit} onChanged={() => void qc.invalidateQueries({ queryKey: ["merchants"] })} />
+          <MerchantRow key={m.id} merchant={m} canEdit={canEdit} canManage={canManage} platformDelete={platformPower && !businessId} onChanged={() => void qc.invalidateQueries({ queryKey: ["merchants"] })} />
         ))}
       </div>
     </div>
@@ -83,7 +85,7 @@ function CreateMerchantForm({ onDone }: { onDone: () => void }): React.JSX.Eleme
   );
 }
 
-function MerchantRow({ merchant, canEdit, onChanged }: { merchant: MerchantDto; canEdit: boolean; onChanged: () => void }): React.JSX.Element {
+function MerchantRow({ merchant, canEdit, canManage, platformDelete, onChanged }: { merchant: MerchantDto; canEdit: boolean; canManage: boolean; platformDelete: boolean; onChanged: () => void }): React.JSX.Element {
   const [copied, setCopied] = useState(false);
   const [showQr, setShowQr] = useState(false);
   const [showPortalForm, setShowPortalForm] = useState(false);
@@ -93,9 +95,16 @@ function MerchantRow({ merchant, canEdit, onChanged }: { merchant: MerchantDto; 
     onSuccess: onChanged,
   });
   const removeMerchant = useMutation({
-    mutationFn: () => apiFetch(API.merchants.removeMerchant(merchant.id), { method: "DELETE" }),
+    // Master/manager sessions carry no business workspace, so their
+    // delete goes through the platform route (any merchant, any
+    // company); business admins use the scoped route. Same server-side
+    // guards either way. The dialog stays open on error so the message
+    // is visible instead of silently vanishing.
+    mutationFn: () => apiFetch(
+      platformDelete ? API.platform.deleteMerchant(merchant.id) : API.merchants.removeMerchant(merchant.id),
+      { method: "DELETE" },
+    ),
     onSuccess: onChanged,
-    onError: () => setConfirmingDelete(false),
   });
   const copyLink = async () => {
     try {
@@ -125,12 +134,12 @@ function MerchantRow({ merchant, canEdit, onChanged }: { merchant: MerchantDto; 
         </a>
         <button type="button" className="btn !px-3 !py-1 text-xs" onClick={() => void copyLink()}>{copied ? "Copied!" : "Copy link"}</button>
         <button type="button" className="btn !px-3 !py-1 text-xs" onClick={() => setShowQr((v) => !v)}>{showQr ? "Hide QR" : "QR code"}</button>
-        {canEdit ? (
+        {canManage ? (
           <button type="button" className="btn !px-3 !py-1 text-xs" disabled={toggleActive.isPending} onClick={() => void toggleActive.mutate()}>
             {merchant.active ? "Disable link" : "Re-enable link"}
           </button>
         ) : null}
-        {canEdit ? (
+        {canManage ? (
           <button type="button" className="btn !px-3 !py-1 text-xs" onClick={() => setShowPortalForm((v) => !v)}>
             {showPortalForm ? "Cancel" : "Portal access"}
           </button>
