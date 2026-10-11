@@ -218,6 +218,14 @@ export const API = {
     /** Fleet messaging (spec: "logistics<->riders") — same GET/POST path,
      *  only for a rider actually attached to this company. */
     riderMessages: (riderId: string) => `/api/logistics-portal/riders/${riderId}/messages`,
+    /** Unassigned jobs at the parent business this company can fill. */
+    openJobs: "/api/logistics-portal/jobs",
+    /** Couriers to send work to: own fleet (direct-assign) + open pool. */
+    assignCouriers: "/api/logistics-portal/couriers",
+    /** Direct-assign one of YOUR OWN bearers (needs their membership). */
+    assignJob: (jobId: string) => `/api/logistics-portal/jobs/${jobId}/assign`,
+    /** Offer a job to an open-pool courier — they choose by accepting. */
+    offerJob: (jobId: string) => `/api/logistics-portal/jobs/${jobId}/offer`,
     /** Spec: "logistics-company dashboard" — recent/active deliveries for
      *  one of this company's own attached riders. Deliberately narrow
      *  (LogisticsFleetJobDto, not the full staff JobSummaryDto): this

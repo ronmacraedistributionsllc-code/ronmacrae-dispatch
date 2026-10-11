@@ -332,12 +332,162 @@ export function LogisticsPortal(): React.JSX.Element {
         ))}
       </div>
 
+      <OpenJobsSection token={token} />
+
       <DeleteAccountPanel
         onDelete={async (password) => {
           await portalFetch(API.accountDeletion.logisticsPortal, { method: "POST", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ password }) });
         }}
         onDeleted={signOut}
       />
+    </div>
+  );
+}
+
+interface OpenJob {
+  id: string; jobNumber: string | null; itemSummary: string | null;
+  zoneName: string | null; merchantName: string | null; paymentMethod: string;
+  createdAt: string;
+}
+
+interface AssignCandidate {
+  id: string; name: string; vehicle: string; dailyCapacity: number;
+  verified: boolean; activeJobCount: number; phone?: string;
+}
+
+/**
+ * Unassigned work this company can fill, with one honest dialog per job:
+ * YOUR fleet riders get direct-assigned; OPEN-POOL couriers get offered
+ * (they choose by accepting — the company never force-assigns a
+ * stranger). Narrow job rows by design: no customer identity.
+ */
+function OpenJobsSection({ token }: { token: string | null }): React.JSX.Element {
+  const [jobs, setJobs] = useState<OpenJob[] | null>(null);
+  const [couriers, setCouriers] = useState<{ fleet: AssignCandidate[]; pool: AssignCandidate[] } | null>(null);
+  const [assigning, setAssigning] = useState<OpenJob | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function reload() {
+    if (!token) return;
+    try {
+      const [j, c] = await Promise.all([
+        portalFetch<{ jobs: OpenJob[] }>(API.logisticsPortal.openJobs, { headers: { authorization: `Bearer ${token}` } }),
+        portalFetch<{ fleet: AssignCandidate[]; pool: AssignCandidate[] }>(API.logisticsPortal.assignCouriers, { headers: { authorization: `Bearer ${token}` } }),
+      ]);
+      setJobs(j.jobs);
+      setCouriers(c);
+      setError(null);
+    } catch (err) {
+      setError(err instanceof PortalError ? err.message : "Could not load open jobs");
+    }
+  }
+
+  useEffect(() => {
+    void reload();
+  }, [token]);
+
+  if (!token) return <></>;
+
+  return (
+    <section className="card space-y-2">
+      <div className="flex items-center justify-between gap-2">
+        <h2 className="font-semibold">Open jobs to fill</h2>
+        <button type="button" className="btn !px-3 !py-1 text-xs" onClick={() => void reload()}>Refresh</button>
+      </div>
+      {error ? <p className="text-sm text-red-400">{error}</p> : null}
+      {jobs === null ? <p className="text-sm text-zinc-400">Loading…</p> : null}
+      {jobs && jobs.length === 0 ? <p className="text-sm text-zinc-500">Nothing unassigned right now.</p> : null}
+      <div className="space-y-2">
+        {jobs?.map((j) => (
+          <div key={j.id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-zinc-800 p-2 text-sm">
+            <div>
+              <p className="font-medium">{j.jobNumber ?? j.id.slice(0, 8)} · {j.itemSummary ?? "No item details"}</p>
+              <p className="text-xs text-zinc-500">
+                {j.merchantName ? `${j.merchantName} · ` : ""}{j.zoneName ?? "No zone"} · {j.paymentMethod === "cod" ? "Cash on delivery" : "Prepaid"}
+              </p>
+            </div>
+            <button type="button" className="btn !px-3 !py-1 text-xs" onClick={() => setAssigning(j)}>Assign…</button>
+          </div>
+        ))}
+      </div>
+      {assigning && couriers ? (
+        <AssignDialog
+          token={token}
+          job={assigning}
+          fleet={couriers.fleet}
+          pool={couriers.pool}
+          onClose={() => setAssigning(null)}
+          onDone={() => { setAssigning(null); void reload(); }}
+        />
+      ) : null}
+    </section>
+  );
+}
+
+function AssignDialog({ token, job, fleet, pool, onClose, onDone }: {
+  token: string; job: OpenJob; fleet: AssignCandidate[]; pool: AssignCandidate[]; onClose: () => void; onDone: () => void;
+}): React.JSX.Element {
+  const [riderId, setRiderId] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const selected = [...fleet, ...pool].find((r) => r.id === riderId) ?? null;
+  const fromPool = pool.some((r) => r.id === riderId);
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!riderId) return;
+    setError(null);
+    setBusy(true);
+    try {
+      if (fromPool) {
+        await portalFetch(API.logisticsPortal.offerJob(job.id), {
+          method: "POST", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ riderId }),
+        });
+      } else {
+        await portalFetch(API.logisticsPortal.assignJob(job.id), {
+          method: "POST", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ riderId }),
+        });
+      }
+      onDone();
+    } catch (err) {
+      setError(err instanceof PortalError ? err.message : "Could not send this job");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 sm:items-center" role="dialog" aria-modal="true" aria-label={`Assign ${job.jobNumber ?? "job"}`} onClick={onClose}>
+      <form onSubmit={(e) => void submit(e)} className="max-h-[85vh] w-full max-w-md space-y-3 overflow-y-auto rounded-t-2xl bg-zinc-900 p-4 shadow-xl sm:rounded-2xl" onClick={(e) => e.stopPropagation()}>
+        <h3 className="text-lg font-semibold">Send {job.jobNumber ?? "job"} to a courier</h3>
+        <div>
+          <label className="label" htmlFor="assign-rider">Courier</label>
+          <select id="assign-rider" className="input" value={riderId} onChange={(e) => setRiderId(e.target.value)} required>
+            <option value="">Choose…</option>
+            <optgroup label="Your fleet — assigned directly">
+              {fleet.map((r) => (
+                <option key={r.id} value={r.id}>{r.name} · {r.activeJobCount}/{r.dailyCapacity} active{r.verified ? "" : " (not cash-verified)"}</option>
+              ))}
+            </optgroup>
+            <optgroup label="Open pool — offered, they choose">
+              {pool.map((r) => (
+                <option key={r.id} value={r.id}>{r.name} · {r.activeJobCount}/{r.dailyCapacity} active{r.verified ? "" : " (prepaid only)"}</option>
+              ))}
+            </optgroup>
+          </select>
+        </div>
+        {selected && job.paymentMethod === "cod" && !selected.verified ? (
+          <p className="text-xs text-amber-400">Cash job — {selected.name} isn&apos;t cash-verified, so this will be refused. Pick a verified courier.</p>
+        ) : null}
+        {fromPool ? (
+          <p className="text-xs text-zinc-500">Pool couriers are offered, not assigned — {selected?.name ?? "they"} accept in their own app if they want the job.</p>
+        ) : null}
+        {error ? <p className="text-sm text-red-400">{error}</p> : null}
+        <div className="flex gap-2">
+          <button className="btn-accent flex-1 !py-2.5" disabled={busy || !riderId}>{busy ? "Sending…" : fromPool ? "Send offer" : "Assign now"}</button>
+          <button type="button" className="btn !py-2.5" onClick={onClose}>Cancel</button>
+        </div>
+      </form>
     </div>
   );
 }

@@ -339,3 +339,104 @@ describe("logistics portal: fleet rider onboarding", () => {
     expect(stuck.statusCode).toBe(409);
   });
 });
+
+describe("logistics portal: assign fleet + offer pool", () => {
+  async function portalFixture() {
+    const admin = await adminToken(harness);
+    const company = await makeCompany(harness, admin);
+    const email = `fleet-${uniq()}@example.com`;
+    await harness.app.inject({
+      method: "POST", url: `/api/logistics-companies/${company.id}/staff`,
+      headers: { authorization: `Bearer ${admin}` },
+      payload: { email, name: "Fleet Staff", password: "fleetpass1" },
+    });
+    const login = await harness.app.inject({ method: "POST", url: "/api/logistics-portal/login", payload: { email, password: "fleetpass1" } });
+    const portal = { authorization: `Bearer ${(login.json() as { token: string }).token}` };
+    return { admin, company, portal };
+  }
+
+  async function attachRider(companyId: string, opts: { verified?: boolean } = {}) {
+    const rider = await harness.prisma.rider.create({
+      data: { name: `Fleet Rider ${uniq()}`, phone: `+18765${uniq().slice(-7)}`, active: true, status: "available", dailyCapacity: 5, verified: opts.verified ?? true, attachment: "logistics", attachedLogisticsCompanyId: companyId },
+    });
+    return rider;
+  }
+
+  async function openJob(extra: Record<string, unknown> = {}) {
+    const customer = await harness.prisma.customer.create({ data: { businessId: harness.business.id, name: "Fleet Customer", phone: `+18765${uniq().slice(-7)}` } });
+    return harness.prisma.job.create({ data: { businessId: harness.business.id, customerId: customer.id, jobNumber: `FLT-${uniq()}`, status: "new", paymentMethod: "transfer", currency: "JMD", ...extra } });
+  }
+
+  it("lists open jobs narrowly and assigns an attached bearer directly", async () => {
+    const { admin, company, portal } = await portalFixture();
+    void admin;
+    const rider = await attachRider(company.id);
+    const job = await openJob();
+
+    const list = await harness.app.inject({ method: "GET", url: "/api/logistics-portal/jobs", headers: portal });
+    expect(list.statusCode).toBe(200);
+    const ids = ((list.json() as { jobs: { id: string; customerName?: string; addressText?: string }[] }).jobs).map((j) => j.id);
+    expect(ids).toContain(job.id);
+
+    const assign = await harness.app.inject({ method: "POST", url: `/api/logistics-portal/jobs/${job.id}/assign`, headers: portal, payload: { riderId: rider.id } });
+    expect(assign.statusCode).toBe(200);
+    expect((await harness.prisma.job.findUniqueOrThrow({ where: { id: job.id } })).riderId).toBe(rider.id);
+    const audit = await harness.prisma.auditLog.findFirst({ where: { action: "logistics.job.assign", entityId: job.id } });
+    expect(audit).not.toBeNull();
+  });
+
+  it("refuses strangers' riders, other businesses' jobs, and membership-less fleet", async () => {
+    const { company, portal } = await portalFixture();
+    const otherAdmin = await adminToken(harness);
+    const otherCompany = await makeCompany(harness, otherAdmin);
+    const stranger = await attachRider(otherCompany.id);
+    const job = await openJob();
+
+    // Not in this fleet.
+    expect((await harness.app.inject({ method: "POST", url: `/api/logistics-portal/jobs/${job.id}/assign`, headers: portal, payload: { riderId: stranger.id } })).statusCode).toBe(404);
+
+    // Other business's job.
+    const otherBiz = await harness.prisma.business.create({ data: { name: `Far Biz ${uniq()}`, slug: `far-biz-${uniq()}` } });
+    const farCustomer = await harness.prisma.customer.create({ data: { businessId: otherBiz.id, name: "Far", phone: `+18765${uniq().slice(-7)}` } });
+    const farJob = await harness.prisma.job.create({ data: { businessId: otherBiz.id, customerId: farCustomer.id, jobNumber: `FAR-${uniq()}`, status: "new" } });
+    const mine = await attachRider(company.id);
+    expect((await harness.app.inject({ method: "POST", url: `/api/logistics-portal/jobs/${farJob.id}/assign`, headers: portal, payload: { riderId: mine.id } })).statusCode).toBe(409);
+
+    // Fleet rider without an active membership can't be assigned yet.
+    await harness.prisma.riderMembership.deleteMany({ where: { riderId: mine.id } });
+    expect((await harness.app.inject({ method: "POST", url: `/api/logistics-portal/jobs/${job.id}/assign`, headers: portal, payload: { riderId: mine.id } })).statusCode).toBe(404);
+    expect(company.id).toBeTruthy();
+  });
+
+  it("offers pool couriers (they choose) and enforces cash verification", async () => {
+    const { portal } = await portalFixture();
+    await harness.prisma.business.update({ where: { id: harness.business.id }, data: { courierPool: "both" } });
+    try {
+      const poolRider = await harness.prisma.rider.create({
+        data: { name: `Pool Rider ${uniq()}`, phone: `+18765${uniq().slice(-7)}`, active: true, status: "available", dailyCapacity: 5, platformStatus: "approved", selfSignedUp: true, openNetwork: true, verified: false },
+      });
+      // A pool stranger has no membership here (the harness auto-inserts
+      // one on every rider.create — strip it).
+      await harness.prisma.riderMembership.deleteMany({ where: { riderId: poolRider.id } });
+      const couriers = await harness.app.inject({ method: "GET", url: "/api/logistics-portal/couriers", headers: portal });
+      expect(couriers.statusCode).toBe(200);
+      const pool = (couriers.json() as { pool: { id: string; phone?: string }[] }).pool;
+      const found = pool.find((r) => r.id === poolRider.id);
+      expect(found).toBeTruthy();
+      expect(found?.phone).toBeUndefined();
+
+      const cashJob = await openJob({ paymentMethod: "cod", amountExpected: 1000 });
+      // Unverified pool rider + cash → refused, even here.
+      expect((await harness.app.inject({ method: "POST", url: `/api/logistics-portal/jobs/${cashJob.id}/offer`, headers: portal, payload: { riderId: poolRider.id } })).statusCode).toBe(409);
+
+      const prepaidJob = await openJob({ paymentMethod: "transfer" });
+      const offer = await harness.app.inject({ method: "POST", url: `/api/logistics-portal/jobs/${prepaidJob.id}/offer`, headers: portal, payload: { riderId: poolRider.id } });
+      expect(offer.statusCode).toBe(200);
+      // Offered, NOT assigned — the courier still chooses.
+      expect((await harness.prisma.job.findUniqueOrThrow({ where: { id: prepaidJob.id } })).riderId).toBeNull();
+      expect(await harness.prisma.jobOffer.count({ where: { jobId: prepaidJob.id, riderId: poolRider.id, status: "open" } })).toBe(1);
+    } finally {
+      await harness.prisma.business.update({ where: { id: harness.business.id }, data: { courierPool: "company" } });
+    }
+  });
+});

@@ -106,7 +106,7 @@ export type CourierPool = "company" | "free_roam" | "both";
  * rider. Pass the job's paymentMethod; unverified riders are filtered
  * out of cash jobs at the query level, so they never even see them.
  */
-async function eligibleRiders(
+export async function eligibleRiders(
   ctx: AppCtx,
   businessId: string,
   jobMerchantId: string | null,
@@ -241,7 +241,7 @@ async function ensureClaimMembership(
 }
 
 /** Create offers for the given job/riders in one transaction and broadcast them over the hub. */
-async function createOffers(ctx: AppCtx, jobId: string, businessId: string, riders: { id: string }[], expiresAt: Date) {
+export async function createOffers(ctx: AppCtx, jobId: string, businessId: string, riders: { id: string }[], expiresAt: Date) {
   const offers = await ctx.prisma.$transaction((tx) =>
     Promise.all(
       riders.map((rider) =>
@@ -338,7 +338,7 @@ async function claimJobTx(tx: Prisma.TransactionClient, ctx: AppCtx, input: Clai
 }
 
 /** This business's auto-dispatch knobs (one row read, no joins). */
-async function dispatchPool(ctx: AppCtx, businessId: string): Promise<{ autoBroadcast: boolean; pool: CourierPool; expiryMinutes: number }> {
+export async function dispatchPool(ctx: AppCtx, businessId: string): Promise<{ autoBroadcast: boolean; pool: CourierPool; expiryMinutes: number }> {
   const row = await ctx.prisma.business.findUnique({ where: { id: businessId } });
   return {
     autoBroadcast: row?.autoBroadcastOffers ?? true,

@@ -244,6 +244,137 @@ export async function logisticsPortalRoutes(app: FastifyInstance, ctx: AppCtx): 
     return { riders: dtos };
   });
 
+  /**
+   * Unassigned work at the parent business this company can fill: `new`,
+   * riderless jobs, deliberately narrow (same privacy rule as the fleet
+   * jobs below — no customer name/phone/exact address, just enough to
+   * choose who should take it: what, where-about, payout, pay method).
+   */
+  app.get("/api/logistics-portal/jobs", async (req) => {
+    const auth = await requireLogisticsAuth(ctx, req);
+    const company = await ctx.prisma.logisticsCompany.findUniqueOrThrow({ where: { id: auth.logisticsCompanyId } });
+    const jobs = await ctx.prisma.job.findMany({
+      where: { businessId: company.businessId, status: "new", riderId: null, deletedAt: null },
+      orderBy: { createdAt: "desc" },
+      take: 50,
+      include: { zone: { select: { name: true } }, merchant: { select: { name: true } } },
+    });
+    return {
+      jobs: jobs.map((j) => ({
+        id: j.id,
+        jobNumber: j.jobNumber,
+        itemSummary: j.itemSummary,
+        zoneName: j.zone?.name ?? null,
+        merchantName: j.merchant?.name ?? null,
+        paymentMethod: j.paymentMethod,
+        createdAt: j.createdAt.toISOString(),
+      })),
+    };
+  });
+
+  /**
+   * Who this company may send work to: its own attached bearers ("fleet",
+   * direct-assignable) plus the open pool ("pool" — approved, self-signed,
+   * open-network couriers who don't regularly deliver here, offered — not
+   * assigned — so they keep choosing who they work for). Cash jobs additionally
+   * require verification; the assign/offer routes enforce it, and the flag
+   * ships here so the picker can say so upfront.
+   */
+  app.get("/api/logistics-portal/couriers", async (req) => {
+    const auth = await requireLogisticsAuth(ctx, req);
+    const company = await ctx.prisma.logisticsCompany.findUniqueOrThrow({ where: { id: auth.logisticsCompanyId } });
+    if (!company.active) throw httpErrors.createError(403, "Your company is disabled — contact Platform Admin.");
+    const { eligibleRiders, dispatchPool } = await import("./offers.js");
+    const { pool } = await dispatchPool(ctx, company.businessId);
+    const withLoad = async (r: { id: string }) =>
+      await ctx.prisma.job.count({ where: { riderId: r.id, status: { in: [...ACTIVE_JOB_STATUSES] } } });
+    const fleetRows = await ctx.prisma.rider.findMany({ where: { attachedLogisticsCompanyId: company.id, active: true } });
+    const fleet = await Promise.all(
+      fleetRows.map(async (r) => ({
+        id: r.id, name: r.name, phone: r.phone, vehicle: r.vehicle,
+        dailyCapacity: r.dailyCapacity, verified: r.verified, activeJobCount: await withLoad(r),
+      })),
+    );
+    // Open pool: eligible non-members. Phones stay hidden until they
+    // accept — first contact is the offer itself (push + their app), so
+    // nobody gets cold-called for work they never chose.
+    const poolEligible = pool === "company" ? [] : await eligibleRiders(ctx, company.businessId, null, undefined, pool, undefined);
+    const poolChecks = await Promise.all(
+      poolEligible.map(async (r) => ({
+        r,
+        member: await ctx.prisma.riderMembership.findUnique({ where: { riderId_businessId: { riderId: r.id, businessId: company.businessId } } }),
+      })),
+    );
+    const poolOut = await Promise.all(
+      poolChecks
+        .filter(({ member }) => !member || member.status !== "active")
+        .map(async ({ r }) => ({
+          id: r.id, name: r.name, vehicle: r.vehicle,
+          dailyCapacity: r.dailyCapacity, verified: r.verified, activeJobCount: await withLoad(r),
+        })),
+    );
+    return { fleet, pool: poolOut };
+  });
+
+  /**
+   * Assign one of YOUR OWN bearers, directly: the rider must be attached
+   * to this company (fleet list above). Reuses the staff assign engine,
+   * so membership, capacity, and cash-verification all still apply — a
+   * pending-membership bearer can't be assigned until their business
+   * approves them. Returns ids only, never the customer-facing dto.
+   */
+  app.post<{ Params: { id: string } }>("/api/logistics-portal/jobs/:id/assign", async (req) => {
+    const auth = await requireLogisticsAuth(ctx, req);
+    const body = z.object({ riderId: z.string().min(1) }).parse(req.body);
+    const company = await ctx.prisma.logisticsCompany.findUniqueOrThrow({ where: { id: auth.logisticsCompanyId } });
+    if (!company.active) throw httpErrors.createError(403, "Your company is disabled — contact Platform Admin.");
+    const job = await ctx.prisma.job.findUnique({ where: { id: req.params.id } });
+    if (!job || job.businessId !== company.businessId || job.status !== "new" || job.riderId || job.deletedAt) {
+      throw httpErrors.createError(409, "That job is no longer assignable");
+    }
+    const rider = await ctx.prisma.rider.findFirst({ where: { id: body.riderId, attachedLogisticsCompanyId: company.id } });
+    if (!rider) throw httpErrors.createError(404, "That courier isn't in your fleet — offer them from the pool instead");
+    const user = await ctx.prisma.user.findUniqueOrThrow({ where: { id: auth.userId } });
+    const { assignJob } = await import("./jobs/assign.js");
+    await assignJob(
+      ctx,
+      job.id,
+      { riderId: rider.id, reason: "fleet assign" },
+      { id: auth.userId, name: user.name, role: "logistics", riderId: null, businessId: company.businessId },
+      { role: "logistics", businessId: company.businessId },
+    );
+    await ctx.audit.record({ id: auth.userId, role: "logistics" }, "logistics.job.assign", "job", job.id, { riderId: rider.id, logisticsCompanyId: company.id });
+    return { ok: true, jobId: job.id, riderId: rider.id };
+  });
+
+  /**
+   * Offer an unassigned job to an open-pool courier: they choose by
+   * accepting (or ignoring) — the company never force-assigns a stranger.
+   * Accepts only riders the eligibility engine clears for THIS job
+   * (membership/free-roam, verified-for-cash, capacity), so the pool
+   * picker can't be used to bypass any rule.
+   */
+  app.post<{ Params: { id: string } }>("/api/logistics-portal/jobs/:id/offer", async (req) => {
+    const auth = await requireLogisticsAuth(ctx, req);
+    const body = z.object({ riderId: z.string().min(1) }).parse(req.body);
+    const company = await ctx.prisma.logisticsCompany.findUniqueOrThrow({ where: { id: auth.logisticsCompanyId } });
+    if (!company.active) throw httpErrors.createError(403, "Your company is disabled — contact Platform Admin.");
+    const job = await ctx.prisma.job.findUnique({ where: { id: req.params.id } });
+    if (!job || job.businessId !== company.businessId || job.status !== "new" || job.riderId || job.deletedAt) {
+      throw httpErrors.createError(409, "That job is no longer offerable");
+    }
+    const { eligibleRiders, createOffers, dispatchPool } = await import("./offers.js");
+    const { pool, expiryMinutes } = await dispatchPool(ctx, company.businessId);
+    const eligible = await eligibleRiders(ctx, company.businessId, job.merchantId, [body.riderId], pool, job.paymentMethod);
+    if (!eligible.some((r) => r.id === body.riderId)) {
+      throw httpErrors.createError(409, "That courier isn't eligible for this job (membership, verification, or capacity) — try another.");
+    }
+    const expiresAt = new Date(Date.now() + expiryMinutes * 60_000);
+    const offers = await createOffers(ctx, job.id, company.businessId, [{ id: body.riderId }], expiresAt);
+    await ctx.audit.record({ id: auth.userId, role: "logistics" }, "logistics.job.offer", "job", job.id, { riderId: body.riderId, logisticsCompanyId: company.id });
+    return { ok: true, offerId: offers[0]!.id };
+  });
+
   // Spec: "logistics-company dashboard" — what one of this company's own
   // riders is actually delivering right now (plus a little recent history),
   // not just their idle/available status. Deliberately narrow (see
