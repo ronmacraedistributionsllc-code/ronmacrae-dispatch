@@ -103,6 +103,99 @@ function RiderJobsPanel({ token, riderId }: { token: string; riderId: string }):
  * decision (Rider.attachedLogisticsCompanyId) — this portal can look, not
  * assign.
  */
+/**
+ * Add one of your own bearers: creates the rider attached to this company
+ * (pending platform vetting) plus a pending membership for the business
+ * to approve. Rejects duplicates by phone — one account per courier.
+ */
+function AddFleetRider({ token, onAdded }: { token: string | null; onAdded: () => void }): React.JSX.Element {
+  const [open, setOpen] = useState(false);
+  const [name, setName] = useState("");
+  const [phone, setPhone] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  if (!token) return <></>;
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    setError(null);
+    setBusy(true);
+    try {
+      await portalFetch(API.logisticsPortal.addRider, {
+        method: "POST",
+        headers: { authorization: `Bearer ${token}` },
+        body: JSON.stringify({ name: name.trim(), phone: phone.trim() }),
+      });
+      setName("");
+      setPhone("");
+      setOpen(false);
+      onAdded();
+    } catch (err) {
+      setError(err instanceof PortalError ? err.message : "Could not add this courier");
+    } finally {
+      setBusy(false);
+    }
+  }
+  if (!open) {
+    return <button type="button" className="btn-accent" onClick={() => setOpen(true)}>+ Add your bearer</button>;
+  }
+  return (
+    <form onSubmit={(e) => void submit(e)} className="card space-y-2">
+      <p className="text-sm font-medium">Add one of your bearers</p>
+      <div className="grid gap-2 sm:grid-cols-2">
+        <div>
+          <label className="label" htmlFor="fleet-rider-name">Full name</label>
+          <input id="fleet-rider-name" className="input" required value={name} onChange={(e) => setName(e.target.value)} />
+        </div>
+        <div>
+          <label className="label" htmlFor="fleet-rider-phone">Phone</label>
+          <input id="fleet-rider-phone" className="input" required value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="876 555 1234" />
+        </div>
+      </div>
+      {error ? <p className="text-sm text-red-400">{error}</p> : null}
+      <div className="flex gap-2">
+        <button className="btn-accent" disabled={busy}>{busy ? "Adding…" : "Add bearer"}</button>
+        <button type="button" className="btn" onClick={() => { setOpen(false); setError(null); }}>Cancel</button>
+      </div>
+    </form>
+  );
+}
+
+/**
+ * Release a bearer back to freelance: they keep account, history, and
+ * memberships — they just stop being this company's fleet. Refuses while
+ * they're carrying live work (finish first, then detach).
+ */
+function DetachFleetRider({ token, rider, onChanged }: { token: string | null; rider: FleetRider; onChanged: () => void }): React.JSX.Element {
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  if (!token) return <></>;
+  async function detach() {
+    setError(null);
+    setBusy(true);
+    try {
+      await portalFetch(API.logisticsPortal.detachRider(rider.id), { method: "POST", headers: { authorization: `Bearer ${token}` } });
+      setConfirming(false);
+      onChanged();
+    } catch (err) {
+      setError(err instanceof PortalError ? err.message : "Could not release this courier");
+    } finally {
+      setBusy(false);
+    }
+  }
+  if (!confirming) {
+    return <button type="button" className="btn !px-3 !py-1 text-xs !text-red-300" onClick={() => setConfirming(true)}>Release</button>;
+  }
+  return (
+    <span className="flex flex-wrap items-center gap-2 text-xs">
+      <span className="text-red-300">Release {rider.name} back to freelance?</span>
+      <button type="button" className="btn !border-red-800 !px-3 !py-1 !text-red-300" disabled={busy} onClick={() => void detach()}>{busy ? "Releasing…" : "Confirm"}</button>
+      <button type="button" className="btn !px-3 !py-1" onClick={() => { setConfirming(false); setError(null); }}>Keep</button>
+      {error ? <span className="text-red-400">{error}</span> : null}
+    </span>
+  );
+}
+
 export function LogisticsPortal(): React.JSX.Element {
   const [token, setToken] = useState<string | null>(() => sessionStorage.getItem(STORAGE_KEY));
   const [error, setError] = useState<string | null>(null);
@@ -172,7 +265,7 @@ export function LogisticsPortal(): React.JSX.Element {
       <header className="flex items-center justify-between gap-3">
         <div>
           <h1 className="text-xl font-bold">{companyName ?? "Your fleet"}</h1>
-          <p className="text-sm text-zinc-400">Couriers Platform Admin has attached to your company.</p>
+          <p className="text-sm text-zinc-400">Your bearers — add your own below, or ask Platform Admin to attach existing couriers.</p>
         </div>
         <div className="flex gap-2">
           {hasStaffAccess ? (
@@ -199,9 +292,10 @@ export function LogisticsPortal(): React.JSX.Element {
 
       {error ? <p className="text-sm text-red-400">{error}</p> : null}
 
+      <AddFleetRider token={token} onAdded={() => token && void loadDashboard(token)} />
       {riders === null ? <p className="text-sm text-zinc-400">Loading…</p> : null}
       {riders && riders.length === 0 ? (
-        <div className="card text-sm text-zinc-400">No couriers attached yet — ask Platform Admin to attach couriers to your company.</div>
+        <div className="card text-sm text-zinc-400">No couriers yet — add your own bearers above. They start pending: the business approves the membership, Platform Admin vets the person.</div>
       ) : null}
       <div className="space-y-2">
         {riders?.map((r) => (
@@ -223,6 +317,7 @@ export function LogisticsPortal(): React.JSX.Element {
                 <button type="button" className="btn !px-3 !py-1 text-xs" onClick={() => setChattingWith(chattingWith === r.id ? null : r.id)}>
                   {chattingWith === r.id ? "Hide chat" : "Message"}
                 </button>
+                <DetachFleetRider token={token} rider={r} onChanged={() => token && void loadDashboard(token)} />
               </div>
             </div>
             {viewingJobsFor === r.id && token ? <RiderJobsPanel token={token} riderId={r.id} /> : null}

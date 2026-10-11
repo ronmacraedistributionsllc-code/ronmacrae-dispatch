@@ -207,6 +207,11 @@ export const API = {
     login: "/api/logistics-portal/login",
     me: "/api/logistics-portal/me",
     riders: "/api/logistics-portal/riders",
+    /** Add one of your own bearers (proposed → business approves
+     *  membership, platform vets the person). */
+    addRider: "/api/logistics-portal/riders",
+    /** Release a bearer back to freelance (refuses while carrying work). */
+    detachRider: (riderId: string) => `/api/logistics-portal/riders/${riderId}/detach`,
     switchToStaff: "/api/logistics-portal/switch-to-staff",
     /** "Message the owner" (spec: "admin-to-anyone") — same GET/POST path. */
     ownerMessages: "/api/logistics-portal/messages/owner",

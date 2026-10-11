@@ -6,7 +6,7 @@ import { verifyPassword } from "../lib/password.js";
 import { normalizeEmail } from "../lib/email.js";
 import { ACTIVE_JOB_STATUSES } from "@ronmacrae/contracts";
 import type { LogisticsFleetJobDto } from "@ronmacrae/contracts";
-import { resolveStaffContext, toUserDto } from "./auth.js";
+import { normalizePhone, resolveStaffContext, toUserDto } from "./auth.js";
 import { listLogisticsRiderThread, listOwnerUserThread, sendLogisticsRiderMessage, sendOwnerUserMessage, SendPlatformMessageBody } from "./platform-messages.js";
 
 /**
@@ -140,9 +140,85 @@ export async function logisticsPortalRoutes(app: FastifyInstance, ctx: AppCtx): 
     return listLogisticsRiderThread(ctx, auth.logisticsCompanyId, rider.id, "logistics", auth.userId, true);
   });
 
+  /**
+   * Add one of YOUR OWN bearers: creates the rider attached to this
+   * company (attachment logistics, pending platform vetting) plus a
+   * pending membership at the parent business for that business's admin
+   * to approve. This is how "their bearers work for them only" starts —
+   * the company proposes, the business approves the membership, the
+   * platform approves the person. An existing rider already attached
+   * elsewhere is refused (only Platform Admin moves riders between
+   * companies); an unattached existing rider is attached in place.
+   */
+  app.post("/api/logistics-portal/riders", async (req) => {
+    const auth = await requireLogisticsAuth(ctx, req);
+    const body = z
+      .object({
+        name: z.string().min(1).max(120),
+        phone: z.string().min(7).max(20),
+        vehicle: z.enum(["motorcycle", "car"]).default("motorcycle"),
+        plate: z.string().max(20).optional().or(z.literal("")).nullable(),
+      })
+      .parse(req.body);
+    const company = await ctx.prisma.logisticsCompany.findUniqueOrThrow({ where: { id: auth.logisticsCompanyId } });
+    if (!company.active) throw httpErrors.createError(403, "Your company is disabled — contact Platform Admin.");
+    const phone = normalizePhone(body.phone);
+    const existing = await ctx.prisma.rider.findUnique({ where: { phone } });
+    if (existing?.attachedLogisticsCompanyId && existing.attachedLogisticsCompanyId !== company.id) {
+      throw httpErrors.createError(409, "That courier already works for another company — only Platform Admin can move them.");
+    }
+    let riderId: string;
+    if (existing) {
+      await ctx.prisma.rider.update({ where: { id: existing.id }, data: { attachment: "logistics", attachedLogisticsCompanyId: company.id } });
+      riderId = existing.id;
+    } else {
+      const rider = await ctx.prisma.rider.create({
+        data: {
+          name: body.name,
+          phone,
+          vehicle: body.vehicle as "motorcycle" | "car",
+          plate: body.plate || null,
+          dailyCapacity: 5,
+          status: "available",
+          active: true,
+          platformStatus: "pending",
+          attachment: "logistics",
+          attachedLogisticsCompanyId: company.id,
+          selfSignedUp: false,
+        },
+      });
+      riderId = rider.id;
+    }
+    await ctx.prisma.riderMembership.upsert({
+      where: { riderId_businessId: { riderId, businessId: company.businessId } },
+      create: { riderId, businessId: company.businessId, status: "pending" },
+      update: {},
+    });
+    await ctx.audit.record({ id: auth.userId, role: "logistics" }, "logistics.rider.add", "rider", riderId, { logisticsCompanyId: company.id });
+    return { riderId };
+  });
+
+  /**
+   * Release one of your bearers: detaches them back to freelance (they
+   * keep their account, memberships, and history — they just stop being
+   * YOUR fleet). Refuses while they're carrying live work.
+   */
+  app.post<{ Params: { riderId: string } }>("/api/logistics-portal/riders/:riderId/detach", async (req) => {
+    const auth = await requireLogisticsAuth(ctx, req);
+    const rider = await ctx.prisma.rider.findFirst({ where: { id: req.params.riderId, attachedLogisticsCompanyId: auth.logisticsCompanyId } });
+    if (!rider) throw httpErrors.createError(404, "Courier not found in your fleet");
+    const carrying = await ctx.prisma.job.count({ where: { riderId: rider.id, status: { in: [...ACTIVE_JOB_STATUSES] } } });
+    if (carrying > 0) throw httpErrors.createError(409, "They're still carrying live work — detach after they finish.");
+    await ctx.prisma.rider.update({ where: { id: rider.id }, data: { attachedLogisticsCompanyId: null, attachment: "freelance" } });
+    await ctx.audit.record({ id: auth.userId, role: "logistics" }, "logistics.rider.detach", "rider", rider.id, { logisticsCompanyId: auth.logisticsCompanyId });
+    return { ok: true };
+  });
+
   // Fleet dashboard — every rider Platform Admin has attached to this
   // company (Rider.attachedLogisticsCompanyId), with live status/capacity.
-  // Read-only: attachment itself is Platform Admin's call, not this portal's.
+  // Attachment itself used to be Platform Admin's call only; companies can
+  // now add (propose) and detach their own fleet above — moving a rider
+  // BETWEEN companies stays Platform Admin's call.
   app.get("/api/logistics-portal/riders", async (req) => {
     const auth = await requireLogisticsAuth(ctx, req);
     const riders = await ctx.prisma.rider.findMany({

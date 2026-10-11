@@ -4,7 +4,7 @@
  * COD, everyone else = prepaid only), and the dual-confirmation money
  * ledger (both sides agree, or it stays visibly pending).
  */
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { buildTestHarness, type TestHarness } from "./helpers/test-app.js";
 
 let harness: TestHarness;
@@ -239,5 +239,67 @@ describe("dual-confirmation ledger", () => {
     expect((await harness.app.inject({ method: "POST", url: `/api/money-transfers/${id}/confirm`, headers: auth, payload: { side: "received" } })).statusCode).toBe(200);
     row = await harness.prisma.moneyTransfer.findUniqueOrThrow({ where: { id } });
     expect(row.status).toBe("confirmed");
+  });
+});
+
+describe("free-roam cash lockout", () => {
+  it("an unverified free-roam courier gets prepaid work but never cash", async () => {
+    await harness.prisma.business.update({ where: { id: harness.business.id }, data: { courierPool: "both" } });
+    try {
+      const free = await makeRider({ platformStatus: "approved", selfSignedUp: true, openNetwork: true });
+      await harness.prisma.riderMembership.deleteMany({ where: { riderId: free.rider.id } });
+      const customer = await harness.prisma.customer.create({ data: { businessId: harness.business.id, name: "Lockout Customer", phone: `+18765${uniq().slice(-7)}` } });
+
+      // Cash job: no offer, claim refused.
+      const cashJob = await harness.prisma.job.create({
+        data: { businessId: harness.business.id, customerId: customer.id, jobNumber: `NOCASH-${uniq()}`, status: "new", paymentMethod: "cod", amountExpected: 2000, currency: "JMD" },
+      });
+      // Even an explicit broadcast skips them for cash.
+      const staff0 = await makeStaff();
+      expect((await harness.app.inject({ method: "POST", url: `/api/jobs/${cashJob.id}/offers/broadcast`, headers: staff0, payload: {} })).statusCode).toBe(200);
+      await new Promise((r) => setTimeout(r, 100));
+      expect(await harness.prisma.jobOffer.count({ where: { jobId: cashJob.id, riderId: free.rider.id } })).toBe(0);
+      expect((await harness.app.inject({ method: "POST", url: `/api/bearer/pending-jobs/${cashJob.id}/claim`, headers: free.auth })).statusCode).toBe(409);
+
+      // Prepaid job: offered and claimable. (Direct-DB jobs skip the
+      // creation-time auto-broadcast, so broadcast explicitly here.)
+      const prepaidJob = await harness.prisma.job.create({
+        data: { businessId: harness.business.id, customerId: customer.id, jobNumber: `PRE2-${uniq()}`, status: "new", paymentMethod: "transfer", currency: "JMD" },
+      });
+      const staff = await makeStaff();
+      const bc = await harness.app.inject({ method: "POST", url: `/api/jobs/${prepaidJob.id}/offers/broadcast`, headers: staff, payload: {} });
+      expect(bc.statusCode).toBe(200);
+      await vi.waitFor(async () => expect(await harness.prisma.jobOffer.count({ where: { jobId: prepaidJob.id, riderId: free.rider.id } })).toBe(1));
+      expect((await harness.app.inject({ method: "POST", url: `/api/bearer/pending-jobs/${prepaidJob.id}/claim`, headers: free.auth })).statusCode).toBe(200);
+
+      // Verify them and cash opens up.
+      const owner = await makeOwner();
+      await harness.app.inject({ method: "PATCH", url: `/api/platform/riders/${free.rider.id}`, headers: owner, payload: { verified: true } });
+      const cashJob2 = await harness.prisma.job.create({
+        data: { businessId: harness.business.id, customerId: customer.id, jobNumber: `CASH2-${uniq()}`, status: "new", paymentMethod: "cod", amountExpected: 2000, currency: "JMD" },
+      });
+      expect((await harness.app.inject({ method: "POST", url: `/api/jobs/${cashJob2.id}/offers/broadcast`, headers: staff, payload: {} })).statusCode).toBe(200);
+      await vi.waitFor(async () => expect(await harness.prisma.jobOffer.count({ where: { jobId: cashJob2.id, riderId: free.rider.id } })).toBe(1));
+    } finally {
+      await harness.prisma.business.update({ where: { id: harness.business.id }, data: { courierPool: "company" } });
+    }
+  });
+});
+
+describe("courier signup alerts the owner", () => {
+  it("a new application emails owners and audits the notification", async () => {
+    await harness.prisma.user.create({ data: { name: `Alert Owner ${uniq()}`, email: `alert-owner-${uniq()}@example.com`, passwordHash: "unused", role: "admin", platformRole: "owner" } });
+    const email = `applicant-${uniq()}@example.com`;
+    const res = await harness.app.inject({
+      method: "POST", url: "/api/rider-signup",
+      payload: { name: "Applicant", phone: `+18765${uniq().slice(-7)}`, email, vehicle: "motorcycle", password: "riderpass1", independent: true },
+    });
+    expect(res.statusCode).toBe(200);
+    const riderId = (res.json() as { riderId: string }).riderId;
+    // The owner notification fires void (never blocks signup) — wait for it.
+    await vi.waitFor(async () => {
+      const audit = await harness.prisma.auditLog.findFirst({ where: { action: "platform.rider.application.notify.sent", entityId: riderId } });
+      expect(audit).not.toBeNull();
+    });
   });
 });

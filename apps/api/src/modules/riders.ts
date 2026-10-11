@@ -5,6 +5,7 @@ import type { AppCtx } from "../ctx.js";
 import { normalizePhone } from "./auth.js";
 import { DEFAULT_PUBLIC_BUSINESS_SLUG } from "./order.js";
 import { sendEmailCode, consumeEmailCode } from "./customer-account.js";
+import { notifyOwnersOfApplication } from "./platform-notify.js";
 
 const RIDER_EMAIL_VERIFY_PURPOSE = "verify_rider_email";
 import { pointFromJson, pointToJson, moneyField } from "../geo-mappers.js";
@@ -649,6 +650,11 @@ export async function riderRoutes(app: FastifyInstance, ctx: AppCtx): Promise<vo
       }
       const result = await svc.selfSignup(businessId, body);
       await ctx.audit.record({ id: null, role: "anonymous" }, "rider.signup", "rider", result.riderId, { status: result.status, emailSent: result.emailSent, businessId, independent: body.independent ?? false });
+      // Alert the platform owner(s) by email — same pattern as merchant /
+      // logistics signups. Best-effort, never blocks the applicant.
+      void notifyOwnersOfApplication(ctx, "rider", { id: result.riderId, name: body.name, applicantEmail: body.email }).catch((err) =>
+        ctx.log.error({ err: String(err), riderId: result.riderId }, "platform-owner courier application notification failed"),
+      );
       return result;
     },
   );

@@ -525,8 +525,13 @@ function RidersTab(): React.JSX.Element {
             </p>
             <div className="flex flex-wrap gap-2">
               {r.platformStatus !== "approved" ? (
-                <button className="btn !px-3 !py-1 text-xs !border-emerald-700 !text-emerald-300" disabled={update.isPending} onClick={() => void update.mutate({ id: r.id, platformStatus: "approved" })}>
-                  Approve for platform
+                <button
+                  className="btn !px-3 !py-1 text-xs !border-emerald-700 !text-emerald-300"
+                  title="Free-roam for prepaid jobs only — no cash until verified below."
+                  disabled={update.isPending}
+                  onClick={() => void update.mutate({ id: r.id, platformStatus: "approved" })}
+                >
+                  Approve free-roam (no cash)
                 </button>
               ) : null}
               {isOwner ? (
@@ -536,7 +541,7 @@ function RidersTab(): React.JSX.Element {
                   disabled={update.isPending}
                   onClick={() => void update.mutate({ id: r.id, verified: !r.verified })}
                 >
-                  {r.verified ? "Revoke verification" : "Verify courier"}
+                  {r.verified ? "Revoke verification" : "Verify for cash"}
                 </button>
               ) : null}
               {r.platformStatus !== "suspended" ? (

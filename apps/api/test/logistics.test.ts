@@ -264,3 +264,78 @@ describe("platform admin: rider attachment", () => {
     expect(body.rider.attachedLogisticsCompany?.id).toBe(company.id);
   });
 });
+
+describe("logistics portal: fleet rider onboarding", () => {
+  async function portalAuth(h: TestHarness, companyId: string) {
+    const admin = await adminToken(h);
+    const email = `fleet-${uniq()}@example.com`;
+    await h.app.inject({
+      method: "POST", url: `/api/logistics-companies/${companyId}/staff`,
+      headers: { authorization: `Bearer ${admin}` },
+      payload: { email, name: "Fleet Staff", password: "fleetpass1" },
+    });
+    const login = await h.app.inject({ method: "POST", url: "/api/logistics-portal/login", payload: { email, password: "fleetpass1" } });
+    expect(login.statusCode).toBe(200);
+    return { authorization: `Bearer ${(login.json() as { token: string }).token}` };
+  }
+
+  it("a company adds its own bearer (pending business approval) and releases them", async () => {
+    const admin = await adminToken(harness);
+    const company = await makeCompany(harness, admin);
+    const portal = await portalAuth(harness, company.id);
+
+    const add = await harness.app.inject({
+      method: "POST", url: "/api/logistics-portal/riders", headers: portal,
+      payload: { name: "Fleet Bearer", phone: `+18765${uniq().slice(-7)}` },
+    });
+    expect(add.statusCode).toBe(200);
+    const riderId = (add.json() as { riderId: string }).riderId;
+    const row = await harness.prisma.rider.findUniqueOrThrow({ where: { id: riderId } });
+    expect(row.attachment).toBe("logistics");
+    expect(row.attachedLogisticsCompanyId).toBe(company.id);
+    expect(row.platformStatus).toBe("pending");
+    // The harness auto-inserts an active membership on every rider.create
+    // (production never does) — remove it to prove the route itself only
+    // ever creates a *pending* membership for the business to approve.
+    await harness.prisma.riderMembership.deleteMany({ where: { riderId, status: "active" } });
+    expect(await harness.prisma.riderMembership.findUnique({ where: { riderId_businessId: { riderId, businessId: harness.business.id } } })).toBeNull();
+    // Re-run add: existing rider, no membership → pending membership created.
+    expect((await harness.app.inject({ method: "POST", url: "/api/logistics-portal/riders", headers: portal, payload: { name: "Fleet Bearer", phone: row.phone } })).statusCode).toBe(200);
+    expect(await harness.prisma.riderMembership.findUnique({ where: { riderId_businessId: { riderId, businessId: harness.business.id } } })).toMatchObject({ status: "pending" });
+
+    // A courier's own login token is a different auth face — refused here.
+    const riderUser = await harness.prisma.user.create({ data: { name: `Nope ${uniq()}`, passwordHash: "x", role: "rider" } });
+    const riderToken = await harness.tokenFor({ id: riderUser.id, name: riderUser.name, role: "rider", riderId });
+    expect((await harness.app.inject({ method: "POST", url: "/api/logistics-portal/riders", headers: { authorization: `Bearer ${riderToken}` }, payload: { name: "X", phone: `+18765${uniq().slice(-7)}` } })).statusCode).toBe(401);
+
+    // Release back to freelance.
+    const detach = await harness.app.inject({ method: "POST", url: `/api/logistics-portal/riders/${riderId}/detach`, headers: portal });
+    expect(detach.statusCode).toBe(200);
+    const freed = await harness.prisma.rider.findUniqueOrThrow({ where: { id: riderId } });
+    expect(freed.attachedLogisticsCompanyId).toBeNull();
+    expect(freed.attachment).toBe("freelance");
+  });
+
+  it("refuses riders attached elsewhere and detach while carrying work", async () => {
+    const admin = await adminToken(harness);
+    const companyA = await makeCompany(harness, admin);
+    const companyB = await makeCompany(harness, admin);
+    const portalA = await portalAuth(harness, companyA.id);
+
+    const rider = await makeRider(harness, admin);
+    const owner = await ownerToken(harness);
+    await harness.app.inject({ method: "PATCH", url: `/api/platform/riders/${rider.id}`, headers: { authorization: `Bearer ${owner}` }, payload: { attachment: "logistics", attachedLogisticsCompanyId: companyB.id } });
+
+    const poach = await harness.app.inject({
+      method: "POST", url: "/api/logistics-portal/riders", headers: portalA,
+      payload: { name: "Poached", phone: (await harness.prisma.rider.findUniqueOrThrow({ where: { id: rider.id } })).phone },
+    });
+    expect(poach.statusCode).toBe(409);
+
+    const customer = await harness.prisma.customer.create({ data: { businessId: harness.business.id, name: "Busy Customer", phone: `+18765${uniq().slice(-7)}` } });
+    await harness.prisma.job.create({ data: { businessId: harness.business.id, customerId: customer.id, jobNumber: `BUSYF-${uniq()}`, status: "accepted", riderId: rider.id } });
+    await harness.app.inject({ method: "PATCH", url: `/api/platform/riders/${rider.id}`, headers: { authorization: `Bearer ${owner}` }, payload: { attachment: "logistics", attachedLogisticsCompanyId: companyA.id } });
+    const stuck = await harness.app.inject({ method: "POST", url: `/api/logistics-portal/riders/${rider.id}/detach`, headers: portalA });
+    expect(stuck.statusCode).toBe(409);
+  });
+});

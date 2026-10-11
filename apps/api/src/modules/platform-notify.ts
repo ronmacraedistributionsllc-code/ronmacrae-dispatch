@@ -1,13 +1,14 @@
 import type { AppCtx } from "../ctx.js";
 
 /**
- * Platform-owner-facing email when a new merchant or logistics-company
- * self-signup application arrives (spec: "merchant signup must... notify
- * the platform admin"). Same "never blocks the caller, best-effort,
- * audited" contract as dispatch-notify.ts / merchant-notify.ts — the
- * applicant's own signup request must never fail because this side
- * notification did; callers fire this with `void ...catch(...)`, never
- * awaited on the response path.
+ * Platform-owner-facing email when a new merchant, logistics-company, or
+ * courier self-signup application arrives (spec: "merchant signup must...
+ * notify the platform admin" — couriers get the same treatment so a new
+ * applicant never waits in silence). Same "never blocks the caller,
+ * best-effort, audited" contract as dispatch-notify.ts /
+ * merchant-notify.ts — the applicant's own signup request must never fail
+ * because this side notification did; callers fire this with
+ * `void ...catch(...)`, never awaited on the response path.
  *
  * Sent to every active platform-owner account with an email address —
  * there may be more than one owner, and this is a shared inbox notice,
@@ -17,7 +18,7 @@ import type { AppCtx } from "../ctx.js";
  */
 export async function notifyOwnersOfApplication(
   ctx: AppCtx,
-  kind: "merchant" | "logistics_company",
+  kind: "merchant" | "logistics_company" | "rider",
   entity: { id: string; name: string; applicantEmail: string },
 ): Promise<{ status: "sent" | "failed" | "skipped"; error?: string }> {
   const owners = await ctx.prisma.user.findMany({
@@ -27,7 +28,7 @@ export async function notifyOwnersOfApplication(
   const to = owners.map((o) => o.email).filter((e): e is string => !!e);
   if (to.length === 0) return { status: "skipped", error: "No active platform-owner account has an email address" };
 
-  const label = kind === "merchant" ? "merchant" : "logistics company";
+  const label = kind === "merchant" ? "merchant" : kind === "rider" ? "courier" : "logistics company";
   const reviewLink = `${ctx.config.APP_ORIGIN}/platform-admin`;
   const result = await ctx.email.send({
     to,
