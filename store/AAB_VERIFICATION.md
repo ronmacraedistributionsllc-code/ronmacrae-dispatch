@@ -16,3 +16,13 @@ Checked on 2026-10-09 from this machine. **No JDK is installed here** (`keytool`
 2. No new bundle is needed for web-only changes: the Android app is a Trusted Web Activity and loads the live site, so every fix in this branch reaches Android users the moment the web app deploys.
 3. Bump `versionCode` (currently 2) in both `twa-manifest.json` and `app/build.gradle` for each upload.
 4. **Play App Signing:** once the app is in Play Console, Google re-signs with its own key. Copy the **App signing key certificate SHA-256** from *Play Console → Setup → App signing* and add it as a second entry in `apps/web/public/.well-known/assetlinks.json` (keep the upload-key one for sideloaded builds). Without it, installs from the Play Store open with a browser address bar instead of full-screen.
+
+## Update 2026-11-05 — signing is now one command
+
+`android/app/build.gradle` signs the release bundle from environment variables, and `android/build-release.sh` fills them from the local, gitignored `keystore-credentials.txt` (never printed) and runs the build:
+
+```bash
+cd android && ./build-release.sh
+```
+
+It uses Java 17 from Homebrew if no system Java exists, verifies the result is signed, and prints the certificate SHA-256 (it must match `assetlinks.json`). The script's signing path was tested with a throwaway keystore; the real keystore has not been touched by this tooling. `versionCode` is now **3** (Play needs a strictly higher number for every upload). The Capacitor shell in `native/` (versionCode 3, background location + push) is a separate, later release — it needs Firebase and a Play location-permission declaration.
